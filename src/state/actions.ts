@@ -1,47 +1,33 @@
 // Profile actions
 
 import { Profile } from './types';
+import { FileLogger } from '../utils/fileLogger';
 
 export const DEFAULT_PROFILE_PRESETS: Array<Omit<CreateProfilePayload, 'selectedResumeHash'> & { name: string }> = [
   {
     name: 'Python',
     keywordsInclude: ['python', 'django', 'fastapi'],
     keywordsExclude: ['junior', 'intern', 'стажер', 'стажировка'],
-    experience: ['between1And3', 'between3And6'],
-    schedule: ['remote'],
-    employment: ['full'],
   },
   {
     name: 'Rust',
     keywordsInclude: ['rust', 'tokio', 'backend'],
     keywordsExclude: ['junior', 'intern', 'стажер', 'стажировка'],
-    experience: ['between1And3', 'between3And6'],
-    schedule: ['remote'],
-    employment: ['full'],
   },
   {
     name: 'Frontend',
     keywordsInclude: ['frontend', 'react', 'typescript'],
     keywordsExclude: ['junior', 'intern', 'стажер', 'стажировка'],
-    experience: ['between1And3', 'between3And6'],
-    schedule: ['remote', 'fullDay'],
-    employment: ['full'],
   },
   {
     name: 'Fullstack',
     keywordsInclude: ['fullstack', 'typescript', 'node.js', 'react'],
     keywordsExclude: ['junior', 'intern', 'стажер', 'стажировка'],
-    experience: ['between1And3', 'between3And6'],
-    schedule: ['remote'],
-    employment: ['full'],
   },
   {
     name: 'QA',
     keywordsInclude: ['qa', 'тестировщик', 'automation', 'python'],
     keywordsExclude: ['intern', 'стажер', 'стажировка'],
-    experience: ['between1And3', 'between3And6'],
-    schedule: ['remote', 'fullDay'],
-    employment: ['full'],
   },
 ];
 
@@ -49,14 +35,6 @@ export interface CreateProfilePayload {
   name: string;
   keywordsInclude?: string[];
   keywordsExclude?: string[];
-  experience?: string[];
-  schedule?: string[];
-  employment?: string[];
-  regions?: string[];
-  salary?: {
-    amount?: number;
-    currency?: string;
-  };
   coverLetterTemplate?: string;
   selectedResumeHash?: string | null;
 }
@@ -65,14 +43,6 @@ export interface UpdateProfilePayload {
   name?: string;
   keywordsInclude?: string[];
   keywordsExclude?: string[];
-  experience?: string[];
-  schedule?: string[];
-  employment?: string[];
-  regions?: string[];
-  salary?: {
-    amount?: number;
-    currency?: string;
-  };
   coverLetterTemplate?: string;
   selectedResumeHash?: string | null;
 }
@@ -86,11 +56,9 @@ export function createProfile(payload: CreateProfilePayload): Profile {
     name: payload.name,
     keywordsInclude: payload.keywordsInclude || [],
     keywordsExclude: payload.keywordsExclude || [],
-    experience: payload.experience || [],
-    schedule: payload.schedule || [],
-    employment: payload.employment || [],
-    regions: payload.regions,
-    salary: payload.salary,
+    experience: '', // Keep for compatibility but empty
+    schedule: [], // Keep for compatibility but empty
+    employment: [], // Keep for compatibility but empty
     coverLetterTemplate: payload.coverLetterTemplate,
     selectedResumeHash: payload.selectedResumeHash || null,
     createdAt: now,
@@ -127,11 +95,9 @@ export function createDefaultProfiles(now: number = Date.now()): Profile[] {
       name: preset.name,
       keywordsInclude: preset.keywordsInclude || [],
       keywordsExclude: preset.keywordsExclude || [],
-      experience: preset.experience || [],
-      schedule: preset.schedule || [],
-      employment: preset.employment || [],
-      regions: preset.regions,
-      salary: preset.salary,
+      experience: '', // Keep for compatibility but empty
+      schedule: [], // Keep for compatibility but empty
+      employment: [], // Keep for compatibility but empty
       coverLetterTemplate: preset.coverLetterTemplate,
       selectedResumeHash: null,
       createdAt: stamp,
@@ -580,7 +546,8 @@ import { VacancyQueueItem } from './types';
 export function materializeVacanciesFromSearch(
   currentQueue: VacancyQueueItem[],
   cards: ParsedVacancyCard[],
-  profileId: string | null
+  profileId: string | null,
+  profile?: { keywordsInclude: string[]; keywordsExclude: string[] }
 ): VacancyQueueItem[] {
   const now = Date.now();
 
@@ -595,8 +562,51 @@ export function materializeVacanciesFromSearch(
     return !existingKeys.has(key);
   });
 
+  // Early keyword prefilter
+  let prefilteredCards = newCards;
+  let skippedByInclude = 0;
+  let skippedByExclude = 0;
+
+  if (profile) {
+    prefilteredCards = newCards.filter((card) => {
+      const searchText = `${card.title} ${card.snippet || ''}`.toLowerCase();
+
+      // Check keywordsInclude (ANY must match)
+      if (profile.keywordsInclude.length > 0) {
+        const hasMatch = profile.keywordsInclude.some((kw) =>
+          searchText.includes(kw.toLowerCase())
+        );
+        if (!hasMatch) {
+          skippedByInclude++;
+          return false;
+        }
+      }
+
+      // Check keywordsExclude (NONE must match)
+      if (profile.keywordsExclude.length > 0) {
+        const hasExcluded = profile.keywordsExclude.some((kw) =>
+          searchText.includes(kw.toLowerCase())
+        );
+        if (hasExcluded) {
+          skippedByExclude++;
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    FileLogger.log('service_worker', 'info', 'Materialization prefilter', {
+      totalCards: newCards.length,
+      afterPrefilter: prefilteredCards.length,
+      skippedByInclude,
+      skippedByExclude,
+      profileId,
+    });
+  }
+
   // Create queue items
-  const newItems: VacancyQueueItem[] = newCards.map((card) => ({
+  const newItems: VacancyQueueItem[] = prefilteredCards.map((card) => ({
     vacancyId: card.vacancyId,
     url: card.url,
     title: card.title,

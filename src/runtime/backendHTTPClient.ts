@@ -49,33 +49,27 @@ export class BackendHTTPClient {
    * HH API блокирует автоматические запросы (403 Forbidden).
    * Используем hh.ru/search/vacancy вместо api.hh.ru/vacancies.
    */
-  async fetchVacancies(profile: Profile, page = 0): Promise<APIVacancy[]> {
+  async fetchVacancies(_profile: Profile, page = 0): Promise<APIVacancy[]> {
     const params = new URLSearchParams({
-      text: profile.keywordsInclude.join(' '),
       items_on_page: '50',
       page: String(page),
     });
 
-    if (profile.experience.length > 0) {
-      params.append('experience', profile.experience.join(','));
-    }
+    // Global search: only resume binding if available
+    // No profile filters in URL - filtering happens in-app
+    const state = await chrome.storage.local.get('state');
+    const resumeHash = state.state?.selectedResumeHash;
 
-    if (profile.schedule.length > 0) {
-      params.append('schedule', profile.schedule.join(','));
-    }
-
-    if (profile.employment.length > 0) {
-      params.append('employment', profile.employment.join(','));
+    if (resumeHash) {
+      params.append('resume', resumeHash);
     }
 
     const url = `https://hh.ru/search/vacancy?${params.toString()}`;
 
-    this.log('[BackendHTTP] fetchVacancies START (HTML parsing)', {
+    this.log('[BackendHTTP] fetchVacancies START (global search)', {
       url,
-      keywords: profile.keywordsInclude,
-      experience: profile.experience,
-      schedule: profile.schedule,
-      employment: profile.employment,
+      strategy: 'global_search',
+      resumeHash: resumeHash || 'none',
       page,
     });
 
@@ -420,20 +414,12 @@ export class BackendHTTPClient {
   }
 
   private normalizeApplyResponse(data: any): ApplyResponse {
-    // Success signals
-    if (data.success === true || data.success === 'true') {
+    // Success signals - ВАЖНО: success это СТРОКА "true", не boolean!
+    if (data.success === 'true' || data.topic_id || data.chat_id) {
       return {
         success: true,
         outcome: 'success',
         message: 'Application sent successfully',
-      };
-    }
-
-    if (data.topic_id || data.chat_id) {
-      return {
-        success: true,
-        outcome: 'success',
-        message: 'Application sent (topic created)',
       };
     }
 

@@ -31,19 +31,23 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
         Limit per run
         <input
           type="number"
-          min={1}
+          min={0}
           value={settings.maxAutoAppliesPerRun}
           onChange={(e) => onPatch({ maxAutoAppliesPerRun: Number(e.target.value) })}
+          placeholder="0 = без лимита"
         />
+        <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
       </label>
       <label>
         Limit per day
         <input
           type="number"
-          min={1}
+          min={0}
           value={settings.maxAutoAppliesPerDay}
           onChange={(e) => onPatch({ maxAutoAppliesPerDay: Number(e.target.value) })}
+          placeholder="0 = без лимита"
         />
+        <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
       </label>
       <label className="checkbox-row">
         <input

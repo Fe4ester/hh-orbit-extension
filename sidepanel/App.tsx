@@ -164,19 +164,55 @@ export const App: React.FC = () => {
               <option key={profile.id} value={profile.id}>{profile.name}</option>
             ))}
           </select>
-          <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-            <button className="btn btn-secondary" onClick={() => setEditingProfileId(profileVm.activeProfileId)} disabled={!profileVm.activeProfileId}>
-              Редактировать профиль
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => setEditingProfileId('__new__')}
+            >
+              Создать профиль
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setEditingProfileId(profileVm.activeProfileId)}
+              disabled={!profileVm.activeProfileId}
+            >
+              Редактировать
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                if (profileVm.activeProfileId) {
+                  chrome.runtime.sendMessage({ type: 'DUPLICATE_PROFILE', id: profileVm.activeProfileId });
+                }
+              }}
+              disabled={!profileVm.activeProfileId}
+            >
+              Дублировать
+            </button>
+            <button
+              className="btn btn-danger btn-sm"
+              onClick={() => {
+                if (profileVm.activeProfileId && confirm('Удалить профиль? Это действие нельзя отменить.')) {
+                  chrome.runtime.sendMessage({ type: 'DELETE_PROFILE', id: profileVm.activeProfileId });
+                }
+              }}
+              disabled={!profileVm.activeProfileId}
+            >
+              Удалить
             </button>
           </div>
-          {editingProfile && (
+          {editingProfileId && (
             <div style={{ marginTop: 12 }}>
               <ProfileEditor
-                profile={editingProfile}
+                profile={editingProfileId === '__new__' ? undefined : editingProfile}
                 resumeCandidates={state.resumeCandidates}
-                onSave={() => {}}
+                onSave={(payload) => {
+                  chrome.runtime.sendMessage({ type: 'CREATE_PROFILE', payload }, () => setEditingProfileId(null));
+                }}
                 onUpdate={(payload) => {
-                  chrome.runtime.sendMessage({ type: 'UPDATE_PROFILE', id: editingProfile.id, payload }, () => setEditingProfileId(null));
+                  if (editingProfile) {
+                    chrome.runtime.sendMessage({ type: 'UPDATE_PROFILE', id: editingProfile.id, payload }, () => setEditingProfileId(null));
+                  }
                 }}
                 onCancel={() => setEditingProfileId(null)}
               />

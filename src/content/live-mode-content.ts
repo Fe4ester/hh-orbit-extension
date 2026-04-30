@@ -10,6 +10,7 @@ import { clickRespondButton, observePostClickState } from '../live/respondButton
 import { detectCoverLetterUI } from '../live/coverLetterExecutor';
 import { observePostSubmitState } from '../live/finalSubmitExecutor';
 import { parseSearchResults } from '../live/searchResultsParser';
+import { fillAndSubmitAdvancedSearchForm } from '../live/advancedSearchFormFiller';
 import { FileLogger } from '../utils/fileLogger';
 
 console.log('[LiveContent] Content script loaded');
@@ -18,14 +19,31 @@ FileLogger.log('content_script', 'info', 'Content script loaded', { url: window.
 // Close HH.ru modals on page load
 window.addEventListener('load', () => {
   setTimeout(() => {
-    // Close "Why didn't you apply?" modal
+    // Close "Why didn't you apply?" modal - both old and new systems
     const closeButtons = document.querySelectorAll('[data-qa="bloko-modal-close"]');
     closeButtons.forEach(btn => (btn as HTMLElement).click());
 
-    // Close other popups
-    const overlays = document.querySelectorAll('[data-qa="bloko-modal"]');
-    overlays.forEach(overlay => {
+    // Close old bloko modals
+    const blokoOverlays = document.querySelectorAll('[data-qa="bloko-modal"]');
+    blokoOverlays.forEach(overlay => {
       const close = overlay.querySelector('button[aria-label="Закрыть"]');
+      if (close) (close as HTMLElement).click();
+    });
+
+    // Close new Magritte modals (but NOT apply modals)
+    const magritteModals = document.querySelectorAll('[class*="magritte-mobile-container"], [class*="magritte-overlay"]');
+    magritteModals.forEach(modal => {
+      const modalText = modal.textContent || '';
+      // Skip apply-related modals
+      if (
+        modalText.includes('Откликнуться') ||
+        modalText.includes('откликнуться') ||
+        modalText.includes('Всё равно откликнуться') ||
+        modal.querySelector('textarea')
+      ) {
+        return;
+      }
+      const close = modal.querySelector('button[aria-label="Закрыть"]') || modal.querySelector('[class*="close"]');
       if (close) (close as HTMLElement).click();
     });
   }, 1000);
@@ -91,6 +109,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         // Try to find textarea in modal first
         const modal =
+          document.querySelector('[class*="magritte-mobile-container"]') ||
+          document.querySelector('[class*="magritte-overlay"]') ||
           document.querySelector('[data-qa="bloko-modal"]') ||
           document.querySelector('[role="dialog"]');
 
@@ -144,6 +164,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case 'CLICK_SUBMIT': {
         // Try to find submit button in modal first
         const modal =
+          document.querySelector('[class*="magritte-mobile-container"]') ||
+          document.querySelector('[class*="magritte-overlay"]') ||
           document.querySelector('[data-qa="bloko-modal"]') ||
           document.querySelector('[role="dialog"]');
 
@@ -256,21 +278,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'HANDLE_ANY_MODAL': {
+        FileLogger.log('content_script', 'info', 'Handle modal start');
+
         // Universal modal handler - handles ANY modal with "Откликнуться" button
+        // Supports sequential modals: relocation warning → cover letter
         const modal =
+          document.querySelector('[class*="magritte-mobile-container"]') ||
+          document.querySelector('[class*="magritte-overlay"]') ||
           document.querySelector('[data-qa="bloko-modal"]') ||
           document.querySelector('[role="dialog"]') ||
           document.querySelector('.bloko-modal');
 
         if (!modal) {
-          FileLogger.log('content_script', 'info', 'No modal found');
+          FileLogger.log('content_script', 'debug', 'Modal not found');
           sendResponse({ handled: false });
           break;
         }
 
         const modalText = modal.textContent || '';
         FileLogger.log('content_script', 'info', 'Modal found', {
-          text: modalText.substring(0, 300)
+          textPreview: modalText.substring(0, 300)
         });
 
         // Check for textarea (cover letter)
@@ -278,7 +305,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         let hadTextarea = false;
 
         if (textarea) {
-          FileLogger.log('content_script', 'info', 'Textarea found, filling cover letter');
+          FileLogger.log('content_script', 'info', 'Cover letter textarea found');
           hadTextarea = true;
 
           // Get cover letter from message or use default
@@ -290,13 +317,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             textarea.dispatchEvent(new Event('change', { bubbles: true }));
             FileLogger.log('content_script', 'info', 'Cover letter filled', { length: coverLetterText.length });
           } catch (error) {
-            FileLogger.log('content_script', 'error', 'Failed to fill textarea', { error: (error as Error).message });
+            FileLogger.log('content_script', 'error', 'Cover letter fill failed', { error: (error as Error).message });
           }
         }
 
         // Find and click button
         const buttons = Array.from(modal.querySelectorAll('button'));
-        FileLogger.log('content_script', 'info', 'Modal buttons', {
+        FileLogger.log('content_script', 'debug', 'Modal buttons found', {
           count: buttons.length,
           texts: buttons.map(b => b.textContent?.trim())
         });
@@ -327,26 +354,48 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (qaButton) respondButton = qaButton as HTMLButtonElement;
         }
 
-        // Priority 4: Last button (usually confirm)
+        // Priority 4: Primary button (usually confirm)
+        if (!respondButton) {
+          respondButton = buttons.find(btn => {
+            const classList = Array.from(btn.classList);
+            return classList.some(c => c.includes('primary') || c.includes('submit'));
+          });
+        }
+
+        // Priority 5: Last button (usually confirm)
         if (!respondButton && buttons.length > 0) {
           respondButton = buttons[buttons.length - 1];
           FileLogger.log('content_script', 'info', 'Using last button as fallback');
         }
 
         if (respondButton) {
-          FileLogger.log('content_script', 'info', 'Clicking modal button', {
-            text: respondButton.textContent?.trim()
+          // Check if button is disabled
+          if (respondButton.hasAttribute('disabled') || respondButton.getAttribute('aria-disabled') === 'true') {
+            FileLogger.log('content_script', 'warn', 'Modal button disabled', {
+              text: respondButton.textContent?.trim()
+            });
+            sendResponse({ handled: false, hadTextarea, error: 'button_disabled' });
+            break;
+          }
+
+          const buttonText = respondButton.textContent?.trim() || '';
+          FileLogger.log('content_script', 'info', 'Modal button click', {
+            text: buttonText
           });
 
           (respondButton as HTMLElement).click();
 
+          FileLogger.log('content_script', 'info', 'Modal button clicked', {
+            text: buttonText
+          });
+
           sendResponse({
             handled: true,
             hadTextarea,
-            buttonClicked: respondButton.textContent?.trim()
+            buttonClicked: buttonText
           });
         } else {
-          FileLogger.log('content_script', 'warn', 'No respond button found in modal');
+          FileLogger.log('content_script', 'warn', 'Modal button not found');
           sendResponse({ handled: false, hadTextarea });
         }
         break;
@@ -355,6 +404,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case 'CHECK_MODAL_TYPE': {
         // Check what type of modal is open
         const modal =
+          document.querySelector('[class*="magritte-mobile-container"]') ||
+          document.querySelector('[class*="magritte-overlay"]') ||
           document.querySelector('[data-qa="bloko-modal"]') ||
           document.querySelector('[role="dialog"]') ||
           document.querySelector('.bloko-modal');
@@ -414,6 +465,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case 'CLICK_MODAL_CONFIRM': {
         // Find and click confirmation button in modal
         const modal =
+          document.querySelector('[class*="magritte-mobile-container"]') ||
+          document.querySelector('[class*="magritte-overlay"]') ||
           document.querySelector('[data-qa="bloko-modal"]') ||
           document.querySelector('[role="dialog"]');
 
@@ -466,66 +519,126 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'CLICK_NEXT_PAGE': {
-        // Найти кнопку "Следующая страница"
-        const nextButton =
-          document.querySelector('[data-qa="pager-next"]') ||
-          document.querySelector('a[rel="next"]') ||
-          Array.from(document.querySelectorAll('a')).find(a =>
-            a.textContent?.trim().toLowerCase().includes('дальше') ||
-            a.textContent?.trim().toLowerCase().includes('следующая')
-          );
+        // Парсим текущий URL и увеличиваем номер страницы
+        try {
+          const currentUrl = new URL(window.location.href);
+          const currentPage = parseInt(currentUrl.searchParams.get('page') || '0', 10);
+          const nextPage = currentPage + 1;
 
-        if (nextButton) {
-          (nextButton as HTMLElement).click();
-          console.log('[LiveContent] Clicked next page button');
-          sendResponse({ success: true, clicked: true });
-        } else {
-          console.log('[LiveContent] Next page button not found');
-          sendResponse({ success: false, clicked: false, error: 'Next page button not found' });
+          // Просто увеличиваем номер страницы в URL
+          currentUrl.searchParams.set('page', String(nextPage));
+          const nextUrl = currentUrl.toString();
+
+          FileLogger.log('content_script', 'info', 'Navigating to next page via URL', {
+            currentPage,
+            nextPage,
+            nextUrl
+          });
+
+          window.location.href = nextUrl;
+          sendResponse({ success: true, clicked: true, nextPage });
+        } catch (error) {
+          FileLogger.log('content_script', 'error', 'Failed to navigate to next page', {
+            error: (error as Error).message
+          });
+          sendResponse({ success: false, clicked: false, error: (error as Error).message });
         }
         break;
       }
 
-      // V2 handlers
-      case 'VALIDATE_VACANCY': {
-        const { vacancyId } = message;
-        FileLogger.log('content_script', 'info', 'VALIDATE_VACANCY', { vacancyId });
+      case 'CHECK_HAS_NEXT_PAGE': {
+        // Проверить наличие следующей страницы в пагинации
+        try {
+          const currentUrl = new URL(window.location.href);
+          const currentPage = parseInt(currentUrl.searchParams.get('page') || '0', 10);
+          const nextPage = currentPage + 1;
 
-        const allCards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
-        let exists = false;
-        let alreadyApplied = false;
+          // Ищем ссылку на следующую страницу в пагинации
+          // Если её нет - значит это последняя страница
+          const nextPageLink = document.querySelector(`[data-qa="pager-page"][href*="page=${nextPage}"]`);
+          const hasNext = !!nextPageLink;
 
-        for (const c of allCards) {
-          const link = c.querySelector('a[href*="/vacancy/"]');
-          const href = link?.getAttribute('href') || '';
+          FileLogger.log('content_script', 'info', 'Check has next page', {
+            currentPage,
+            nextPage,
+            hasNext,
+            foundLink: !!nextPageLink
+          });
 
-          if (href.includes(`/vacancy/${vacancyId}`)) {
-            exists = true;
+          sendResponse({ hasNext, currentPage, nextPage });
+        } catch (error) {
+          FileLogger.log('content_script', 'error', 'Failed to check next page', {
+            error: (error as Error).message
+          });
+          sendResponse({ hasNext: false, error: (error as Error).message });
+        }
+        break;
+      }
 
-            const btn = c.querySelector('[data-qa="vacancy-serp__vacancy_response"]');
-            const btnText = btn?.textContent?.trim() || '';
+      case 'CHECK_AVAILABLE_VACANCIES': {
+        // Быстрая проверка DOM на наличие доступных вакансий
+        const { skipList } = message; // Получаем skip list из service worker
+        FileLogger.log('content_script', 'info', 'Checking available vacancies on page', {
+          skipListSize: skipList ? Object.keys(skipList).length : 0
+        });
 
-            if (
-              btnText.includes('Отклик отправлен') ||
-              btnText.includes('Вы откликнулись') ||
-              btnText.includes('Приглашение') ||
-              btnText.includes('Отказ') ||
-              btn?.hasAttribute('disabled')
-            ) {
-              alreadyApplied = true;
-            }
-            break;
+        const cards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
+        let availableCount = 0;
+        let alreadyAppliedCount = 0;
+        let manualActionCount = 0;
+
+        for (const card of cards) {
+          const button = card.querySelector('[data-qa="vacancy-serp__vacancy_response"]');
+          if (!button) continue;
+
+          const buttonText = button.textContent?.trim() || '';
+          const isDisabled = button.hasAttribute('disabled');
+
+          // Уже откликнулись
+          if (
+            buttonText.includes('Отклик отправлен') ||
+            buttonText.includes('Вы откликнулись') ||
+            buttonText.includes('Приглашение') ||
+            buttonText.includes('Отказ') ||
+            isDisabled
+          ) {
+            alreadyAppliedCount++;
+            continue;
           }
+
+          // Проверка на manual action (в skip list из service worker)
+          const vacancyLink = card.querySelector('a[href*="/vacancy/"]');
+          const href = vacancyLink?.getAttribute('href') || '';
+          const vacancyIdMatch = href.match(/\/vacancy\/(\d+)/);
+
+          if (vacancyIdMatch && skipList) {
+            const vacancyId = vacancyIdMatch[1];
+            if (skipList[vacancyId]) {
+              manualActionCount++;
+              continue;
+            }
+          }
+
+          // Доступна для автоотклика
+          availableCount++;
         }
 
-        FileLogger.log('content_script', 'info', 'VALIDATE_VACANCY result', { vacancyId, exists, alreadyApplied });
-        sendResponse({ exists, alreadyApplied });
+        const result = {
+          hasAvailable: availableCount > 0,
+          totalCards: cards.length,
+          availableCount,
+          alreadyAppliedCount,
+          manualActionCount,
+        };
+
+        FileLogger.log('content_script', 'info', 'Available vacancies check result', result);
+        sendResponse(result);
         break;
       }
 
-      case 'CLICK_RESPOND_BUTTON': {
+      case 'SCROLL_TO_VACANCY': {
         const { vacancyId } = message;
-        FileLogger.log('content_script', 'info', 'CLICK_RESPOND_BUTTON', { vacancyId });
+        FileLogger.log('content_script', 'debug', 'Scroll to vacancy', { vacancyId });
 
         const allCards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
         let card = null;
@@ -541,42 +654,219 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         if (!card) {
-          FileLogger.log('content_script', 'error', 'Card not found', { vacancyId });
+          FileLogger.log('content_script', 'warn', 'Vacancy card not found for scroll', { vacancyId });
           sendResponse({ success: false });
           break;
         }
 
-        // Scroll
-        (card as HTMLElement).scrollIntoView({ behavior: 'instant', block: 'center' });
+        // Scroll and highlight
+        (card as HTMLElement).scrollIntoView({ behavior: 'auto', block: 'center' });
 
-        // Find button
-        const respondButton = card.querySelector('[data-qa="vacancy-serp__vacancy_response"]') ||
-                              card.querySelector('button[data-qa*="response"]') ||
-                              Array.from(card.querySelectorAll('button')).find(btn =>
-                                btn.textContent?.includes('Откликнуться')
-                              );
+        const originalBg = (card as HTMLElement).style.backgroundColor;
+        const originalTransition = (card as HTMLElement).style.transition;
+        (card as HTMLElement).style.transition = 'background-color 0.3s';
+        (card as HTMLElement).style.backgroundColor = '#ffebee'; // Красноватый для test-required
 
-        if (!respondButton) {
-          FileLogger.log('content_script', 'error', 'Button not found', { vacancyId });
-          sendResponse({ success: false });
-          break;
-        }
+        setTimeout(() => {
+          (card as HTMLElement).style.backgroundColor = originalBg;
+          (card as HTMLElement).style.transition = originalTransition;
+        }, 1000);
 
-        // Click
-        (respondButton as HTMLElement).click();
-        FileLogger.log('content_script', 'info', 'Button clicked', { vacancyId });
+        FileLogger.log('content_script', 'debug', 'Vacancy scrolled into view', { vacancyId });
         sendResponse({ success: true });
         break;
       }
 
+      // V2 handlers
+      case 'VALIDATE_VACANCY': {
+        const { vacancyId } = message;
+        FileLogger.log('content_script', 'debug', 'Validate vacancy start', { vacancyId });
+
+        const allCards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
+        let exists = false;
+        let alreadyApplied = false;
+
+        for (const c of allCards) {
+          const link = c.querySelector('a[href*="/vacancy/"]');
+          const href = link?.getAttribute('href') || '';
+
+          if (href.includes(`/vacancy/${vacancyId}`)) {
+            exists = true;
+            const btn = c.querySelector('[data-qa="vacancy-serp__vacancy_response"]');
+            const btnText = btn?.textContent?.trim() || '';
+
+            if (
+              btnText.includes('Отклик отправлен') ||
+              btnText.includes('Вы откликнулись') ||
+              btnText.includes('Приглашение') ||
+              btnText.includes('Отказ') ||
+              btn?.hasAttribute('disabled')
+            ) {
+              alreadyApplied = true;
+            }
+
+            FileLogger.log('content_script', 'debug', 'Vacancy button state', {
+              vacancyId,
+              buttonText: btnText,
+              alreadyApplied
+            });
+            break;
+          }
+        }
+
+        if (!exists) {
+          FileLogger.log('content_script', 'warn', 'Vacancy card not found', { vacancyId });
+        }
+
+        sendResponse({ exists, alreadyApplied });
+        break;
+      }
+
+      case 'CLICK_RESPOND_BUTTON': {
+        const { vacancyId } = message;
+        FileLogger.log('content_script', 'debug', 'Respond click start', { vacancyId });
+
+        const allCards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
+        let card = null;
+
+        for (const c of allCards) {
+          const link = c.querySelector('a[href*="/vacancy/"]');
+          const href = link?.getAttribute('href') || '';
+
+          if (href.includes(`/vacancy/${vacancyId}`)) {
+            card = c;
+            break;
+          }
+        }
+
+        if (!card) {
+          FileLogger.log('content_script', 'error', 'Vacancy card not found', { vacancyId });
+          sendResponse({ success: false });
+          break;
+        }
+
+        FileLogger.log('content_script', 'debug', 'Vacancy card found', { vacancyId });
+
+        // Scroll to card FIRST (важно для видимости)
+        // Используем instant для мгновенного скролла, чтобы было заметно
+        (card as HTMLElement).scrollIntoView({ behavior: 'auto', block: 'center' });
+
+        // Highlight card для визуальной обратной связи
+        const originalBg = (card as HTMLElement).style.backgroundColor;
+        const originalTransition = (card as HTMLElement).style.transition;
+        (card as HTMLElement).style.transition = 'background-color 0.3s';
+        (card as HTMLElement).style.backgroundColor = '#fff3cd'; // Желтый highlight
+
+        // Wait for scroll to complete and show highlight
+        setTimeout(() => {
+          // Find button
+          const respondButton = card!.querySelector('[data-qa="vacancy-serp__vacancy_response"]') ||
+                                card!.querySelector('button[data-qa*="response"]') ||
+                                Array.from(card!.querySelectorAll('button')).find(btn =>
+                                  btn.textContent?.includes('Откликнуться')
+                                );
+
+          if (!respondButton) {
+            FileLogger.log('content_script', 'error', '❌ Button NOT found in card', { vacancyId });
+            sendResponse({ success: false });
+            return;
+          }
+
+          const buttonText = respondButton.textContent?.trim() || '';
+          FileLogger.log('content_script', 'info', '✅ Button found, clicking', {
+            vacancyId,
+            buttonText
+          });
+
+          // Click
+          (respondButton as HTMLElement).click();
+
+          // Remove highlight after click
+          setTimeout(() => {
+            (card as HTMLElement).style.backgroundColor = originalBg;
+            (card as HTMLElement).style.transition = originalTransition;
+          }, 1000);
+
+          FileLogger.log('content_script', 'info', '✅ Button CLICKED', { vacancyId });
+          sendResponse({ success: true });
+        }, 500); // Увеличил до 500ms чтобы highlight был виден
+
+        // Return true to indicate async response
+        return true;
+      }
+
       case 'CHECK_MODAL_EXISTS': {
-        const modal = document.querySelector('[data-qa="bloko-modal"]') ||
-                      document.querySelector('[role="dialog"]') ||
-                      document.querySelector('.bloko-modal');
+        // Ищем модалку по разным селекторам
+        const selectors = [
+          // Magritte modals (новая система HH.ru)
+          '[class*="magritte-mobile-container"]',
+          '[class*="magritte-overlay"]',
+          // Old bloko modals
+          '[data-qa="bloko-modal"]',
+          '[role="dialog"]',
+          '.bloko-modal',
+          '[data-qa="relocation-warning-modal"]',
+          '[data-qa="vacancy-response-letter-popup"]',
+          '.vacancy-response-popup',
+          'div[class*="modal"]',
+          'div[class*="Modal"]',
+          'div[class*="popup"]',
+          'div[class*="Popup"]',
+        ];
+
+        let modal: Element | null = null;
+        let usedSelector = '';
+
+        for (const selector of selectors) {
+          const found = document.querySelector(selector);
+          if (found) {
+            const el = found as HTMLElement;
+            const style = getComputedStyle(el);
+
+            // Проверяем видимость: display !== 'none' && visibility !== 'hidden' && opacity > 0
+            // offsetParent не работает для position:fixed элементов!
+            const isVisible =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              parseFloat(style.opacity) > 0;
+
+            if (isVisible) {
+              modal = found;
+              usedSelector = selector;
+              break;
+            }
+          }
+        }
 
         const exists = !!modal;
-        FileLogger.log('content_script', 'info', 'CHECK_MODAL_EXISTS', { exists });
-        sendResponse({ exists });
+        const modalText = modal ? (modal.textContent || '').substring(0, 200) : '';
+        const modalCount = selectors.map(s => document.querySelectorAll(s).length).reduce((a, b) => a + b, 0);
+        const allModals = selectors.map(s => {
+          const elements = document.querySelectorAll(s);
+          return Array.from(elements).map(el => {
+            const style = getComputedStyle(el as HTMLElement);
+            const isVisible =
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              parseFloat(style.opacity) > 0;
+            return {
+              selector: s,
+              visible: isVisible,
+              text: (el.textContent || '').substring(0, 50)
+            };
+          });
+        }).flat();
+
+        FileLogger.log('content_script', 'info', 'CHECK_MODAL_EXISTS', {
+          exists,
+          count: modalCount,
+          text: modalText,
+          url: window.location.href,
+          usedSelector,
+          allModals: allModals.filter(m => m.visible)
+        });
+
+        sendResponse({ exists, count: modalCount, text: modalText });
         break;
       }
 
@@ -584,7 +874,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const { coverLetter } = message;
         FileLogger.log('content_script', 'info', 'HANDLE_MODAL');
 
-        const modal = document.querySelector('[data-qa="bloko-modal"]') ||
+        const modal = document.querySelector('[class*="magritte-mobile-container"]') ||
+                      document.querySelector('[class*="magritte-overlay"]') ||
+                      document.querySelector('[data-qa="bloko-modal"]') ||
                       document.querySelector('[role="dialog"]') ||
                       document.querySelector('.bloko-modal');
 
@@ -606,11 +898,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const buttons = Array.from(modal.querySelectorAll('button'));
         const respondButton = buttons.find(btn => {
           const text = btn.textContent?.trim() || '';
-          return text === 'Всё равно откликнуться' || text === 'Откликнуться' || text === 'Отправить';
+          const textLower = text.toLowerCase();
+          // Приоритет 1: Точные совпадения (с "ё" и "е")
+          return text === 'Всё равно откликнуться' ||
+                 text === 'Все равно откликнуться' ||
+                 text === 'Откликнуться' ||
+                 text === 'Отправить' ||
+                 // Приоритет 2: Содержит "равно откликнуться" (любой вариант)
+                 textLower.includes('равно откликнуться');
         }) || buttons.find(btn => {
           const text = btn.textContent?.trim().toLowerCase() || '';
+          // Приоритет 3: Любая кнопка с откликом/отправкой
           return text.includes('откликнуться') || text.includes('отправить') || text.includes('подтвердить');
-        }) || buttons[buttons.length - 1];
+        }) || buttons[buttons.length - 1]; // Fallback: последняя кнопка
 
         if (respondButton) {
           (respondButton as HTMLElement).click();
@@ -714,7 +1014,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       case 'OBSERVE_RESPOND_MODAL': {
         // Check if modal is open
-        const modal = document.querySelector('[data-qa="vacancy-response-modal"]') ||
+        const modal = document.querySelector('[class*="magritte-mobile-container"]') ||
+                      document.querySelector('[class*="magritte-overlay"]') ||
+                      document.querySelector('[data-qa="vacancy-response-modal"]') ||
                       document.querySelector('[role="dialog"]') ||
                       document.querySelector('.bloko-modal');
 
@@ -749,7 +1051,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'CLICK_SUBMIT_IN_MODAL': {
-        const modal = document.querySelector('[data-qa="vacancy-response-modal"]') ||
+        const modal = document.querySelector('[class*="magritte-mobile-container"]') ||
+                      document.querySelector('[class*="magritte-overlay"]') ||
+                      document.querySelector('[data-qa="vacancy-response-modal"]') ||
                       document.querySelector('[role="dialog"]');
 
         if (!modal) {
@@ -787,7 +1091,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'CLOSE_RESPOND_MODAL': {
-        const modal = document.querySelector('[data-qa="vacancy-response-modal"]') ||
+        const modal = document.querySelector('[class*="magritte-mobile-container"]') ||
+                      document.querySelector('[class*="magritte-overlay"]') ||
+                      document.querySelector('[data-qa="vacancy-response-modal"]') ||
                       document.querySelector('[role="dialog"]') ||
                       document.querySelector('.bloko-modal');
 
@@ -834,6 +1140,71 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
 
+      case 'CHECK_FOR_CAPTCHA': {
+        // Проверяем наличие капчи на странице
+        const captchaSelectors = [
+          '[data-qa="captcha"]',
+          '.g-recaptcha',
+          '#captcha',
+          'iframe[src*="recaptcha"]',
+          'iframe[src*="captcha"]',
+          '[class*="captcha"]',
+          '[id*="captcha"]'
+        ];
+
+        let captchaFound = false;
+        let captchaType = null;
+
+        for (const selector of captchaSelectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            captchaFound = true;
+            captchaType = selector;
+            break;
+          }
+        }
+
+        // Также проверяем текст на странице
+        const bodyText = document.body.textContent || '';
+        if (bodyText.includes('Проверка безопасности') ||
+            bodyText.includes('Подтвердите, что вы не робот') ||
+            bodyText.includes('Введите символы с картинки')) {
+          captchaFound = true;
+          captchaType = 'text_detection';
+        }
+
+        FileLogger.log('content_script', captchaFound ? 'warn' : 'info', 'Captcha check', {
+          found: captchaFound,
+          type: captchaType
+        });
+
+        sendResponse({
+          captchaFound,
+          captchaType
+        });
+        break;
+      }
+
+      case 'FILL_ADVANCED_SEARCH_FORM': {
+        FileLogger.log('content_script', 'info', 'FILL_ADVANCED_SEARCH_FORM received', {
+          profile: message.profile?.name
+        });
+
+        fillAndSubmitAdvancedSearchForm(message.profile, message.resumeHash)
+          .then(result => {
+            FileLogger.log('content_script', 'info', 'Advanced search form filled', result);
+            sendResponse(result);
+          })
+          .catch(error => {
+            FileLogger.log('content_script', 'error', 'Failed to fill advanced search form', {
+              error: error.message
+            });
+            sendResponse({ success: false, error: error.message });
+          });
+
+        return true; // Async response
+      }
+
       default:
         // Not for us - let it pass to background
         return false;
@@ -847,26 +1218,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-// Auto-close HH.ru modals
+// Auto-close ONLY non-apply HH.ru modals (avoid closing apply modals)
 setInterval(() => {
   try {
-    // Close "Why didn't you apply?" modal
-    const closeButtons = document.querySelectorAll('[data-qa="bloko-modal-close"]');
-    if (closeButtons.length > 0) {
-      FileLogger.log('content_script', 'info', 'Closing HH modal', { count: closeButtons.length });
-      closeButtons.forEach(btn => (btn as HTMLElement).click());
-    }
+    // Check both old bloko modals and new Magritte modals
+    const blokoModals = document.querySelectorAll('[data-qa="bloko-modal"]');
+    const magritteModals = document.querySelectorAll('[class*="magritte-mobile-container"], [class*="magritte-overlay"]');
+    const allModals = [...Array.from(blokoModals), ...Array.from(magritteModals)];
 
-    // Close other popups
-    const overlays = document.querySelectorAll('[data-qa="bloko-modal"]');
-    overlays.forEach(overlay => {
-      const close = overlay.querySelector('button[aria-label="Закрыть"]');
-      if (close) {
-        FileLogger.log('content_script', 'info', 'Closing popup');
-        (close as HTMLElement).click();
+    allModals.forEach(modal => {
+      const modalText = modal.textContent || '';
+
+      // Skip apply-related modals
+      if (
+        modalText.includes('Откликнуться') ||
+        modalText.includes('откликнуться') ||
+        modalText.includes('Всё равно откликнуться') ||
+        modalText.includes('Сопроводительное письмо') ||
+        modalText.includes('Отклик отправлен') ||
+        modalText.includes('другой стране') ||
+        modal.querySelector('textarea') ||
+        modal.querySelector('[data-qa*="vacancy-response"]')
+      ) {
+        return; // Don't close apply modals
+      }
+
+      // Close non-apply modals (surveys, etc)
+      const closeBtn = modal.querySelector('[data-qa="bloko-modal-close"]') ||
+                       modal.querySelector('button[aria-label="Закрыть"]') ||
+                       modal.querySelector('[class*="close"]');
+      if (closeBtn) {
+        FileLogger.log('content_script', 'info', 'Closing non-apply modal');
+        (closeBtn as HTMLElement).click();
       }
     });
   } catch (error) {
     // Ignore errors
   }
-}, 2000);
+}, 3000);

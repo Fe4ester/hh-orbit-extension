@@ -89,14 +89,12 @@ export interface Profile {
   name: string;
   keywordsInclude: string[];
   keywordsExclude: string[];
-  experience: string[];
+  experience: string; // Изменено: теперь одно значение вместо массива
   schedule: string[];
   employment: string[];
+  work_format?: string; // Новое: формат работы (REMOTE, ON_SITE, HYBRID, FIELD_WORK)
+  salary_frequency?: string; // Новое: частота выплат (MONTHLY, ANNUAL, HOURLY, DAILY)
   regions?: string[];
-  salary?: {
-    amount?: number;
-    currency?: string;
-  };
   coverLetterTemplate?: string;
   selectedResumeHash?: string | null;
   createdAt: number;

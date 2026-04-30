@@ -9,6 +9,8 @@ import { StateStore } from '../state/store';
 import { AcquisitionService } from './acquisitionService';
 import { FileLogger } from '../utils/fileLogger';
 import { clickRespondButtonOnCard } from '../live/searchCardApplyExecutor';
+import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
+import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
 
 export interface LiveEngineOps {
   checkRuntimeBlockers: () => Promise<{ success: boolean; blocker?: string }>;
@@ -28,6 +30,7 @@ export interface LiveEngineDeps {
 export class LiveAutoApplyEngine {
   private running = false;
   private stopRequested = false;
+  private currentSearchUrl: string | null = null;
 
   constructor(private deps: LiveEngineDeps) {}
 
@@ -65,8 +68,11 @@ export class LiveAutoApplyEngine {
 
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
-        if (state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
-          this.deps.log('[LiveEngine] Run limit reached');
+        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+          this.deps.log('[LiveEngine] Run limit reached', {
+            processed: state.runtime.processed,
+            limit: state.settings.maxAutoAppliesPerRun,
+          });
           break;
         }
 
@@ -220,6 +226,12 @@ export class LiveAutoApplyEngine {
 
       const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
 
+      // Save search URL from acquisition
+      if (acquisitionResult.success && acquisitionResult.currentUrl) {
+        this.currentSearchUrl = acquisitionResult.currentUrl;
+        FileLogger.log('service_worker', 'info', 'Search URL saved', { url: this.currentSearchUrl });
+      }
+
       if (!acquisitionResult.success) {
         await this.deps.store.setRuntimePhase('paused_manual_action', acquisitionResult.error || 'acquisition_failed');
         return 'no_vacancies';
@@ -230,9 +242,9 @@ export class LiveAutoApplyEngine {
         FileLogger.log('service_worker', 'info', 'No new vacancies, trying next page');
 
         try {
-          const nextPageResult = await chrome.tabs.sendMessage(controlledTabId, {
+          const nextPageResult = await sendMessageWithTimeout(controlledTabId, {
             type: 'CLICK_NEXT_PAGE'
-          });
+          }, 3000);
 
           if (nextPageResult.clicked) {
             FileLogger.log('service_worker', 'info', 'Clicked next page, waiting for load');
@@ -285,40 +297,58 @@ export class LiveAutoApplyEngine {
       return 'ok';
     }
 
-    // 6. Wait for modal to appear
-    FileLogger.log('service_worker', 'info', 'Waiting for modal (500ms)');
-    await this.deps.sleep(500);
+    // 6. Wait for modal to appear and handle it with retry
+    FileLogger.log('service_worker', 'info', 'Waiting for modal');
+    await this.deps.sleep(400);
 
-    // 7. Try to handle modal
+    // 7. Try to handle modal with retry mechanism
     let modalHandled = false;
-    try {
-      currentState = this.deps.store.getState();
-      const profile = Object.values(currentState.profiles).find(p => p.id === nextVacancy.profileId);
-      const coverLetterText = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
+    const maxModalRetries = 3;
 
-      FileLogger.log('service_worker', 'info', 'Calling HANDLE_ANY_MODAL');
+    for (let attempt = 1; attempt <= maxModalRetries; attempt++) {
+      try {
+        currentState = this.deps.store.getState();
+        const profile = Object.values(currentState.profiles).find(p => p.id === nextVacancy.profileId);
+        const coverLetterText = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
 
-      const modalCheck = await chrome.tabs.sendMessage(controlledTabId, {
-        type: 'HANDLE_ANY_MODAL',
-        coverLetter: coverLetterText
-      });
+        FileLogger.log('service_worker', 'info', `Modal handling attempt ${attempt}/${maxModalRetries}`);
 
-      FileLogger.log('service_worker', 'info', 'Modal check result', modalCheck);
+        const modalCheck = await sendMessageWithTimeout(controlledTabId, {
+          type: 'HANDLE_ANY_MODAL',
+          coverLetter: coverLetterText
+        }, 3000);
 
-      if (modalCheck?.handled) {
-        modalHandled = true;
-        FileLogger.log('service_worker', 'info', 'Modal handled', {
-          hadTextarea: modalCheck.hadTextarea,
-          buttonClicked: modalCheck.buttonClicked
+        FileLogger.log('service_worker', 'info', 'Modal check result', modalCheck);
+
+        if (modalCheck?.handled) {
+          modalHandled = true;
+          FileLogger.log('service_worker', 'info', 'Modal handled successfully', {
+            hadTextarea: modalCheck.hadTextarea,
+            buttonClicked: modalCheck.buttonClicked,
+            attempt
+          });
+
+          // Wait for modal to close and action to complete
+          await this.deps.sleep(600);
+          break;
+        } else if (modalCheck?.error === 'button_disabled') {
+          FileLogger.log('service_worker', 'warn', 'Modal button disabled, waiting', { attempt });
+          await this.deps.sleep(500);
+          continue;
+        } else {
+          // No modal found
+          FileLogger.log('service_worker', 'info', 'No modal found', { attempt });
+          break;
+        }
+      } catch (error) {
+        FileLogger.log('service_worker', 'warn', `Modal check failed (attempt ${attempt})`, {
+          error: (error as Error).message
         });
 
-        // Wait for modal to close
-        await this.deps.sleep(500);
+        if (attempt < maxModalRetries) {
+          await this.deps.sleep(300);
+        }
       }
-    } catch (error) {
-      FileLogger.log('service_worker', 'warn', 'Modal check failed', {
-        error: (error as Error).message
-      });
     }
 
     if (modalHandled) {
@@ -334,42 +364,29 @@ export class LiveAutoApplyEngine {
       return 'ok';
     }
 
-    // 8. No modal - check for redirect (wait longer for redirect to happen)
-    FileLogger.log('service_worker', 'info', 'No modal, checking redirect');
+    // 8. No modal - check for redirect
+    FileLogger.log('service_worker', 'info', 'No modal, checking for redirect');
 
-    // Wait for redirect to happen (1.5 seconds)
-    await this.deps.sleep(1500);
+    // Wait for potential redirect (shorter wait)
+    await this.deps.sleep(800);
 
-    const tab = await chrome.tabs.get(controlledTabId);
+    let tab = await chrome.tabs.get(controlledTabId);
     let currentUrl = tab.url || '';
 
     FileLogger.log('service_worker', 'info', 'Current URL after wait', { url: currentUrl });
 
     // Check if redirected away from search page
-    let isSearchPage = currentUrl.includes('hh.ru/search/vacancy') ||
-                       currentUrl.includes('hh.ru/applicant/vacancy_search');
-
-    // If still on search page, wait a bit more and check again
-    if (isSearchPage) {
-      FileLogger.log('service_worker', 'info', 'Still on search page, waiting more');
-      await this.deps.sleep(1000);
-
-      const tab2 = await chrome.tabs.get(controlledTabId);
-      currentUrl = tab2.url || '';
-      isSearchPage = currentUrl.includes('hh.ru/search/vacancy') ||
-                     currentUrl.includes('hh.ru/applicant/vacancy_search');
-
-      FileLogger.log('service_worker', 'info', 'URL after second check', { url: currentUrl, isSearchPage });
-    }
+    const isSearchPage = currentUrl.includes('hh.ru/search/vacancy') ||
+                         currentUrl.includes('hh.ru/applicant/vacancy_search');
 
     if (!isSearchPage) {
-      // Redirected - check if it's a test/questionnaire
+      // Redirected - handle response page
       FileLogger.log('service_worker', 'info', 'Redirect detected, checking type');
 
       try {
-        const testCheck = await chrome.tabs.sendMessage(controlledTabId, {
+        const testCheck = await sendMessageWithTimeout(controlledTabId, {
           type: 'CHECK_TEST_REQUIRED'
-        });
+        }, 3000);
 
         FileLogger.log('service_worker', 'info', 'Test check result', testCheck);
 
@@ -400,8 +417,7 @@ export class LiveAutoApplyEngine {
           });
 
           // Go back to search page
-          await chrome.tabs.sendMessage(controlledTabId, { type: 'GO_BACK' });
-          await this.deps.sleep(2000);
+          await this.returnToSearchPage(controlledTabId);
 
           await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId || '');
           return 'ok';
@@ -410,9 +426,9 @@ export class LiveAutoApplyEngine {
         // Not a test - it's a normal response page, check for cover letter
         FileLogger.log('service_worker', 'info', 'Normal response page, checking cover letter');
 
-        const coverLetterCheck = await chrome.tabs.sendMessage(controlledTabId, {
+        const coverLetterCheck = await sendMessageWithTimeout(controlledTabId, {
           type: 'DETECT_COVER_LETTER_UI'
-        });
+        }, 3000);
 
         if (coverLetterCheck?.visible || coverLetterCheck?.textareaFound) {
           // Fill and submit
@@ -422,18 +438,18 @@ export class LiveAutoApplyEngine {
           const profile = Object.values(currentState.profiles).find(p => p.id === nextVacancy.profileId);
           const coverLetterText = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
 
-          await chrome.tabs.sendMessage(controlledTabId, {
+          await sendMessageWithTimeout(controlledTabId, {
             type: 'FILL_COVER_LETTER',
             text: coverLetterText
-          });
+          }, 3000);
 
           await this.deps.sleep(300);
 
-          await chrome.tabs.sendMessage(controlledTabId, {
+          await sendMessageWithTimeout(controlledTabId, {
             type: 'CLICK_SUBMIT'
-          });
+          }, 3000);
 
-          await this.deps.sleep(1000);
+          await this.deps.sleep(800);
         }
 
         // Success
@@ -447,8 +463,7 @@ export class LiveAutoApplyEngine {
         await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId || '');
 
         // Go back
-        await chrome.tabs.sendMessage(controlledTabId, { type: 'GO_BACK' });
-        await this.deps.sleep(2000);
+        await this.returnToSearchPage(controlledTabId);
 
         return 'ok';
 
@@ -459,8 +474,7 @@ export class LiveAutoApplyEngine {
 
         // Go back anyway
         try {
-          await chrome.tabs.sendMessage(controlledTabId, { type: 'GO_BACK' });
-          await this.deps.sleep(2000);
+          await this.returnToSearchPage(controlledTabId);
         } catch (e) {
           // ignore
         }
@@ -472,7 +486,29 @@ export class LiveAutoApplyEngine {
 
     // Still on search page - no modal, no redirect
     // This means the click didn't do anything (maybe already applied)
-    FileLogger.log('service_worker', 'warn', 'No modal and no redirect - marking as processed');
+    FileLogger.log('service_worker', 'warn', 'No modal and no redirect - checking button state');
+
+    // Double-check button state to see if already applied
+    try {
+      const buttonStateCheck = await sendMessageWithTimeout(controlledTabId, {
+        type: 'CHECK_APPLY_BUTTON_STATE',
+        vacancyId: nextVacancy.vacancyId
+      }, 3000);
+
+      if (buttonStateCheck?.alreadyApplied) {
+        FileLogger.log('service_worker', 'info', 'Button shows already applied', {
+          buttonText: buttonStateCheck.buttonText
+        });
+      } else {
+        FileLogger.log('service_worker', 'warn', 'Click had no effect', {
+          buttonText: buttonStateCheck?.buttonText
+        });
+      }
+    } catch (error) {
+      FileLogger.log('service_worker', 'warn', 'Button state check failed', {
+        error: (error as Error).message
+      });
+    }
 
     await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId || '');
     return 'ok';
@@ -504,6 +540,29 @@ export class LiveAutoApplyEngine {
     return Math.floor(Math.random() * (hi - lo + 1)) + lo;
   }
 
+  /**
+   * Return to search page by direct navigation (not history.back)
+   * This is more reliable than GO_BACK which can navigate to wrong page
+   */
+  private async returnToSearchPage(tabId: number): Promise<void> {
+    if (!this.currentSearchUrl) {
+      FileLogger.log('service_worker', 'error', 'No search URL stored, cannot return');
+      return;
+    }
+
+    FileLogger.log('service_worker', 'info', 'Returning to search page', { url: this.currentSearchUrl });
+
+    try {
+      await chrome.tabs.update(tabId, { url: this.currentSearchUrl });
+      await this.waitForPageLoad(tabId);
+      FileLogger.log('service_worker', 'info', 'Returned to search page successfully');
+    } catch (error) {
+      FileLogger.log('service_worker', 'error', 'Failed to return to search page', {
+        error: (error as Error).message
+      });
+    }
+  }
+
   private async initializeControlledTab(): Promise<{ success: boolean; tabId?: number; url?: string; error?: string }> {
     this.deps.log('[LiveEngine] Initializing controlled tab');
 
@@ -519,19 +578,25 @@ export class LiveAutoApplyEngine {
           if (!isSearchPage) {
             FileLogger.log('service_worker', 'warn', 'Not on search page, navigating', { url });
 
-            // Get search URL from active profile
-            const activeProfileId = state.activeProfileId;
-            const profile = activeProfileId ? state.profiles[activeProfileId] : null;
-            const searchUrl = profile ? `https://hh.ru/search/vacancy?text=${encodeURIComponent(profile.keywordsInclude.join(' '))}` : 'https://hh.ru/search/vacancy';
+            // Get global search URL
+            const resumeHash = state.selectedResumeHash;
+            const searchUrl = buildGlobalSearchUrl(resumeHash);
+
+            FileLogger.log('service_worker', 'info', 'Navigating to global search', {
+              searchUrl,
+              strategy: 'global_search',
+              resumeHash: resumeHash || 'none'
+            });
 
             await chrome.tabs.update(tab.id!, { url: searchUrl, active: true });
             await this.waitForPageLoad(tab.id!);
 
-            FileLogger.log('service_worker', 'info', 'Navigated to search page', { searchUrl });
+            this.currentSearchUrl = searchUrl; // Save search URL
             return { success: true, tabId: tab.id, url: searchUrl };
           }
 
           this.deps.log('[LiveEngine] Using existing controlled tab', { tabId: tab.id, url: tab.url });
+          this.currentSearchUrl = tab.url; // Save search URL
           return { success: true, tabId: tab.id, url: tab.url };
         }
       } catch (error) {
@@ -550,8 +615,15 @@ export class LiveAutoApplyEngine {
       return { success: false, error: 'profile_not_found' };
     }
 
-    // Build search URL using existing helper
-    const searchUrl = `https://hh.ru/search/vacancy?text=${encodeURIComponent(profile.keywordsInclude.join(' '))}`;
+    // Build global search URL
+    const resumeHash = state.selectedResumeHash;
+    const searchUrl = buildGlobalSearchUrl(resumeHash);
+
+    FileLogger.log('service_worker', 'info', 'Initialize controlled tab with global search', {
+      searchUrl,
+      strategy: 'global_search',
+      resumeHash: resumeHash || 'none'
+    });
 
     // Try to get current active tab
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -570,6 +642,7 @@ export class LiveAutoApplyEngine {
         // If already on HH.ru, bind it
         if (tab.url?.includes('hh.ru')) {
           await this.deps.store.bindControlledTab(tabId, windowId, tab.url);
+          this.currentSearchUrl = tab.url; // Save search URL
           this.deps.log('[LiveEngine] Bound existing HH.ru tab');
           return { success: true, tabId, url: tab.url };
         }
@@ -578,6 +651,7 @@ export class LiveAutoApplyEngine {
         await chrome.tabs.update(tabId, { url: searchUrl, active: true });
         await this.waitForPageLoad(tabId);
 
+        this.currentSearchUrl = searchUrl; // Save search URL
         await this.deps.store.bindControlledTab(tabId, windowId, searchUrl);
         this.deps.log('[LiveEngine] Navigated active tab to search');
         return { success: true, tabId, url: searchUrl };
@@ -594,6 +668,7 @@ export class LiveAutoApplyEngine {
 
     await this.waitForPageLoad(newTab.id);
 
+    this.currentSearchUrl = searchUrl; // Save search URL
     await this.deps.store.bindControlledTab(newTab.id, newTab.windowId, searchUrl);
     this.deps.log('[LiveEngine] Created new controlled tab');
     return { success: true, tabId: newTab.id, url: searchUrl };

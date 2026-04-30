@@ -575,10 +575,14 @@ export class StateStore {
       return true;
     });
 
+    // Get profile for keyword prefilter
+    const profile = profileId ? this.state.profiles[profileId] : undefined;
+
     this.state.vacancyQueue = materializeVacanciesHelper(
       this.state.vacancyQueue,
       filteredCards,
-      profileId
+      profileId,
+      profile
     );
 
     await this.storage.set(this.state);
@@ -696,6 +700,15 @@ export class StateStore {
 
     await this.updateState({
       manualActions: [...this.state.manualActions, newAction],
+    });
+
+    FileLogger.log('service_worker', 'warn', 'Manual action created', {
+      id: newAction.id,
+      type: newAction.type,
+      vacancyId: newAction.vacancyId,
+      profileId: newAction.profileId,
+      reasonCode: newAction.reasonCode,
+      status: newAction.status,
     });
   }
 
@@ -903,6 +916,8 @@ export class StateStore {
     if (!this.state) throw new Error('Store not initialized');
 
     await this.updateState({ sessionStatus: status });
+
+    FileLogger.log('service_worker', 'info', 'Session status updated', { status });
   }
 
   async setRuntimeBlocker(
@@ -915,6 +930,11 @@ export class StateStore {
       runtimeBlocker: blocker,
       lastRuntimeError: reason || null,
     });
+
+    FileLogger.log('service_worker', 'warn', 'Runtime blocker set', {
+      blocker,
+      reason: reason || null,
+    });
   }
 
   async clearRuntimeBlocker(): Promise<void> {
@@ -924,6 +944,8 @@ export class StateStore {
       runtimeBlocker: null,
       lastRuntimeError: null,
     });
+
+    FileLogger.log('service_worker', 'info', 'Runtime blocker cleared');
   }
 
   canDispatch(event: RuntimeEvent): boolean {

@@ -1573,3 +1573,147 @@
   font-size: 13px;
   color: #666;
 }
+
+/* Profile Editor - Checkbox Groups */
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.checkbox-label:hover {
+  background: #f9f9f9;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+.checkbox-label span {
+  font-size: 14px;
+  color: #333;
+  user-select: none;
+}
+
+/* Profile Editor - Radio Groups */
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  transition: all 0.2s;
+}
+
+.radio-label:hover {
+  background: #f9f9f9;
+  border-color: #d0d0d0;
+}
+
+.radio-label input[type="radio"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #007bff;
+}
+
+.radio-label input[type="radio"]:checked + span {
+  font-weight: 500;
+  color: #007bff;
+}
+
+.radio-label:has(input[type="radio"]:checked) {
+  background: #e7f3ff;
+  border-color: #007bff;
+}
+
+.radio-label span {
+  font-size: 14px;
+  color: #333;
+  user-select: none;
+  flex: 1;
+}
+
+/* Salary Input Group */
+.salary-input-group {
+  display: flex;
+  gap: 8px;
+}
+
+.salary-amount {
+  flex: 2;
+}
+
+.salary-currency {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+  cursor: pointer;
+}
+
+.salary-currency:focus {
+  outline: none;
+  border-color: #007bff;
+}
+
+/* Form Section for Broad Search */
+.form-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 2px solid #e0e0e0;
+}
+
+.form-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+/* Search Mode Indicator */
+.status-indicator[data-search-mode="filtered"] {
+  border-left: 4px solid #4caf50;
+}
+
+.status-indicator[data-search-mode="broad"] {
+  border-left: 4px solid #2196f3;
+}
+
+.badge-broad {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 8px;
+  background: #2196f3;
+  color: #fff;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}

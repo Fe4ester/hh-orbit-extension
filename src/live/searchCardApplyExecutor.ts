@@ -3,6 +3,7 @@
  */
 
 import { FileLogger } from '../utils/fileLogger';
+import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
 
 export interface SearchCardApplyResult {
   success: boolean;
@@ -21,11 +22,11 @@ export async function clickRespondButtonOnCard(
   FileLogger.log('service_worker', 'info', 'Clicking respond button on card', { cardIndex, vacancyId });
 
   try {
-    const result = await chrome.tabs.sendMessage(tabId, {
+    const result = await sendMessageWithTimeout(tabId, {
       type: 'CLICK_RESPOND_ON_CARD',
       cardIndex,
       vacancyId,
-    });
+    }, 5000);
 
     FileLogger.log('service_worker', 'info', 'Click respond result', result);
     return result;

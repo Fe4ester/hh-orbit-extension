@@ -40,7 +40,7 @@ export class AutoApplyOrchestrator {
 
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
-        if (state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
           this.deps.log('[Orchestrator] AUTO_APPLY_START: Run limit reached', {
             processed: state.runtime.processed,
             limit: state.settings.maxAutoAppliesPerRun,

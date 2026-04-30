@@ -11,6 +11,7 @@ export interface LogEntry {
   level: 'debug' | 'info' | 'warn' | 'error';
   message: string;
   context?: Record<string, any>;
+  screenshot?: string; // base64 data URL
 }
 
 const STORAGE_KEY = 'extension_logs';
@@ -21,7 +22,8 @@ export class FileLogger {
     source: LogEntry['source'],
     level: LogEntry['level'],
     message: string,
-    context?: Record<string, any>
+    context?: Record<string, any>,
+    screenshot?: string
   ): Promise<void> {
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
@@ -29,6 +31,7 @@ export class FileLogger {
       level,
       message,
       context,
+      screenshot,
     };
 
     try {
@@ -46,6 +49,15 @@ export class FileLogger {
     } catch (err) {
       console.error('[FileLogger] Failed to write log:', err);
     }
+  }
+
+  /**
+   * Capture screenshot of active tab
+   * DISABLED: Causes quota errors and slows down processing
+   */
+  static async captureScreenshot(): Promise<string | undefined> {
+    // Скриншоты отключены из-за ошибок квоты Chrome API
+    return undefined;
   }
 
   static async readLogs(limit?: number): Promise<LogEntry[]> {

@@ -24,9 +24,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   const [keywordsExclude, setKeywordsExclude] = useState(
     profile?.keywordsExclude.join(', ') || ''
   );
-  const [experience, setExperience] = useState(profile?.experience.join(', ') || '');
-  const [schedule, setSchedule] = useState(profile?.schedule.join(', ') || '');
-  const [employment, setEmployment] = useState(profile?.employment.join(', ') || '');
   const [coverLetter, setCoverLetter] = useState(profile?.coverLetterTemplate || '');
   const [selectedResumeHash, setSelectedResumeHash] = useState(
     profile?.selectedResumeHash || ''
@@ -44,18 +41,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
         .split(',')
         .map((k) => k.trim())
         .filter((k) => k),
-      experience: experience
-        .split(',')
-        .map((e) => e.trim())
-        .filter((e) => e),
-      schedule: schedule
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s),
-      employment: employment
-        .split(',')
-        .map((e) => e.trim())
-        .filter((e) => e),
       coverLetterTemplate: coverLetter.trim() || undefined,
       selectedResumeHash: selectedResumeHash || null,
     };
@@ -99,6 +84,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
             onChange={(e) => setKeywordsInclude(e.target.value)}
             placeholder="React, TypeScript, Frontend (через запятую)"
           />
+          <small className="form-hint">
+            Вакансия должна содержать хотя бы одно из этих слов в названии или описании
+          </small>
         </div>
 
         <div className="form-group">
@@ -109,36 +97,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
             onChange={(e) => setKeywordsExclude(e.target.value)}
             placeholder="PHP, Java (через запятую)"
           />
-        </div>
-
-        <div className="form-group">
-          <label>Опыт работы</label>
-          <input
-            type="text"
-            value={experience}
-            onChange={(e) => setExperience(e.target.value)}
-            placeholder="От 3 лет, От 1 года (через запятую)"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>График работы</label>
-          <input
-            type="text"
-            value={schedule}
-            onChange={(e) => setSchedule(e.target.value)}
-            placeholder="Полный день, Удаленная работа (через запятую)"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Тип занятости</label>
-          <input
-            type="text"
-            value={employment}
-            onChange={(e) => setEmployment(e.target.value)}
-            placeholder="Полная занятость, Частичная занятость (через запятую)"
-          />
+          <small className="form-hint">
+            Вакансии с этими словами будут пропущены
+          </small>
         </div>
 
         <div className="form-group">

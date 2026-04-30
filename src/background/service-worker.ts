@@ -36,16 +36,12 @@ interface CheckRuntimeBlockersResult {
 }
 
 async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
-  FileLogger.log('service_worker', 'info', 'doCheckRuntimeBlockers START');
-  console.log('[Background] doCheckRuntimeBlockers START');
+  FileLogger.log('service_worker', 'info', 'Runtime blockers check start');
 
   const ensureResult = await ensureControlledTabForCurrentHHTab();
 
   if (!ensureResult.ok) {
-    FileLogger.log('service_worker', 'error', 'doCheckRuntimeBlockers: Ensure failed', { reason: ensureResult.reason });
-    console.error('[Background] doCheckRuntimeBlockers: Ensure failed', {
-      reason: ensureResult.reason,
-    });
+    FileLogger.log('service_worker', 'error', 'Runtime blockers check failed', { reason: ensureResult.reason });
 
     const errorMsg =
       ensureResult.reason === 'not_hh_tab'
@@ -63,11 +59,9 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
   const controlledTabId = ensureResult.tabId!;
   const currentUrl = ensureResult.url!;
 
-  FileLogger.log('service_worker', 'info', 'doCheckRuntimeBlockers: Executing detection', { controlledTabId, currentUrl });
-  console.log('[Background] doCheckRuntimeBlockers: Executing detection in tab context', {
+  FileLogger.log('service_worker', 'info', 'Runtime blockers detection executing', {
     controlledTabId,
-    currentUrl,
-    mode: 'tab_context',
+    currentUrl
   });
 
   // Execute detection in tab context (DOMParser available there)
@@ -754,7 +748,6 @@ const backendEngine = new BackendAutoApplyEngine({
   httpClient: backendHTTPClient,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   log: (...args) => console.log(...args),
-  debug: true, // Включить подробное логирование
 });
 
 // Live engine V2

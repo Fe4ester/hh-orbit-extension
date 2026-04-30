@@ -17,6 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["chrome", "vitest/globals"]
   },
-  "include": ["src", "sidepanel", "tests"],
+  "include": ["src", "sidepanel"],
+  "exclude": ["tests"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

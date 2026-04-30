@@ -6,9 +6,10 @@
  */
 
 import { StateStore } from '../state/store';
-import { buildHHSearchUrl } from '../live/searchQueryBuilder';
 import { parseSearchResults } from '../live/searchResultsParser';
 import { FileLogger } from '../utils/fileLogger';
+import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
+import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
 
 export interface AcquisitionResult {
   success: boolean;
@@ -29,15 +30,13 @@ export class AcquisitionService {
   constructor(private deps: AcquisitionServiceDeps) {}
 
   async acquireForProfile(profileId: string): Promise<AcquisitionResult> {
-    this.deps.log('[Acquisition] ACQUISITION START', { profileId });
-    FileLogger.log('service_worker', 'info', 'Acquisition START', { profileId });
+    FileLogger.log('service_worker', 'info', 'Acquisition start', { profileId });
 
     const state = this.deps.store.getState();
     const profile = state.profiles[profileId];
 
     if (!profile) {
-      this.deps.log('[Acquisition] Profile not found');
-      FileLogger.log('service_worker', 'error', 'Acquisition: Profile not found', { profileId });
+      FileLogger.log('service_worker', 'error', 'Acquisition failed', { profileId, reason: 'profile_not_found' });
       return {
         success: false,
         currentUrl: null,
@@ -53,8 +52,7 @@ export class AcquisitionService {
     const controlledTabId = state.liveMode.controlledTabId;
 
     if (!controlledTabId) {
-      this.deps.log('[Acquisition] ERROR: No controlled tab');
-      FileLogger.log('service_worker', 'error', 'Acquisition: No controlled tab');
+      FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'no_controlled_tab' });
       return {
         success: false,
         currentUrl: null,
@@ -66,16 +64,19 @@ export class AcquisitionService {
       };
     }
 
-    const searchUrl = buildHHSearchUrl(profile);
-    this.deps.log('[Acquisition] Search URL', { searchUrl, controlledTabId });
-    FileLogger.log('service_worker', 'info', 'Acquisition: Navigating to search', { searchUrl, controlledTabId });
-
     try {
+      const resumeHash = state.selectedResumeHash;
+      const searchUrl = buildGlobalSearchUrl(resumeHash);
+
+      FileLogger.log('service_worker', 'info', 'Acquisition navigate', {
+        searchUrl,
+        strategy: 'global_search',
+        resumeHash: resumeHash || 'none'
+      });
+
       // Navigate controlled tab to search URL
-      this.deps.log('[Acquisition] Navigating controlled tab to search', { tabId: controlledTabId, url: searchUrl });
       await chrome.tabs.update(controlledTabId, { url: searchUrl, active: true });
 
-      // Wait for navigation complete
       const ready = await this.waitForTabReady(controlledTabId, searchUrl, 30000);
       if (!ready) {
         FileLogger.log('service_worker', 'error', 'Acquisition: Tab not ready');
@@ -89,61 +90,45 @@ export class AcquisitionService {
           error: 'navigation_timeout',
         };
       }
-      FileLogger.log('service_worker', 'info', 'Acquisition: Tab ready');
 
       // Check if we got redirected away from search
       const tab = await chrome.tabs.get(controlledTabId);
       const actualUrl = tab.url || '';
 
       if (!actualUrl.includes('/search/vacancy')) {
-        this.deps.log('[Acquisition] Redirected away from search', {
-          expected: searchUrl,
-          actual: actualUrl
-        });
-
-        // Try to navigate back to search
-        this.deps.log('[Acquisition] Forcing navigation back to search');
-        await chrome.tabs.update(controlledTabId, { url: searchUrl, active: true });
-
-        const retryReady = await this.waitForTabReady(controlledTabId, searchUrl, 30000);
-        if (!retryReady) {
-          return {
-            success: false,
-            currentUrl: actualUrl,
-            pageType: 'unknown',
-            cardsFound: 0,
-            newQueued: 0,
-            queueSizeAfter: 0,
-            error: 'redirect_loop',
-          };
-        }
+        FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'not_on_search_page', actualUrl });
+        return {
+          success: false,
+          currentUrl: actualUrl,
+          pageType: 'unknown',
+          cardsFound: 0,
+          newQueued: 0,
+          queueSizeAfter: 0,
+          error: 'not_on_search_page',
+        };
       }
 
       // Ping content script to verify it's loaded
-      this.deps.log('[Acquisition] Pinging content script', { tabId: controlledTabId });
-      FileLogger.log('service_worker', 'info', 'Acquisition: Pinging content script', { tabId: controlledTabId });
+      FileLogger.log('service_worker', 'debug', 'Acquisition content script check', { tabId: controlledTabId });
 
       let contentScriptReady = false;
       for (let attempt = 0; attempt < 5; attempt++) {
         try {
-          await chrome.tabs.sendMessage(controlledTabId, { type: 'PING' }, { frameId: 0 });
-          this.deps.log('[Acquisition] Content script responding');
-          FileLogger.log('service_worker', 'info', 'Acquisition: Content script ready');
+          await sendMessageWithTimeout(controlledTabId, { type: 'PING' }, 2000);
+          FileLogger.log('service_worker', 'debug', 'Content script ready', { tabId: controlledTabId, attempt: attempt + 1 });
           contentScriptReady = true;
           break;
         } catch (error) {
-          this.deps.log(`[Acquisition] Content script not responding (attempt ${attempt + 1}/5)`, error);
-          FileLogger.log('service_worker', 'warn', 'Content script not responding', { attempt: attempt + 1 });
+          FileLogger.log('service_worker', 'debug', 'Content script not responding', { attempt: attempt + 1 });
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
 
       if (!contentScriptReady) {
-        this.deps.log('[Acquisition] Content script failed to load');
-        FileLogger.log('service_worker', 'error', 'Acquisition: Content script not loaded');
+        FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'content_script_not_loaded' });
         return {
           success: false,
-          currentUrl: searchUrl,
+          currentUrl: actualUrl,
           pageType: 'unknown',
           cardsFound: 0,
           newQueued: 0,
@@ -152,19 +137,20 @@ export class AcquisitionService {
         };
       }
 
+      // Wait for React to render vacancy cards
+      FileLogger.log('service_worker', 'debug', 'Acquisition wait for render');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
       // Get HTML from content script
-      this.deps.log('[Acquisition] Getting HTML from content script', { tabId: controlledTabId });
-      FileLogger.log('service_worker', 'info', 'Acquisition: Getting HTML');
-      const htmlResponse = await chrome.tabs.sendMessage(controlledTabId, { type: 'GET_HTML' }, { frameId: 0 });
+      FileLogger.log('service_worker', 'debug', 'Acquisition fetch html', { tabId: controlledTabId });
+      const htmlResponse = await sendMessageWithTimeout(controlledTabId, { type: 'GET_HTML' }, 5000);
       const html = htmlResponse?.html;
 
-      this.deps.log('[Acquisition] HTML fetched', { length: html?.length || 0 });
-
       if (!html || html.length === 0) {
-        FileLogger.log('service_worker', 'error', 'Acquisition: Empty HTML');
+        FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'empty_html' });
         return {
           success: false,
-          currentUrl: searchUrl,
+          currentUrl: actualUrl,
           pageType: 'unknown',
           cardsFound: 0,
           newQueued: 0,
@@ -172,18 +158,17 @@ export class AcquisitionService {
           error: 'empty_html',
         };
       }
-      FileLogger.log('service_worker', 'info', 'Acquisition: HTML fetched', { length: html.length });
+      FileLogger.log('service_worker', 'debug', 'Acquisition html fetched', { length: html.length });
 
       // Parse search results
       const cards = parseSearchResults(html);
-      this.deps.log('[Acquisition] Cards parsed', { count: cards.length });
-      FileLogger.log('service_worker', 'info', 'Acquisition: Cards parsed', { count: cards.length });
+      FileLogger.log('service_worker', 'info', 'Acquisition parsed', { cardsFound: cards.length });
 
       if (cards.length === 0) {
-        FileLogger.log('service_worker', 'warn', 'Acquisition: No vacancy cards found');
+        FileLogger.log('service_worker', 'warn', 'Acquisition empty', { currentUrl: actualUrl });
         return {
           success: true,
-          currentUrl: searchUrl,
+          currentUrl: actualUrl,
           pageType: 'search',
           cardsFound: 0,
           newQueued: 0,
@@ -200,14 +185,7 @@ export class AcquisitionService {
       const queueAfter = stateAfter.vacancyQueue.length;
       const queueCount = stateAfter.vacancyQueue.filter((v) => v.status === 'discovered').length;
 
-      this.deps.log('[Acquisition] SUCCESS', {
-        cardsFound: cards.length,
-        queueBefore,
-        queueAfter,
-        newQueued: queueAfter - queueBefore,
-        queueSizeAfter: queueCount,
-      });
-      FileLogger.log('service_worker', 'info', 'Acquisition SUCCESS', {
+      FileLogger.log('service_worker', 'info', 'Acquisition complete', {
         cardsFound: cards.length,
         queueBefore,
         queueAfter,
@@ -217,14 +195,16 @@ export class AcquisitionService {
 
       return {
         success: true,
-        currentUrl: searchUrl,
+        currentUrl: actualUrl,
         pageType: 'search',
         cardsFound: cards.length,
         newQueued: cards.length,
         queueSizeAfter: queueCount,
       };
     } catch (error) {
-      this.deps.log('[Acquisition] Error:', error);
+      FileLogger.log('service_worker', 'error', 'Acquisition exception', {
+        error: (error as Error).message,
+      });
       return {
         success: false,
         currentUrl: null,
@@ -239,8 +219,7 @@ export class AcquisitionService {
 
   private async waitForTabReady(tabId: number, _expectedUrl: string, timeoutMs = 30000): Promise<boolean> {
     const startTime = Date.now();
-    this.deps.log('[Acquisition] Waiting for tab to load', { timeout: timeoutMs });
-    FileLogger.log('service_worker', 'info', 'waitForTabReady START', { tabId, timeout: timeoutMs });
+    FileLogger.log('service_worker', 'debug', 'Tab ready wait start', { tabId, timeout: timeoutMs });
 
     return new Promise((resolve) => {
       let lastStatus = '';
@@ -253,25 +232,18 @@ export class AcquisitionService {
 
           if (elapsed > timeoutMs) {
             clearInterval(checkInterval);
-            this.deps.log('[Acquisition] Tab load timeout', { elapsed: `${Math.floor(elapsed / 1000)}s` });
-            FileLogger.log('service_worker', 'warn', 'waitForTabReady TIMEOUT', { tabId, elapsed });
+            FileLogger.log('service_worker', 'warn', 'Tab ready wait timeout', { tabId, elapsed });
             resolve(false);
             return;
           }
 
           if (lastStatus !== tab.status) {
-            this.deps.log('[Acquisition] Tab status', {
-              status: tab.status,
-              url: tab.url,
-              elapsed: `${Math.floor(elapsed / 1000)}s`
-            });
             FileLogger.log('service_worker', 'debug', 'Tab status', { status: tab.status, elapsed });
             lastStatus = tab.status || '';
           }
 
           // Check if URL is correct
           if (!tab.url?.includes('/search/vacancy')) {
-            this.deps.log('[Acquisition] Tab navigated away from search', { url: tab.url });
             FileLogger.log('service_worker', 'warn', 'Tab navigated away', { url: tab.url });
             clearInterval(checkInterval);
             resolve(false);
@@ -287,13 +259,11 @@ export class AcquisitionService {
               });
 
               const readyState = results[0].result;
-              this.deps.log('[Acquisition] Document readyState', { readyState, elapsed: `${Math.floor(elapsed / 1000)}s` });
               FileLogger.log('service_worker', 'debug', 'Document readyState', { readyState, elapsed });
 
               if (readyState === 'complete' || readyState === 'interactive') {
                 clearInterval(checkInterval);
-                this.deps.log('[Acquisition] Tab ready', { readyState, elapsed: `${Math.floor(elapsed / 1000)}s` });
-                FileLogger.log('service_worker', 'info', 'waitForTabReady SUCCESS', { readyState, elapsed });
+                FileLogger.log('service_worker', 'debug', 'Tab ready wait complete', { readyState, elapsed });
                 resolve(true);
                 return;
               }
@@ -302,8 +272,7 @@ export class AcquisitionService {
               readyCheckAttempts++;
               if (readyCheckAttempts >= 3) {
                 clearInterval(checkInterval);
-                this.deps.log('[Acquisition] Tab stuck in loading, assuming ready', { elapsed: `${Math.floor(elapsed / 1000)}s` });
-                FileLogger.log('service_worker', 'warn', 'waitForTabReady ASSUME_READY', { elapsed });
+                FileLogger.log('service_worker', 'warn', 'Tab ready assumed', { elapsed });
                 resolve(true);
                 return;
               }

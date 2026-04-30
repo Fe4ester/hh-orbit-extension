@@ -9,6 +9,7 @@ export interface ParsedVacancyCard {
   salary?: string;
   url: string;
   location?: string;
+  snippet?: string;
   isViewed?: boolean;
   cardIndex?: number;
 }
@@ -143,6 +144,11 @@ export function parseSearchResults(html: string): ParsedVacancyCard[] {
       const locationMatch = cardHtml.match(locationRegex);
       const location = locationMatch ? locationMatch[1].replace(/<[^>]+>/g, '').trim() : undefined;
 
+      // Extract snippet/description (optional)
+      const snippetRegex = /<div[^>]*data-qa="vacancy-serp__vacancy_snippet_responsibility"[^>]*>([\s\S]*?)<\/div>/;
+      const snippetMatch = cardHtml.match(snippetRegex);
+      const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : undefined;
+
       // Check if viewed
       const isViewed = /vacancy-serp-item_visited/.test(cardHtml);
 
@@ -153,6 +159,7 @@ export function parseSearchResults(html: string): ParsedVacancyCard[] {
         salary,
         url,
         location,
+        snippet,
         isViewed,
         cardIndex: index,
       });

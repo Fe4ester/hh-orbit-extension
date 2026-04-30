@@ -6,8 +6,8 @@
  */
 
 import { StateStore } from '../state/store';
-import { buildHHSearchUrl } from '../live/searchQueryBuilder';
 import { parseSearchResults } from '../live/searchResultsParser';
+import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
 
 export interface VacancyAcquisitionResult {
   ok: boolean;
@@ -38,9 +38,14 @@ export class VacancyAcquisitionService {
       return { ok: false, count: 0, reason: 'profile_not_found' };
     }
 
-    // Build search URL
-    const searchUrl = buildHHSearchUrl(profile);
-    this.deps.log('[VacancyAcquisition] Search URL built', { searchUrl });
+    // Build global search URL
+    const resumeHash = state.selectedResumeHash;
+    const searchUrl = buildGlobalSearchUrl(resumeHash);
+    this.deps.log('[VacancyAcquisition] Search URL built', {
+      searchUrl,
+      strategy: 'global_search',
+      resumeHash: resumeHash || 'none'
+    });
 
     try {
       // Create hidden tab for acquisition

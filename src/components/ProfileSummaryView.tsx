@@ -30,19 +30,6 @@ export const ProfileSummaryView: React.FC<ProfileSummaryViewProps> = ({ summary 
         {summary.keywordsCount > 0 && (
           <span className="filter-badge">Ключевые слова: {summary.keywordsCount}</span>
         )}
-        {summary.experienceCount > 0 && (
-          <span className="filter-badge">Опыт: {summary.experienceCount}</span>
-        )}
-        {summary.scheduleCount > 0 && (
-          <span className="filter-badge">График: {summary.scheduleCount}</span>
-        )}
-        {summary.employmentCount > 0 && (
-          <span className="filter-badge">Занятость: {summary.employmentCount}</span>
-        )}
-        {summary.regionsCount > 0 && (
-          <span className="filter-badge">Регионы: {summary.regionsCount}</span>
-        )}
-        {summary.hasSalary && <span className="filter-badge">Зарплата указана</span>}
         {summary.hasCoverLetter && <span className="filter-badge">Сопроводительное письмо</span>}
       </div>
     </div>

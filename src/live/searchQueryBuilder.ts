@@ -4,12 +4,10 @@ import { Profile } from '../state/types';
 
 export interface SearchParams {
   text?: string;
-  experience?: string[];
+  experience?: string;
   schedule?: string[];
   employment?: string[];
   area?: string[];
-  salary?: string;
-  currency_code?: string;
 }
 
 export function buildSearchParams(profile: Profile): SearchParams {
@@ -26,7 +24,7 @@ export function buildSearchParams(profile: Profile): SearchParams {
   }
 
   // Experience
-  if (profile.experience.length > 0) {
+  if (profile.experience) {
     params.experience = profile.experience;
   }
 
@@ -45,18 +43,10 @@ export function buildSearchParams(profile: Profile): SearchParams {
     params.area = profile.regions;
   }
 
-  // Salary
-  if (profile.salary && profile.salary.amount !== undefined) {
-    params.salary = String(profile.salary.amount);
-    if (profile.salary.currency) {
-      params.currency_code = profile.salary.currency;
-    }
-  }
-
   return params;
 }
 
-export function buildHHSearchUrl(profile: Profile): string {
+export function buildHHSearchUrl(profile: Profile, broadSearch = false): string {
   const params = buildSearchParams(profile);
   const baseUrl = 'https://hh.ru/search/vacancy';
 
@@ -66,26 +56,22 @@ export function buildHHSearchUrl(profile: Profile): string {
     searchParams.set('text', params.text);
   }
 
-  if (params.experience) {
-    params.experience.forEach((exp) => searchParams.append('experience', exp));
-  }
+  // В режиме глобального поиска пропускаем фильтры
+  if (!broadSearch) {
+    if (params.experience) {
+      searchParams.append('experience', params.experience);
+    }
 
-  if (params.schedule) {
-    params.schedule.forEach((sch) => searchParams.append('schedule', sch));
-  }
+    if (params.schedule) {
+      params.schedule.forEach((sch) => searchParams.append('schedule', sch));
+    }
 
-  if (params.employment) {
-    params.employment.forEach((emp) => searchParams.append('employment', emp));
-  }
+    if (params.employment) {
+      params.employment.forEach((emp) => searchParams.append('employment', emp));
+    }
 
-  if (params.area) {
-    params.area.forEach((area) => searchParams.append('area', area));
-  }
-
-  if (params.salary) {
-    searchParams.set('salary', params.salary);
-    if (params.currency_code) {
-      searchParams.set('currency_code', params.currency_code);
+    if (params.area) {
+      params.area.forEach((area) => searchParams.append('area', area));
     }
   }
 

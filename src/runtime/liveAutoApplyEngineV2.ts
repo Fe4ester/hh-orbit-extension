@@ -8,6 +8,9 @@ import { StateStore } from '../state/store';
 import { AcquisitionService } from './acquisitionService';
 import { FileLogger } from '../utils/fileLogger';
 import { VacancyQueueItem } from '../state/types';
+import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
+import { PreflightService, PreflightResult } from './preflightService';
+import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
 
 // State machine states
 type VacancyState =
@@ -29,6 +32,7 @@ interface VacancyContext {
   attempt: number;
   maxAttempts: number;
   errors: string[];
+  preflight?: PreflightResult;
   metadata: {
     startTime: number;
     clickAttempts: number;
@@ -56,8 +60,11 @@ export interface LiveEngineV2Deps {
 export class LiveAutoApplyEngineV2 {
   private running = false;
   private stopRequested = false;
+  private preflightService: PreflightService;
 
-  constructor(private deps: LiveEngineV2Deps) {}
+  constructor(private deps: LiveEngineV2Deps) {
+    this.preflightService = new PreflightService(deps.log);
+  }
 
   isRunning(): boolean {
     return this.running;
@@ -68,7 +75,7 @@ export class LiveAutoApplyEngineV2 {
     this.running = true;
     this.stopRequested = false;
 
-    FileLogger.log('service_worker', 'info', 'LiveEngineV2 START');
+    FileLogger.log('service_worker', 'info', 'LiveEngineV2 start');
 
     try {
       await this.deps.store.dispatch('START_REQUESTED');
@@ -78,18 +85,26 @@ export class LiveAutoApplyEngineV2 {
       // Initialize controlled tab
       const initResult = await this.initializeControlledTab();
       if (!initResult.success) {
-        FileLogger.log('service_worker', 'error', 'Failed to initialize controlled tab', { error: initResult.error });
+        FileLogger.log('service_worker', 'error', 'Failed to initialize controlled tab', {
+          error: initResult.error
+        });
         await this.deps.store.setRuntimePhase('paused_manual_action', initResult.error || 'controlled_tab_init_failed');
         return;
       }
 
-      FileLogger.log('service_worker', 'info', 'Controlled tab initialized', { tabId: initResult.tabId });
+      FileLogger.log('service_worker', 'info', 'Controlled tab initialized', {
+        tabId: initResult.tabId
+      });
 
       // Main loop
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
-        if (state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
-          FileLogger.log('service_worker', 'info', 'Run limit reached');
+        // Проверка лимита: 0 = без лимита
+        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+          FileLogger.log('service_worker', 'info', 'Run limit reached', {
+            limit: state.settings.maxAutoAppliesPerRun,
+            processed: state.runtime.processed
+          });
           break;
         }
 
@@ -111,14 +126,17 @@ export class LiveAutoApplyEngineV2 {
 
       FileLogger.log('service_worker', 'info', 'Pipeline finished');
     } catch (error) {
-      FileLogger.log('service_worker', 'error', 'Engine error', { error: (error as Error).message });
+      FileLogger.log('service_worker', 'error', 'Engine error', {
+        error: (error as Error).message,
+        stack: (error as Error).stack
+      });
     } finally {
       await this.stopInternal();
     }
   }
 
   async stop(): Promise<void> {
-    FileLogger.log('service_worker', 'info', 'STOP requested');
+    FileLogger.log('service_worker', 'info', 'LiveEngineV2 stop requested');
     this.stopRequested = true;
     if (!this.running) {
       await this.stopInternal();
@@ -156,7 +174,10 @@ export class LiveAutoApplyEngineV2 {
   }
 
   private async runCycle(): Promise<'ok' | 'blocked' | 'no_vacancies'> {
-    FileLogger.log('service_worker', 'info', 'Cycle START');
+    const cycleStartTime = Date.now();
+    FileLogger.log('service_worker', 'info', 'Cycle start', {
+      timestamp: new Date().toISOString()
+    });
 
     // Get controlled tab
     const state = this.deps.store.getState();
@@ -168,10 +189,28 @@ export class LiveAutoApplyEngineV2 {
       return 'blocked';
     }
 
+    // Verify we're on search page
+    try {
+      const tab = await chrome.tabs.get(controlledTabId);
+      const currentUrl = tab.url || '';
+
+      if (!currentUrl.includes('/search/vacancy') && !currentUrl.includes('/applicant/vacancy_search')) {
+        FileLogger.log('service_worker', 'warn', 'Not on search page, returning', { currentUrl });
+        await this.returnToSearchPage(controlledTabId);
+        await this.deps.sleep(2000);
+      }
+    } catch (error) {
+      FileLogger.log('service_worker', 'error', 'Failed to check current URL', {
+        error: (error as Error).message
+      });
+    }
+
     // Check session
     await this.deps.store.setRuntimePhase('session_check');
     if (this.deps.store.getState().runtimeBlocker) {
-      FileLogger.log('service_worker', 'warn', 'Blocked by auth');
+      FileLogger.log('service_worker', 'warn', 'Blocked by auth', {
+        blocker: this.deps.store.getState().runtimeBlocker
+      });
       await this.deps.store.setRuntimePhase('paused_auth', this.deps.store.getState().runtimeBlocker || 'auth required');
       return 'blocked';
     }
@@ -180,6 +219,7 @@ export class LiveAutoApplyEngineV2 {
     await this.deps.store.setRuntimePhase('resume_check');
     const currentState = this.deps.store.getState();
     if (!currentState.selectedResumeHash) {
+      FileLogger.log('service_worker', 'warn', 'No resume selected');
       await this.deps.store.setRuntimePhase('paused_manual_action', 'resume_not_found');
       return 'blocked';
     }
@@ -187,6 +227,7 @@ export class LiveAutoApplyEngineV2 {
     // Acquire vacancies if needed
     const activeProfileId = currentState.activeProfileId;
     if (!activeProfileId) {
+      FileLogger.log('service_worker', 'warn', 'No active profile');
       await this.deps.store.setRuntimePhase('paused_manual_action', 'no_active_profile');
       return 'no_vacancies';
     }
@@ -200,25 +241,202 @@ export class LiveAutoApplyEngineV2 {
     }
 
     // Check if we have discovered vacancies
-    const hasDiscovered = this.deps.store.getState().vacancyQueue.some(v => v.status === 'discovered');
+    const currentQueue = this.deps.store.getState().vacancyQueue;
+    const hasDiscovered = currentQueue.some(v => v.status === 'discovered');
+    const discoveredCount = currentQueue.filter(v => v.status === 'discovered').length;
 
     if (!hasDiscovered) {
-      FileLogger.log('service_worker', 'info', 'Queue empty, acquiring');
+      FileLogger.log('service_worker', 'info', 'Queue empty, acquiring', {
+        queueSize: currentQueue.length,
+        discoveredCount
+      });
       await this.deps.store.setRuntimePhase('search');
 
+      // Проверяем флаг: нужно ли перейти на broad search
+      // Обычный acquisition с текущей страницы
       const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
 
-      if (!acquisitionResult.success || acquisitionResult.newQueued === 0) {
-        FileLogger.log('service_worker', 'info', 'No new vacancies');
-        await this.deps.store.setRuntimePhase('paused_no_vacancies', 'no_new_vacancies');
-        return 'no_vacancies';
+      // Save search URL from acquisition
+      if (acquisitionResult.success && acquisitionResult.currentUrl) {
+        const currentState = this.deps.store.getState();
+        await this.deps.store.updateState({
+          liveMode: {
+            ...currentState.liveMode,
+            lastAppliedSearchUrl: acquisitionResult.currentUrl
+          }
+        });
+        FileLogger.log('service_worker', 'info', 'Search URL saved', { url: acquisitionResult.currentUrl });
+      }
+
+      // СРАЗУ проверяем DOM - есть ли доступные вакансии на странице
+      if (acquisitionResult.success && acquisitionResult.newQueued > 0) {
+        try {
+          // Получаем skip list для проверки
+          const skipListArray = this.deps.store.getState().skipList || [];
+          const skipListMap: Record<string, boolean> = {};
+          for (const entry of skipListArray) {
+            skipListMap[entry.vacancyId] = true;
+          }
+
+          const availCheck = await sendMessageWithTimeout(controlledTabId, {
+            type: 'CHECK_AVAILABLE_VACANCIES',
+            skipList: skipListMap
+          }, 10000);
+
+          FileLogger.log('service_worker', 'info', 'Page availability check', {
+            hasAvailable: availCheck?.hasAvailable,
+            totalCards: availCheck?.totalCards,
+            availableCount: availCheck?.availableCount,
+            alreadyAppliedCount: availCheck?.alreadyAppliedCount,
+            manualActionCount: availCheck?.manualActionCount
+          });
+
+          // Если НЕТ доступных вакансий - сразу следующая страница
+          if (!availCheck?.hasAvailable) {
+            FileLogger.log('service_worker', 'info', 'No available vacancies, trying next page');
+
+            // Очищаем очередь
+            await this.deps.store.updateState({ vacancyQueue: [] });
+
+            // Проверяем следующую страницу
+            const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
+              type: 'CHECK_HAS_NEXT_PAGE'
+            }, 3000);
+
+            if (hasNextResult?.hasNext) {
+              FileLogger.log('service_worker', 'info', 'Next page navigate');
+
+              await sendMessageWithTimeout(controlledTabId, {
+                type: 'CLICK_NEXT_PAGE'
+              }, 3000);
+
+              await this.deps.sleep(2000);
+
+              // Acquisition с новой страницы
+              const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+
+              if (nextPageAcquisition.success && nextPageAcquisition.newQueued > 0) {
+                FileLogger.log('service_worker', 'info', 'Next page acquisition complete', {
+                  count: nextPageAcquisition.newQueued
+                });
+
+                // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии (не просто вакансии в очереди)
+                const skipListArray = this.deps.store.getState().skipList || [];
+                const skipListMap: Record<string, boolean> = {};
+                for (const entry of skipListArray) {
+                  skipListMap[entry.vacancyId] = true;
+                }
+
+                const availCheck = await sendMessageWithTimeout(controlledTabId, {
+                  type: 'CHECK_AVAILABLE_VACANCIES',
+                  skipList: skipListMap
+                }, 10000);
+
+                FileLogger.log('service_worker', 'info', 'Next page availability', {
+                  hasAvailable: availCheck?.hasAvailable,
+                  availableCount: availCheck?.availableCount,
+                  alreadyAppliedCount: availCheck?.alreadyAppliedCount,
+                  manualActionCount: availCheck?.manualActionCount
+                });
+
+                if (availCheck?.hasAvailable) {
+                  // Есть доступные вакансии - продолжаем
+                  return 'ok';
+                } else {
+                  // Вакансии есть, но все недоступные - это последняя страница
+                  FileLogger.log('service_worker', 'warn', 'Next page unavailable only');
+                  return 'ok';
+                }
+              } else {
+                // Нет вакансий на следующей странице - это последняя страница
+                FileLogger.log('service_worker', 'warn', 'Next page empty');
+                return 'ok';
+              }
+            } else {
+              FileLogger.log('service_worker', 'info', 'No next page available');
+              return 'ok';
+            }
+          }
+        } catch (error) {
+          FileLogger.log('service_worker', 'error', 'Failed to check page availability', {
+            error: (error as Error).message
+          });
+        }
+      }
+
+      // Check if we got new vacancies
+      const newDiscoveredCount = this.deps.store.getState().vacancyQueue.filter(v => v.status === 'discovered').length;
+
+      if (newDiscoveredCount === 0) {
+        FileLogger.log('service_worker', 'info', 'No new vacancies, checking pagination', {
+          acquisitionSuccess: acquisitionResult.success,
+          newQueued: acquisitionResult.newQueued
+        });
+
+        // Check if there's a next page
+        try {
+          const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
+            type: 'CHECK_HAS_NEXT_PAGE'
+          }, 3000);
+
+          if (hasNextResult?.hasNext) {
+            FileLogger.log('service_worker', 'info', 'Navigating to next page');
+
+            // Click next page
+            await sendMessageWithTimeout(controlledTabId, {
+              type: 'CLICK_NEXT_PAGE'
+            }, 3000);
+
+            await this.deps.sleep(2000);
+
+            // Try acquisition again
+            const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+
+            if (nextPageAcquisition.success && nextPageAcquisition.newQueued > 0) {
+              FileLogger.log('service_worker', 'info', 'Next page acquired', {
+                count: nextPageAcquisition.newQueued
+              });
+
+              // Save new search URL
+              if (nextPageAcquisition.currentUrl) {
+                const currentState = this.deps.store.getState();
+                await this.deps.store.updateState({
+                  liveMode: {
+                    ...currentState.liveMode,
+                    lastAppliedSearchUrl: nextPageAcquisition.currentUrl
+                  }
+                });
+              }
+
+              // Continue to process vacancies
+            } else {
+              FileLogger.log('service_worker', 'info', 'No vacancies on next page, stopping', {
+                reason: 'pagination_exhausted'
+              });
+              await this.deps.store.setRuntimePhase('paused_no_vacancies', 'no_new_vacancies_pagination_exhausted');
+              return 'no_vacancies';
+            }
+          } else {
+            FileLogger.log('service_worker', 'info', 'No next page, stopping', {
+              reason: 'no_pagination'
+            });
+            await this.deps.store.setRuntimePhase('paused_no_vacancies', 'no_new_vacancies_no_pagination');
+            return 'no_vacancies';
+          }
+        } catch (error) {
+          FileLogger.log('service_worker', 'error', 'Pagination check failed', {
+            error: (error as Error).message
+          });
+          await this.deps.store.setRuntimePhase('paused_no_vacancies', 'no_new_vacancies');
+          return 'no_vacancies';
+        }
       }
     }
 
     // Get next vacancy
     const nextVacancy = this.deps.store.getState().vacancyQueue.find(item => item.status === 'discovered');
     if (!nextVacancy) {
-      FileLogger.log('service_worker', 'warn', 'Queue empty');
+      FileLogger.log('service_worker', 'warn', 'Queue empty after acquisition');
       await this.deps.store.setRuntimePhase('paused_no_vacancies', 'queue_empty');
       return 'no_vacancies';
     }
@@ -227,25 +445,134 @@ export class LiveAutoApplyEngineV2 {
     await this.deps.store.setRuntimePhase('apply');
     const result = await this.processSingleVacancy(nextVacancy, controlledTabId);
 
+    // Log cycle completion with metrics
+    const cycleElapsed = Date.now() - cycleStartTime;
+    FileLogger.log('service_worker', 'info', 'Cycle COMPLETE', {
+      vacancyId: nextVacancy.vacancyId,
+      outcome: result.outcome,
+      elapsed: cycleElapsed,
+      state: result.context.state,
+      hadPreflight: !!result.context.preflight,
+      preflightType: result.context.preflight?.type,
+      modalDetected: result.context.metadata.modalDetected,
+      redirectDetected: result.context.metadata.redirectDetected,
+      clickAttempts: result.context.metadata.clickAttempts,
+      errors: result.context.errors,
+    });
+
     // Update counters
     if (result.outcome === 'success') {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, success: 1 });
     } else if (result.outcome === 'manual_action') {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, manualActions: 1 });
+    } else if (result.outcome === 'skipped') {
+      // Don't increment processed counter for skipped vacancies (already applied, etc)
+      FileLogger.log('service_worker', 'info', 'Vacancy skipped, not counting as processed', {
+        vacancyId: nextVacancy.vacancyId,
+        reason: result.reason
+      });
+
+      // При первом же скипе проверяем весь DOM - есть ли доступные вакансии
+      const state = this.deps.store.getState();
+      const activeProfileId = state.activeProfileId;
+      const controlledTabId = state.liveMode.controlledTabId;
+
+      if (controlledTabId && activeProfileId) {
+        try {
+          const skipListArray = state.skipList || [];
+          const skipListMap: Record<string, boolean> = {};
+          for (const entry of skipListArray) {
+            skipListMap[entry.vacancyId] = true;
+          }
+
+          const availCheck = await sendMessageWithTimeout(controlledTabId, {
+            type: 'CHECK_AVAILABLE_VACANCIES',
+            skipList: skipListMap
+          }, 10000);
+
+          FileLogger.log('service_worker', 'info', 'Page availability after skip', {
+            hasAvailable: availCheck?.hasAvailable,
+            totalCards: availCheck?.totalCards,
+            availableCount: availCheck?.availableCount,
+            alreadyAppliedCount: availCheck?.alreadyAppliedCount,
+            manualActionCount: availCheck?.manualActionCount
+          });
+
+          // Если НЕТ доступных вакансий - очистить очередь и перейти на следующую страницу
+          if (!availCheck?.hasAvailable) {
+            FileLogger.log('service_worker', 'info', 'No available vacancies after skip, trying next page');
+
+            // Очистить очередь
+            await this.deps.store.updateState({ vacancyQueue: [] });
+
+            // Проверить следующую страницу
+            const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
+              type: 'CHECK_HAS_NEXT_PAGE'
+            }, 3000);
+
+            if (hasNextResult?.hasNext) {
+              FileLogger.log('service_worker', 'info', 'Navigating to next page after skip');
+
+              await sendMessageWithTimeout(controlledTabId, {
+                type: 'CLICK_NEXT_PAGE'
+              }, 3000);
+
+              await this.deps.sleep(2000);
+
+              // Acquisition с новой страницы
+              const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+
+              if (nextPageAcquisition.success && nextPageAcquisition.newQueued > 0) {
+                FileLogger.log('service_worker', 'info', 'Next page acquired after skip', {
+                  count: nextPageAcquisition.newQueued
+                });
+
+                // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии
+                const skipListArray2 = this.deps.store.getState().skipList || [];
+                const skipListMap2: Record<string, boolean> = {};
+                for (const entry of skipListArray2) {
+                  skipListMap2[entry.vacancyId] = true;
+                }
+
+                const availCheck2 = await sendMessageWithTimeout(controlledTabId, {
+                  type: 'CHECK_AVAILABLE_VACANCIES',
+                  skipList: skipListMap2
+                }, 10000);
+
+                FileLogger.log('service_worker', 'info', 'Next page availability', {
+                  hasAvailable: availCheck2?.hasAvailable,
+                  availableCount: availCheck2?.availableCount
+                });
+
+                if (!availCheck2?.hasAvailable) {
+                  // Вакансии есть, но все недоступные - это последняя страница
+                  FileLogger.log('service_worker', 'warn', 'Next page unavailable only');
+                }
+              } else {
+                // Нет вакансий на следующей странице - это последняя страница
+                FileLogger.log('service_worker', 'warn', 'Next page empty');
+              }
+            } else {
+              FileLogger.log('service_worker', 'info', 'No next page available');
+            }
+          }
+        } catch (error) {
+          FileLogger.log('service_worker', 'error', 'Failed to check page availability after skip', {
+            error: (error as Error).message
+          });
+        }
+      }
     } else {
+      // Failed
       await this.deps.store.incrementRuntimeCounters({ processed: 1 });
     }
 
     // Mark as processed
-    FileLogger.log('service_worker', 'info', 'Marking vacancy as processed', {
-      vacancyId: nextVacancy.vacancyId,
-      outcome: result.outcome
-    });
-
     await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId || '');
 
-    FileLogger.log('service_worker', 'info', 'Vacancy marked as processed', {
-      vacancyId: nextVacancy.vacancyId
+    FileLogger.log('service_worker', 'info', 'Vacancy marked processed', {
+      vacancyId: nextVacancy.vacancyId,
+      outcome: result.outcome,
     });
 
     return 'ok';
@@ -269,18 +596,100 @@ export class LiveAutoApplyEngineV2 {
       },
     };
 
-    FileLogger.log('service_worker', 'info', 'Processing vacancy', {
+    FileLogger.log('service_worker', 'info', 'Vacancy processing start', {
       vacancyId: vacancy.vacancyId,
       title: vacancy.title?.substring(0, 50),
     });
 
     try {
-      // Step 1: Validate
+      // Step 0: Preflight check (КРИТИЧНО!)
+      context.state = 'pending';
+      const state = this.deps.store.getState();
+      const resumeHash = state.selectedResumeHash;
+
+      if (!resumeHash) {
+        FileLogger.log('service_worker', 'error', 'No resume hash for preflight');
+        return { success: false, outcome: 'failed', reason: 'no_resume', context };
+      }
+
+      const preflight = await this.preflightService.check(vacancy.vacancyId || '', resumeHash);
+      context.preflight = preflight;
+
+      FileLogger.log('service_worker', 'info', 'Preflight complete', {
+        vacancyId: vacancy.vacancyId,
+        canProceed: preflight.canProceed,
+        type: preflight.type,
+        requiresCoverLetter: preflight.requiresCoverLetter,
+        requiresRelocationConfirm: preflight.requiresRelocationConfirm,
+        requiresTest: preflight.requiresTest,
+        alreadyApplied: preflight.alreadyApplied,
+        error: preflight.error,
+      });
+
+      // Блокеры
+      if (preflight.type === 'error') {
+        context.state = 'failed';
+        FileLogger.log('service_worker', 'error', 'Preflight failed', {
+          vacancyId: vacancy.vacancyId,
+          error: preflight.error
+        });
+        return { success: false, outcome: 'failed', reason: `preflight_error: ${preflight.error}`, context };
+      }
+
+      if (preflight.alreadyApplied) {
+        context.state = 'skipped';
+        return { success: false, outcome: 'skipped', reason: 'already_applied', context };
+      }
+
+      if (preflight.requiresTest) {
+        context.state = 'manual_action';
+
+        // Scroll to vacancy even if skipping (для визуальной обратной связи)
+        try {
+          await sendMessageWithTimeout(tabId, {
+            type: 'SCROLL_TO_VACANCY',
+            vacancyId: vacancy.vacancyId,
+          }, 3000);
+          await this.deps.sleep(500); // Дать время на скролл
+        } catch (error) {
+          // Ignore scroll errors
+        }
+
+        // Create manual action
+        await this.deps.store.createManualAction({
+          type: 'questionnaire',
+          vacancyId: vacancy.vacancyId,
+          vacancyTitle: vacancy.title,
+          company: vacancy.company,
+          url: `https://hh.ru/vacancy/${vacancy.vacancyId}`,
+          profileId: vacancy.profileId,
+          reasonCode: 'questionnaire_required',
+          status: 'pending',
+        });
+
+        // Add to skip list
+        await this.deps.store.addToSkipList(vacancy.vacancyId || '', 24 * 60 * 60 * 1000, 'test');
+
+        FileLogger.log('service_worker', 'warn', 'Test required', { vacancyId: vacancy.vacancyId });
+        return { success: true, outcome: 'manual_action', reason: 'test_required', context };
+      }
+
+      if (!preflight.canProceed) {
+        context.state = 'skipped';
+        FileLogger.log('service_worker', 'warn', 'Preflight blocked', {
+          vacancyId: vacancy.vacancyId,
+          reason: preflight.error
+        });
+        return { success: false, outcome: 'skipped', reason: preflight.error || 'preflight_blocked', context };
+      }
+
+      // Step 1: Validate on page
       context.state = 'validating';
+
       const validationResult = await this.validateVacancy(context, tabId);
       if (!validationResult.valid) {
         context.state = 'skipped';
-        FileLogger.log('service_worker', 'info', 'Vacancy skipped', {
+        FileLogger.log('service_worker', 'info', 'Vacancy validation failed', {
           vacancyId: vacancy.vacancyId,
           reason: validationResult.reason,
         });
@@ -289,18 +698,91 @@ export class LiveAutoApplyEngineV2 {
 
       // Step 2: Click with retry
       context.state = 'clicking';
+
       const clickResult = await this.clickWithRetry(context, tabId);
       if (!clickResult.success) {
         context.state = 'skipped';
-        FileLogger.log('service_worker', 'warn', 'Click failed after retries', { vacancyId: vacancy.vacancyId });
+        FileLogger.log('service_worker', 'warn', 'Respond click failed', {
+          vacancyId: vacancy.vacancyId
+        });
         return { success: false, outcome: 'skipped', reason: 'click_failed', context };
       }
 
-      // Step 3: Detect response
+      await this.deps.sleep(500);
+
+      // Step 3: Handle modal sequence (если preflight показал модалки)
+      if (preflight.requiresRelocationConfirm || preflight.requiresCoverLetter) {
+        context.state = 'handling_modal';
+
+        FileLogger.log('service_worker', 'info', 'Modal sequence start', {
+          vacancyId: vacancy.vacancyId,
+          requiresRelocationConfirm: preflight.requiresRelocationConfirm,
+          requiresCoverLetter: preflight.requiresCoverLetter,
+        });
+
+        const modalSequenceResult = await this.handleModalSequence(context, tabId, preflight);
+
+        if (modalSequenceResult.success) {
+          context.state = 'success';
+          FileLogger.log('service_worker', 'info', 'Modal sequence success', {
+            vacancyId: vacancy.vacancyId
+          });
+          return { success: true, outcome: 'success', context };
+        }
+
+        FileLogger.log('service_worker', 'warn', 'Modal sequence failed', {
+          vacancyId: vacancy.vacancyId
+        });
+        return { success: false, outcome: 'failed', reason: 'modal_sequence_failed', context };
+      }
+
+      // Step 3b: Quick response - проверяем успех по изменению кнопки
+      if (preflight.type === 'quickResponse') {
+        FileLogger.log('service_worker', 'info', 'Quick response check', {
+          vacancyId: vacancy.vacancyId
+        });
+
+        // Wait for button state change
+        await this.deps.sleep(1000);
+
+        try {
+          const buttonCheck = await sendMessageWithTimeout(tabId, {
+            type: 'VALIDATE_VACANCY',
+            vacancyId: vacancy.vacancyId,
+          }, 3000);
+
+          if (buttonCheck.alreadyApplied) {
+            // Кнопка изменилась на "Отклик отправлен" - успех!
+            context.state = 'success';
+            FileLogger.log('service_worker', 'info', 'Quick response success', {
+              vacancyId: vacancy.vacancyId
+            });
+            return { success: true, outcome: 'success', context };
+          }
+
+          FileLogger.log('service_worker', 'warn', 'Quick response not confirmed', {
+            vacancyId: vacancy.vacancyId,
+            buttonState: buttonCheck
+          });
+        } catch (error) {
+          FileLogger.log('service_worker', 'error', 'Quick response check failed', {
+            error: (error as Error).message
+          });
+        }
+
+        // Fallback: считаем успехом если не было ошибок
+        context.state = 'success';
+        FileLogger.log('service_worker', 'info', 'Quick response assumed success', {
+          vacancyId: vacancy.vacancyId
+        });
+        return { success: true, outcome: 'success', context };
+      }
+
+      // Step 4: Detect response (fallback если preflight не показал модалки)
       context.state = 'waiting_response';
       const responseType = await this.detectResponse(context, tabId);
 
-      // Step 4: Handle response
+      // Step 5: Handle response
       if (responseType === 'modal') {
         context.state = 'handling_modal';
         const modalResult = await this.handleModal(context, tabId);
@@ -309,7 +791,6 @@ export class LiveAutoApplyEngineV2 {
           FileLogger.log('service_worker', 'info', 'Vacancy processed: success (modal)', { vacancyId: vacancy.vacancyId });
           return { success: true, outcome: 'success', context };
         }
-        // Fallback to redirect check if modal handling failed
         FileLogger.log('service_worker', 'warn', 'Modal handling failed, checking redirect', { vacancyId: vacancy.vacancyId });
       }
 
@@ -339,7 +820,18 @@ export class LiveAutoApplyEngineV2 {
       FileLogger.log('service_worker', 'error', 'Vacancy processing failed', {
         vacancyId: vacancy.vacancyId,
         error: (error as Error).message,
+        stack: (error as Error).stack,
       });
+
+      // Try to return to search page
+      try {
+        await this.returnToSearchPage(tabId);
+      } catch (e) {
+        FileLogger.log('service_worker', 'error', 'Failed to return to search after error', {
+          error: (e as Error).message
+        });
+      }
+
       return { success: false, outcome: 'failed', reason: (error as Error).message, context };
     }
   }
@@ -351,10 +843,10 @@ export class LiveAutoApplyEngineV2 {
     FileLogger.log('service_worker', 'info', 'Validating vacancy', { vacancyId: context.vacancy.vacancyId });
 
     try {
-      const result = await chrome.tabs.sendMessage(tabId, {
+      const result = await sendMessageWithTimeout(tabId, {
         type: 'VALIDATE_VACANCY',
         vacancyId: context.vacancy.vacancyId,
-      });
+      }, 3000);
 
       if (!result.exists) {
         return { valid: false, reason: 'not_on_page' };
@@ -389,10 +881,10 @@ export class LiveAutoApplyEngineV2 {
       });
 
       try {
-        const result = await chrome.tabs.sendMessage(tabId, {
+        const result = await sendMessageWithTimeout(tabId, {
           type: 'CLICK_RESPOND_BUTTON',
           vacancyId: context.vacancy.vacancyId,
-        });
+        }, 5000);
 
         if (result.success) {
           FileLogger.log('service_worker', 'info', 'Click successful', { vacancyId: context.vacancy.vacancyId });
@@ -429,28 +921,35 @@ export class LiveAutoApplyEngineV2 {
   private async detectResponse(context: VacancyContext, tabId: number): Promise<'modal' | 'redirect' | 'unknown'> {
     FileLogger.log('service_worker', 'info', 'Detecting response type', { vacancyId: context.vacancy.vacancyId });
 
-    // Check for modal with retry (3 attempts over 1.5 seconds)
-    for (let i = 0; i < 3; i++) {
-      await this.deps.sleep(500);
+    // Check for modal with retry - СРАЗУ без задержки, потом с задержками
+    const delays = [0, 200, 500, 1000, 1500]; // Первая проверка мгновенно!
+
+    for (let i = 0; i < delays.length; i++) {
+      if (delays[i] > 0) {
+        await this.deps.sleep(delays[i]);
+      }
 
       try {
-        const modalCheck = await chrome.tabs.sendMessage(tabId, {
+        const modalCheck = await sendMessageWithTimeout(tabId, {
           type: 'CHECK_MODAL_EXISTS',
+        }, 3000);
+
+        FileLogger.log('service_worker', 'info', `Modal check attempt ${i + 1} (delay: ${delays[i]}ms)`, {
+          vacancyId: context.vacancy.vacancyId,
+          exists: modalCheck?.exists,
+          modalCount: modalCheck?.count,
+          text: modalCheck?.text?.substring(0, 100)
         });
 
         if (modalCheck?.exists) {
-          FileLogger.log('service_worker', 'info', 'Modal detected', {
+          FileLogger.log('service_worker', 'debug', 'Modal detected', {
             vacancyId: context.vacancy.vacancyId,
-            attempt: i + 1
+            attempt: i + 1,
+            delay: delays[i]
           });
           context.metadata.modalDetected = true;
           return 'modal';
         }
-
-        FileLogger.log('service_worker', 'debug', 'No modal yet', {
-          vacancyId: context.vacancy.vacancyId,
-          attempt: i + 1
-        });
       } catch (error) {
         // Content script not responding, might have redirected
         FileLogger.log('service_worker', 'debug', 'Modal check failed', {
@@ -461,8 +960,8 @@ export class LiveAutoApplyEngineV2 {
       }
     }
 
-    // No modal after 1.5s, check for redirect
-    FileLogger.log('service_worker', 'info', 'No modal detected, checking redirect');
+    // No modal after all checks, check for redirect
+    FileLogger.log('service_worker', 'debug', 'No modal detected, checking redirect');
 
     await this.deps.sleep(500);
 
@@ -501,10 +1000,10 @@ export class LiveAutoApplyEngineV2 {
       const profile = Object.values(state.profiles).find(p => p.id === context.vacancy.profileId);
       const coverLetter = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
 
-      const result = await chrome.tabs.sendMessage(tabId, {
+      const result = await sendMessageWithTimeout(tabId, {
         type: 'HANDLE_MODAL',
         coverLetter,
-      });
+      }, 3000);
 
       if (result.handled) {
         FileLogger.log('service_worker', 'info', 'Modal handled', { vacancyId: context.vacancy.vacancyId });
@@ -524,6 +1023,123 @@ export class LiveAutoApplyEngineV2 {
   }
 
   /**
+   * Step 4a-extended: Handle modal sequence (relocation → cover letter)
+   */
+  private async handleModalSequence(
+    context: VacancyContext,
+    tabId: number,
+    preflight: PreflightResult
+  ): Promise<{ success: boolean }> {
+    FileLogger.log('service_worker', 'info', 'Handling modal sequence', {
+      vacancyId: context.vacancy.vacancyId,
+      requiresRelocationConfirm: preflight.requiresRelocationConfirm,
+      requiresCoverLetter: preflight.requiresCoverLetter,
+    });
+
+    try {
+      // Get cover letter from profile
+      const state = this.deps.store.getState();
+      const profile = Object.values(state.profiles).find(p => p.id === context.vacancy.profileId);
+      const coverLetter = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
+
+      // Modal 1: Relocation warning (если есть)
+      if (preflight.requiresRelocationConfirm) {
+        FileLogger.log('service_worker', 'info', 'Waiting for relocation modal', { vacancyId: context.vacancy.vacancyId });
+
+        // Проверяем модалку сразу после клика (она появляется мгновенно на той же странице)
+        let modalFound = false;
+        const delays = [100, 300, 500, 1000, 1500]; // Быстрые проверки
+
+        for (let i = 0; i < delays.length; i++) {
+          await this.deps.sleep(delays[i]);
+
+          const modalCheck = await sendMessageWithTimeout(tabId, { type: 'CHECK_MODAL_EXISTS' }, 3000);
+
+          FileLogger.log('service_worker', 'info', `Modal check ${i + 1}/${delays.length} (delay: ${delays[i]}ms)`, {
+            exists: modalCheck?.exists,
+            count: modalCheck?.count,
+            allModals: modalCheck?.allModals
+          });
+
+          if (modalCheck?.exists) {
+            modalFound = true;
+            break;
+          }
+        }
+
+        if (!modalFound) {
+          FileLogger.log('service_worker', 'warn', 'Relocation modal not found', {
+            vacancyId: context.vacancy.vacancyId
+          });
+          return { success: false };
+        }
+
+        FileLogger.log('service_worker', 'info', 'Relocation modal found', {
+          vacancyId: context.vacancy.vacancyId
+        });
+
+        // Handle relocation modal (без cover letter)
+        const relocationResult = await sendMessageWithTimeout(tabId, {
+          type: 'HANDLE_ANY_MODAL',
+        }, 3000);
+
+        if (!relocationResult.handled) {
+          FileLogger.log('service_worker', 'error', 'Failed to handle relocation modal', { vacancyId: context.vacancy.vacancyId });
+          return { success: false };
+        }
+
+        FileLogger.log('service_worker', 'info', 'Relocation modal handled', { vacancyId: context.vacancy.vacancyId });
+        await this.deps.sleep(500);
+      }
+
+      // Modal 2: Cover letter (если есть)
+      if (preflight.requiresCoverLetter) {
+        FileLogger.log('service_worker', 'info', 'Waiting for cover letter modal', { vacancyId: context.vacancy.vacancyId });
+
+        // Retry modal detection (3 attempts)
+        let modalFound = false;
+        for (let i = 0; i < 3; i++) {
+          const modalCheck = await sendMessageWithTimeout(tabId, { type: 'CHECK_MODAL_EXISTS' }, 3000);
+          if (modalCheck?.exists) {
+            modalFound = true;
+            break;
+          }
+          await this.deps.sleep(500);
+        }
+
+        if (!modalFound) {
+          FileLogger.log('service_worker', 'warn', 'Cover letter modal not found', { vacancyId: context.vacancy.vacancyId });
+          return { success: false };
+        }
+
+        // Handle cover letter modal
+        const coverLetterResult = await sendMessageWithTimeout(tabId, {
+          type: 'HANDLE_ANY_MODAL',
+          coverLetter,
+        }, 3000);
+
+        if (!coverLetterResult.handled) {
+          FileLogger.log('service_worker', 'error', 'Failed to handle cover letter modal', { vacancyId: context.vacancy.vacancyId });
+          return { success: false };
+        }
+
+        FileLogger.log('service_worker', 'info', 'Cover letter modal handled', { vacancyId: context.vacancy.vacancyId });
+        await this.deps.sleep(500);
+      }
+
+      FileLogger.log('service_worker', 'info', 'Modal sequence completed', { vacancyId: context.vacancy.vacancyId });
+      return { success: true };
+
+    } catch (error) {
+      FileLogger.log('service_worker', 'error', 'Modal sequence error', {
+        vacancyId: context.vacancy.vacancyId,
+        error: (error as Error).message,
+      });
+      return { success: false };
+    }
+  }
+
+  /**
    * Step 4b: Handle redirect
    */
   private async handleRedirect(context: VacancyContext, tabId: number): Promise<{ outcome: 'test' | 'success' | 'failed' }> {
@@ -534,7 +1150,7 @@ export class LiveAutoApplyEngineV2 {
 
     try {
       // Check if it's a test
-      const testCheck = await chrome.tabs.sendMessage(tabId, { type: 'CHECK_TEST_REQUIRED' });
+      const testCheck = await sendMessageWithTimeout(tabId, { type: 'CHECK_TEST_REQUIRED' }, 3000);
 
       if (testCheck?.testRequired) {
         FileLogger.log('service_worker', 'info', 'Test detected', { vacancyId: context.vacancy.vacancyId });
@@ -554,9 +1170,8 @@ export class LiveAutoApplyEngineV2 {
         // Add to skip list
         await this.deps.store.addToSkipList(context.vacancy.vacancyId || '', 24 * 60 * 60 * 1000, 'test');
 
-        // Go back
-        await chrome.tabs.sendMessage(tabId, { type: 'GO_BACK' });
-        await this.deps.sleep(2000);
+        // Go back to search page
+        await this.returnToSearchPage(tabId);
 
         return { outcome: 'test' };
       }
@@ -564,7 +1179,7 @@ export class LiveAutoApplyEngineV2 {
       // Not a test, check for cover letter
       FileLogger.log('service_worker', 'info', 'Normal response page, checking cover letter', { vacancyId: context.vacancy.vacancyId });
 
-      const coverLetterCheck = await chrome.tabs.sendMessage(tabId, { type: 'DETECT_COVER_LETTER_UI' });
+      const coverLetterCheck = await sendMessageWithTimeout(tabId, { type: 'DETECT_COVER_LETTER_UI' }, 3000);
 
       if (coverLetterCheck?.visible || coverLetterCheck?.textareaFound) {
         FileLogger.log('service_worker', 'info', 'Cover letter UI found, filling', { vacancyId: context.vacancy.vacancyId });
@@ -574,21 +1189,20 @@ export class LiveAutoApplyEngineV2 {
         const profile = Object.values(state.profiles).find(p => p.id === context.vacancy.profileId);
         const coverLetter = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
 
-        await chrome.tabs.sendMessage(tabId, {
+        await sendMessageWithTimeout(tabId, {
           type: 'FILL_COVER_LETTER',
           text: coverLetter,
-        });
+        }, 3000);
 
         await this.deps.sleep(300);
 
-        await chrome.tabs.sendMessage(tabId, { type: 'CLICK_SUBMIT' });
+        await sendMessageWithTimeout(tabId, { type: 'CLICK_SUBMIT' }, 3000);
 
         await this.deps.sleep(1000);
       }
 
-      // Go back
-      await chrome.tabs.sendMessage(tabId, { type: 'GO_BACK' });
-      await this.deps.sleep(2000);
+      // Go back to search page
+      await this.returnToSearchPage(tabId);
 
       FileLogger.log('service_worker', 'info', 'Redirect handled successfully', { vacancyId: context.vacancy.vacancyId });
       return { outcome: 'success' };
@@ -601,8 +1215,7 @@ export class LiveAutoApplyEngineV2 {
 
       // Try to go back anyway
       try {
-        await chrome.tabs.sendMessage(tabId, { type: 'GO_BACK' });
-        await this.deps.sleep(2000);
+        await this.returnToSearchPage(tabId);
       } catch (e) {
         // ignore
       }
@@ -622,16 +1235,33 @@ export class LiveAutoApplyEngineV2 {
           const isSearchPage = url.includes('/search/vacancy') || url.includes('/applicant/vacancy_search');
 
           if (!isSearchPage) {
-            const activeProfileId = state.activeProfileId;
-            const profile = activeProfileId ? state.profiles[activeProfileId] : null;
-            const searchUrl = profile ? `https://hh.ru/search/vacancy?text=${encodeURIComponent(profile.keywordsInclude.join(' '))}` : 'https://hh.ru/search/vacancy';
+            const resumeHash = state.selectedResumeHash;
+            const searchUrl = buildGlobalSearchUrl(resumeHash);
+
+            FileLogger.log('service_worker', 'info', 'Fallback navigation to global search', {
+              searchUrl,
+              strategy: 'global_search',
+              resumeHash: resumeHash || 'none'
+            });
 
             await chrome.tabs.update(tab.id!, { url: searchUrl, active: true });
             await this.waitForPageLoad(tab.id!);
 
+            await this.deps.store.updateState({
+              liveMode: {
+                ...this.deps.store.getState().liveMode,
+                lastAppliedSearchUrl: searchUrl
+              }
+            });
             return { success: true, tabId: tab.id };
           }
 
+          await this.deps.store.updateState({
+            liveMode: {
+              ...this.deps.store.getState().liveMode,
+              lastAppliedSearchUrl: url
+            }
+          });
           return { success: true, tabId: tab.id };
         }
       } catch (error) {
@@ -650,7 +1280,14 @@ export class LiveAutoApplyEngineV2 {
       return { success: false, error: 'profile_not_found' };
     }
 
-    const searchUrl = `https://hh.ru/search/vacancy?text=${encodeURIComponent(profile.keywordsInclude.join(' '))}`;
+    const resumeHash = state.selectedResumeHash;
+    const searchUrl = buildGlobalSearchUrl(resumeHash);
+
+    FileLogger.log('service_worker', 'info', 'Initialize controlled tab with global search', {
+      searchUrl,
+      strategy: 'global_search',
+      resumeHash: resumeHash || 'none'
+    });
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -660,12 +1297,24 @@ export class LiveAutoApplyEngineV2 {
 
       if (tabs[0].url?.includes('hh.ru')) {
         await this.deps.store.bindControlledTab(tabId, windowId!, tabs[0].url);
+        await this.deps.store.updateState({
+          liveMode: {
+            ...this.deps.store.getState().liveMode,
+            lastAppliedSearchUrl: tabs[0].url
+          }
+        });
         return { success: true, tabId };
       }
 
       await chrome.tabs.update(tabId, { url: searchUrl, active: true });
       await this.waitForPageLoad(tabId);
       await this.deps.store.bindControlledTab(tabId, windowId!, searchUrl);
+      await this.deps.store.updateState({
+        liveMode: {
+          ...this.deps.store.getState().liveMode,
+          lastAppliedSearchUrl: searchUrl
+        }
+      });
       return { success: true, tabId };
     }
 
@@ -676,6 +1325,12 @@ export class LiveAutoApplyEngineV2 {
 
     await this.waitForPageLoad(newTab.id);
     await this.deps.store.bindControlledTab(newTab.id, newTab.windowId, searchUrl);
+    await this.deps.store.updateState({
+      liveMode: {
+        ...this.deps.store.getState().liveMode,
+        lastAppliedSearchUrl: searchUrl
+      }
+    });
     return { success: true, tabId: newTab.id };
   }
 
@@ -695,6 +1350,36 @@ export class LiveAutoApplyEngineV2 {
 
       chrome.tabs.onUpdated.addListener(listener);
     });
+  }
+
+  /**
+   * Return to search page by direct navigation (not history.back)
+   * This is more reliable than GO_BACK which can navigate to wrong page
+   */
+  private async returnToSearchPage(tabId: number): Promise<void> {
+    const searchUrl = this.deps.store.getState().liveMode.lastAppliedSearchUrl;
+
+    if (!searchUrl) {
+      FileLogger.log('service_worker', 'error', 'No search URL stored, cannot return');
+      return;
+    }
+
+    FileLogger.log('service_worker', 'info', 'Returning to search page', { url: searchUrl });
+
+    try {
+      await chrome.tabs.update(tabId, { url: searchUrl });
+      await this.waitForPageLoad(tabId);
+
+      // Дополнительная задержка для React рендера
+      FileLogger.log('service_worker', 'info', 'Waiting for React render after page load');
+      await this.deps.sleep(2000);
+
+      FileLogger.log('service_worker', 'info', 'Returned to search page successfully');
+    } catch (error) {
+      FileLogger.log('service_worker', 'error', 'Failed to return to search page', {
+        error: (error as Error).message
+      });
+    }
   }
 
   private randomInRange(min: number, max: number): number {

@@ -7,29 +7,20 @@
 
 import { StateStore } from '../state/store';
 import { BackendHTTPClient } from './backendHTTPClient';
+import { FileLogger } from '../utils/fileLogger';
 
 export interface BackendEngineDeps {
   store: StateStore;
   httpClient: BackendHTTPClient;
   sleep: (ms: number) => Promise<void>;
   log: (...args: any[]) => void;
-  debug?: boolean;
 }
 
 export class BackendAutoApplyEngine {
   private running = false;
   private stopRequested = false;
-  private debug: boolean;
 
-  constructor(private deps: BackendEngineDeps) {
-    this.debug = deps.debug ?? true;
-  }
-
-  private debugLog(...args: any[]): void {
-    if (this.debug) {
-      this.deps.log(...args);
-    }
-  }
+  constructor(private deps: BackendEngineDeps) {}
 
   private notify(level: 'info' | 'success' | 'warn' | 'error', message: string, sticky = false): void {
     const nm = this.deps.store.getNotificationManager();
@@ -49,7 +40,7 @@ export class BackendAutoApplyEngine {
     this.running = true;
     this.stopRequested = false;
 
-    this.deps.log('[BackendEngine] START');
+    FileLogger.log('service_worker', 'info', 'BackendEngine start');
 
     try {
       await this.deps.store.dispatch('START_REQUESTED');
@@ -59,15 +50,19 @@ export class BackendAutoApplyEngine {
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
 
-        if (state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
-          this.deps.log('[BackendEngine] Run limit reached');
+        // Проверка лимита: 0 = без лимита
+        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+          FileLogger.log('service_worker', 'info', 'Run limit reached', {
+            limit: state.settings.maxAutoAppliesPerRun,
+            processed: state.runtime.processed
+          });
           break;
         }
 
         const cycleResult = await this.runCycle();
 
         if (cycleResult !== 'ok') {
-          this.deps.log('[BackendEngine] Cycle stopped', { reason: cycleResult });
+          FileLogger.log('service_worker', 'info', 'Cycle stopped', { reason: cycleResult });
           break;
         }
 
@@ -77,13 +72,16 @@ export class BackendAutoApplyEngine {
         );
 
         await this.deps.store.setRuntimePhase('waiting');
-        this.deps.log('[BackendEngine] Waiting', { delaySeconds });
+        FileLogger.log('service_worker', 'info', 'Waiting between cycles', { delaySeconds });
         await this.deps.sleep(delaySeconds * 1000);
       }
 
-      this.deps.log('[BackendEngine] Pipeline finished');
+      FileLogger.log('service_worker', 'info', 'Pipeline finished');
     } catch (error) {
-      this.deps.log('[BackendEngine] Error:', error);
+      FileLogger.log('service_worker', 'error', 'Engine error', {
+        error: (error as Error).message,
+        stack: (error as Error).stack
+      });
       await this.deps.store.dispatch('FAILURE');
     } finally {
       await this.stopInternal();
@@ -91,7 +89,7 @@ export class BackendAutoApplyEngine {
   }
 
   async stop(): Promise<void> {
-    this.deps.log('[BackendEngine] STOP requested');
+    FileLogger.log('service_worker', 'info', 'BackendEngine stop requested');
     this.stopRequested = true;
 
     if (!this.running) {
@@ -102,7 +100,7 @@ export class BackendAutoApplyEngine {
   private async stopInternal(): Promise<void> {
     const currentState = this.deps.store.getState().runtimeState;
 
-    this.deps.log('[BackendEngine] stopInternal begin', { currentState });
+    FileLogger.log('service_worker', 'info', 'BackendEngine stopInternal', { currentState });
 
     if (currentState === 'STOPPED' || currentState === 'IDLE') {
       this.running = false;
@@ -126,7 +124,9 @@ export class BackendAutoApplyEngine {
         await this.deps.store.dispatch('STOP_REQUESTED');
         await this.deps.store.dispatch('STOP_CONFIRMED');
       } catch (error) {
-        this.deps.log('[BackendEngine] dispatch failed, forcing STOPPED', error);
+        FileLogger.log('service_worker', 'error', 'Dispatch failed, forcing STOPPED', {
+          error: (error as Error).message
+        });
         await this.deps.store.updateState({ runtimeState: 'STOPPED' });
       }
     } else {
@@ -136,12 +136,13 @@ export class BackendAutoApplyEngine {
     this.running = false;
     this.stopRequested = false;
 
-    this.deps.log('[BackendEngine] stopInternal done');
+    FileLogger.log('service_worker', 'info', 'BackendEngine stopped');
   }
 
   private async runCycle(): Promise<'ok' | 'blocked' | 'manual' | 'no_vacancies'> {
+    FileLogger.log('service_worker', 'info', 'Cycle start');
+
     // 1. Check session
-    this.debugLog('[BackendEngine] runCycle: checkSession');
     await this.deps.store.setRuntimePhase('session_check');
     this.notify('info', 'Проверка авторизации...');
 
@@ -156,7 +157,6 @@ export class BackendAutoApplyEngine {
     this.notify('success', 'Авторизация успешна');
 
     // 2. Check resume
-    this.debugLog('[BackendEngine] runCycle: ensureResume');
     await this.deps.store.setRuntimePhase('resume_check');
     this.notify('info', 'Проверка резюме...');
 
@@ -173,7 +173,6 @@ export class BackendAutoApplyEngine {
     const queueCount = state.vacancyQueue.filter((v) => v.status === 'discovered').length;
 
     if (queueCount === 0) {
-      this.debugLog('[BackendEngine] runCycle: acquireVacancies');
       await this.deps.store.setRuntimePhase('search');
       this.notify('info', 'Загрузка вакансий...');
 
@@ -199,7 +198,6 @@ export class BackendAutoApplyEngine {
     }
 
     // 5. Apply
-    this.debugLog('[BackendEngine] runCycle: executeApply', { vacancyId: nextVacancy.vacancyId });
     await this.deps.store.setRuntimePhase('apply');
     this.notify('info', `Отклик: ${nextVacancy.title || nextVacancy.vacancyId}`);
 
@@ -225,7 +223,9 @@ export class BackendAutoApplyEngine {
       manualActions: applyResult.requiresManualAction ? 1 : 0,
     });
 
-    this.debugLog('[BackendEngine] Counters incremented', {
+    FileLogger.log('service_worker', 'info', 'Cycle complete', {
+      vacancyId: nextVacancy.vacancyId,
+      outcome: applyResult.outcome,
       processed: this.deps.store.getState().runtime.processed,
       success: this.deps.store.getState().runtime.success,
       manualActions: this.deps.store.getState().runtime.manualActions,
@@ -243,33 +243,38 @@ export class BackendAutoApplyEngine {
   }
 
   private async checkSession(): Promise<boolean> {
-    this.debugLog('[BackendEngine] checkSession');
-
     try {
       const authResult = await this.deps.httpClient.checkAuth();
 
       if (!authResult.authorized) {
         await this.deps.store.setRuntimeBlocker('login_required', 'Not authorized');
+        FileLogger.log('service_worker', 'warn', 'Session check failed: not authorized');
         return false;
       }
 
       await this.deps.store.clearRuntimeBlocker();
+      FileLogger.log('service_worker', 'info', 'Session check passed');
       return true;
     } catch (error) {
-      this.debugLog('[BackendEngine] checkSession error:', error);
       await this.deps.store.setRuntimeBlocker('session_unknown', 'Session check failed');
+      FileLogger.log('service_worker', 'error', 'Session check error', {
+        error: (error as Error).message
+      });
       return false;
     }
   }
 
   private async ensureResume(): Promise<boolean> {
-    this.debugLog('[BackendEngine] ensureResume');
-
     const state = this.deps.store.getState();
 
     if (state.selectedResumeHash) {
       const exists = state.resumeCandidates.some((r) => r.hash === state.selectedResumeHash);
-      if (exists) return true;
+      if (exists) {
+        FileLogger.log('service_worker', 'info', 'Resume already selected', {
+          hash: state.selectedResumeHash
+        });
+        return true;
+      }
     }
 
     // Fetch resumes via API
@@ -277,6 +282,7 @@ export class BackendAutoApplyEngine {
       const resumes = await this.deps.httpClient.getMyResumes();
 
       if (resumes.length === 0) {
+        FileLogger.log('service_worker', 'warn', 'No resumes found');
         return false;
       }
 
@@ -290,45 +296,46 @@ export class BackendAutoApplyEngine {
 
       await this.deps.store.selectResume(resumes[0].hash);
 
+      FileLogger.log('service_worker', 'info', 'Resume selected', {
+        hash: resumes[0].hash,
+        title: resumes[0].title
+      });
+
       return true;
     } catch (error) {
-      this.debugLog('[BackendEngine] ensureResume error:', error);
+      FileLogger.log('service_worker', 'error', 'Resume fetch error', {
+        error: (error as Error).message
+      });
       return false;
     }
   }
 
   private async acquireVacancies(): Promise<boolean> {
-    this.debugLog('[BackendEngine] acquireVacancies START');
-
     const state = this.deps.store.getState();
     const profileId = state.activeProfileId;
 
     if (!profileId) {
-      this.debugLog('[BackendEngine] acquireVacancies: no active profile');
+      FileLogger.log('service_worker', 'warn', 'No active profile');
       return false;
     }
 
     const profile = state.profiles[profileId];
 
-    this.debugLog('[BackendEngine] acquireVacancies profile', {
+    FileLogger.log('service_worker', 'info', 'Acquiring vacancies', {
       profileId,
-      name: profile.name,
-      keywordsInclude: profile.keywordsInclude,
-      keywordsExclude: profile.keywordsExclude,
-      experience: profile.experience,
-      schedule: profile.schedule,
-      employment: profile.employment,
+      profileName: profile.name,
+      keywords: profile.keywordsInclude.join(', '),
     });
 
     try {
       const apiVacancies = await this.deps.httpClient.fetchVacancies(profile);
 
-      this.debugLog('[BackendEngine] acquireVacancies API result', {
+      FileLogger.log('service_worker', 'info', 'API vacancies fetched', {
         count: apiVacancies.length,
       });
 
       if (apiVacancies.length === 0) {
-        this.debugLog('[BackendEngine] acquireVacancies: NO VACANCIES FOUND', {
+        FileLogger.log('service_worker', 'warn', 'No vacancies found', {
           profileName: profile.name,
           keywords: profile.keywordsInclude,
         });
@@ -347,23 +354,24 @@ export class BackendAutoApplyEngine {
         status: 'discovered' as const,
       }));
 
-      this.debugLog('[BackendEngine] acquireVacancies: materialized cards', {
-        beforeCount: state.vacancyQueue.length,
-        newCount: cards.length,
-      });
-
+      const beforeCount = state.vacancyQueue.length;
       await this.deps.store.materializeVacanciesFromSearch(cards, profileId);
 
       const afterState = this.deps.store.getState();
-      this.debugLog('[BackendEngine] acquireVacancies: after materialize', {
-        afterCount: afterState.vacancyQueue.length,
-        discoveredCount: afterState.vacancyQueue.filter((v) => v.status === 'discovered').length,
+      const afterCount = afterState.vacancyQueue.length;
+      const discoveredCount = afterState.vacancyQueue.filter((v) => v.status === 'discovered').length;
+
+      FileLogger.log('service_worker', 'info', 'Vacancies materialized', {
+        beforeCount,
+        afterCount,
+        newCount: afterCount - beforeCount,
+        discoveredCount,
       });
 
       return true;
     } catch (error) {
-      this.debugLog('[BackendEngine] acquireVacancies EXCEPTION', {
-        message: (error as Error).message,
+      FileLogger.log('service_worker', 'error', 'Acquisition failed', {
+        error: (error as Error).message,
         stack: (error as Error).stack,
       });
       return false;
@@ -374,26 +382,31 @@ export class BackendAutoApplyEngine {
     outcome: string;
     requiresManualAction: boolean;
   }> {
-    this.debugLog('[BackendEngine] executeApply', { vacancyId });
-
     const state = this.deps.store.getState();
     const profile = state.activeProfileId ? state.profiles[state.activeProfileId] : null;
 
     if (!state.selectedResumeHash) {
+      FileLogger.log('service_worker', 'error', 'No resume selected');
       return { outcome: 'error', requiresManualAction: false };
     }
 
     try {
       // 1. Preflight check
-      this.debugLog('[BackendEngine] executeApply: preflight');
       const preflight = await this.deps.httpClient.preflightApply(
         vacancyId,
         state.selectedResumeHash
       );
 
-      if (!preflight.canProceed) {
-        this.debugLog('[BackendEngine] Preflight failed', { reason: preflight.reason });
+      FileLogger.log('service_worker', 'info', 'Preflight result', {
+        vacancyId,
+        canProceed: preflight.canProceed,
+        reason: preflight.reason,
+        alreadyApplied: preflight.alreadyApplied,
+        requiresTest: preflight.requiresTest,
+        requiresQuestionnaire: preflight.requiresQuestionnaire,
+      });
 
+      if (!preflight.canProceed) {
         if (preflight.alreadyApplied) {
           await this.deps.store.recordLocalApplyAttempt({
             vacancyId,
@@ -409,10 +422,9 @@ export class BackendAutoApplyEngine {
         if (preflight.requiresTest || preflight.requiresQuestionnaire) {
           const nextVacancy = state.vacancyQueue.find((v) => v.vacancyId === vacancyId);
 
-          this.debugLog('[BackendEngine] Creating manual action', {
+          FileLogger.log('service_worker', 'warn', 'Manual action required', {
             type: preflight.requiresTest ? 'test' : 'questionnaire',
             vacancyId,
-            vacancyTitle: nextVacancy?.title,
           });
 
           await this.deps.store.createManualAction({
@@ -432,11 +444,14 @@ export class BackendAutoApplyEngine {
           };
         }
 
+        FileLogger.log('service_worker', 'warn', 'Preflight blocked', {
+          vacancyId,
+          reason: preflight.reason
+        });
         return { outcome: 'error', requiresManualAction: false };
       }
 
       // 2. Apply
-      this.debugLog('[BackendEngine] executeApply: apply');
       const applyResult = await this.deps.httpClient.applyToVacancy(
         vacancyId,
         {
@@ -447,7 +462,8 @@ export class BackendAutoApplyEngine {
         profile?.coverLetterTemplate
       );
 
-      this.debugLog('[BackendEngine] Apply result', {
+      FileLogger.log('service_worker', 'info', 'Apply result', {
+        vacancyId,
         success: applyResult.success,
         outcome: applyResult.outcome,
       });
@@ -467,7 +483,10 @@ export class BackendAutoApplyEngine {
           applyResult.outcome === 'test_required' || applyResult.outcome === 'questionnaire_required',
       };
     } catch (error) {
-      this.debugLog('[BackendEngine] executeApply error:', error);
+      FileLogger.log('service_worker', 'error', 'Apply error', {
+        vacancyId,
+        error: (error as Error).message,
+      });
 
       return {
         outcome: 'error',

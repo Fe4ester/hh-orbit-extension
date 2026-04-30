@@ -106,12 +106,7 @@ export function getProfilesList(state: AppState): Profile[] {
 export function hasProfileFilters(profile: Profile): boolean {
   return (
     profile.keywordsInclude.length > 0 ||
-    profile.keywordsExclude.length > 0 ||
-    profile.experience.length > 0 ||
-    profile.schedule.length > 0 ||
-    profile.employment.length > 0 ||
-    (profile.regions && profile.regions.length > 0) ||
-    profile.salary !== undefined
+    profile.keywordsExclude.length > 0
   );
 }
 
@@ -119,11 +114,6 @@ export interface ProfileSummary {
   name: string;
   hasFilters: boolean;
   keywordsCount: number;
-  experienceCount: number;
-  scheduleCount: number;
-  employmentCount: number;
-  regionsCount: number;
-  hasSalary: boolean;
   hasCoverLetter: boolean;
 }
 
@@ -132,11 +122,6 @@ export function formatProfileSummary(profile: Profile): ProfileSummary {
     name: profile.name,
     hasFilters: hasProfileFilters(profile),
     keywordsCount: profile.keywordsInclude.length,
-    experienceCount: profile.experience.length,
-    scheduleCount: profile.schedule.length,
-    employmentCount: profile.employment.length,
-    regionsCount: profile.regions?.length || 0,
-    hasSalary: profile.salary !== undefined && profile.salary.amount !== undefined,
     hasCoverLetter: !!profile.coverLetterTemplate,
   };
 }
