@@ -16,6 +16,14 @@ export interface BackendEngineDeps {
   log: (...args: any[]) => void;
 }
 
+export type AcquisitionOutcome =
+  | { success: true; discoveredCount: number }
+  | { success: false; reason: 'api_returned_zero' }
+  | { success: false; reason: 'prefilter_eliminated_all'; fetchedCount: number }
+  | { success: false; reason: 'no_discovered_after_materialize'; queueLength: number }
+  | { success: false; reason: 'exhausted'; consecutiveEmptyPages: number }
+  | { success: false; reason: 'error'; error: string };
+
 export class BackendAutoApplyEngine {
   private running = false;
   private stopRequested = false;
@@ -64,9 +72,14 @@ export class BackendAutoApplyEngine {
 
         const cycleResult = await this.runCycle();
 
-        if (cycleResult !== 'ok') {
-          FileLogger.log('service_worker', 'info', 'Cycle stopped', { reason: cycleResult });
+        if (cycleResult === 'blocked' || cycleResult === 'manual') {
+          FileLogger.log('service_worker', 'info', 'Cycle stopped due to blocker', { reason: cycleResult });
           break;
+        }
+
+        if (cycleResult === 'retry') {
+          FileLogger.log('service_worker', 'info', 'Cycle returned retry, continuing to next iteration');
+          // Continue to delay and next cycle
         }
 
         const delaySeconds = this.randomInRange(
@@ -142,7 +155,7 @@ export class BackendAutoApplyEngine {
     FileLogger.log('service_worker', 'info', 'BackendEngine stopped');
   }
 
-  private async runCycle(): Promise<'ok' | 'blocked' | 'manual' | 'no_vacancies'> {
+  private async runCycle(): Promise<'ok' | 'blocked' | 'manual' | 'no_vacancies' | 'retry'> {
     FileLogger.log('service_worker', 'info', 'Cycle start');
 
     // 1. Check session
@@ -179,25 +192,74 @@ export class BackendAutoApplyEngine {
       await this.deps.store.setRuntimePhase('search');
       this.notify('info', 'Загрузка вакансий...');
 
-      const acquired = await this.acquireVacancies();
+      const outcome = await this.acquireVacancies();
 
-      if (!acquired) {
-        this.notify('warn', 'Вакансии не найдены', true);
-        await this.deps.store.setRuntimePhase('paused_no_vacancies', 'no_vacancies');
-        return 'no_vacancies';
+      if (!outcome.success) {
+        if (outcome.reason === 'exhausted') {
+          // Terminal stop - search space exhausted
+          FileLogger.log('service_worker', 'warn', 'Search exhausted - no more suitable vacancies available', {
+            reason: outcome.reason,
+            consecutiveEmptyPages: outcome.consecutiveEmptyPages,
+          });
+          this.notify('warn', 'Подходящие вакансии закончились. Попробуйте изменить параметры поиска.', true);
+          await this.deps.store.setRuntimePhase('exhausted', 'search_space_exhausted');
+          return 'blocked';
+        }
+
+        // All other acquisition failures are non-terminal - retry later
+        await this.deps.store.setRuntimePhase('waiting');
+
+        if (outcome.reason === 'api_returned_zero') {
+          FileLogger.log('service_worker', 'info', 'API returned 0 vacancies on current page, trying next page', {
+            reason: outcome.reason,
+          });
+          this.notify('info', 'Страница пуста, проверяем следующую...');
+          return 'retry';
+        }
+
+        if (outcome.reason === 'prefilter_eliminated_all') {
+          FileLogger.log('service_worker', 'info', 'All fetched vacancies filtered by profile keywords, continuing search', {
+            reason: outcome.reason,
+            fetchedCount: outcome.fetchedCount,
+          });
+          this.notify('info', `Вакансии (${outcome.fetchedCount}) отфильтрованы, продолжаем поиск...`);
+          return 'retry';
+        }
+
+        if (outcome.reason === 'no_discovered_after_materialize') {
+          FileLogger.log('service_worker', 'info', 'No discovered vacancies after materialization, continuing search', {
+            reason: outcome.reason,
+            queueLength: outcome.queueLength,
+          });
+          this.notify('info', 'Нет новых вакансий, продолжаем поиск...');
+          return 'retry';
+        }
+
+        if (outcome.reason === 'error') {
+          FileLogger.log('service_worker', 'error', 'Acquisition error, will retry in next cycle', {
+            reason: outcome.reason,
+            error: outcome.error,
+          });
+          this.notify('info', 'Ошибка загрузки, повтор через задержку');
+          return 'retry';
+        }
       }
 
-      const newState = this.deps.store.getState();
-      const newCount = newState.vacancyQueue.filter((v) => v.status === 'discovered').length;
-      this.notify('success', `Загружено вакансий: ${newCount}`);
+      // Success - vacancies acquired
+      this.notify('success', `Загружено вакансий: ${outcome.discoveredCount}`);
     }
 
     // 4. Select next vacancy
     const nextVacancy = this.deps.store.getState().vacancyQueue.find((v) => v.status === 'discovered');
 
     if (!nextVacancy || !nextVacancy.vacancyId) {
-      await this.deps.store.setRuntimePhase('paused_no_vacancies', 'queue_empty');
-      return 'no_vacancies';
+      FileLogger.log('service_worker', 'info', 'No discovered vacancy in queue, will retry in next cycle', {
+        queueLength: this.deps.store.getState().vacancyQueue.length,
+        reason: 'queue_empty_after_acquisition'
+      });
+      this.notify('info', 'Очередь пуста, повтор через задержку');
+      await this.deps.store.setRuntimePhase('waiting');
+      return 'retry';
     }
 
     // 5. Apply
@@ -334,38 +396,68 @@ export class BackendAutoApplyEngine {
     }
   }
 
-  private async acquireVacancies(): Promise<boolean> {
+  private async acquireVacancies(): Promise<AcquisitionOutcome> {
     const state = this.deps.store.getState();
     const profileId = state.activeProfileId;
 
     if (!profileId) {
       FileLogger.log('service_worker', 'warn', 'No active profile');
-      return false;
+      return { success: false, reason: 'error', error: 'No active profile' };
     }
 
     const profile = state.profiles[profileId];
+    const currentPage = state.runtime.currentSearchPage;
+    const consecutiveEmptyPages = state.runtime.consecutiveEmptyPages;
+
+    // Exhaustion threshold: 3 consecutive pages with 0 API results
+    const EXHAUSTION_THRESHOLD = 3;
 
     FileLogger.log('service_worker', 'info', 'Acquiring vacancies', {
       profileId,
       profileName: profile.name,
       keywords: profile.keywordsInclude.join(', '),
+      currentPage,
+      consecutiveEmptyPages,
     });
 
     try {
-      const apiVacancies = await this.deps.httpClient.fetchVacancies(profile);
+      const apiVacancies = await this.deps.httpClient.fetchVacancies(profile, currentPage);
 
       FileLogger.log('service_worker', 'info', 'API vacancies fetched', {
         count: apiVacancies.length,
+        page: currentPage,
       });
 
       if (apiVacancies.length === 0) {
-        FileLogger.log('service_worker', 'warn', 'No vacancies found', {
+        // API returned 0 vacancies - increment empty page counter
+        await this.deps.store.recordEmptyPage();
+        const newConsecutiveEmpty = consecutiveEmptyPages + 1;
+
+        FileLogger.log('service_worker', 'info', 'API returned 0 vacancies', {
           profileName: profile.name,
           keywords: profile.keywordsInclude,
+          page: currentPage,
+          consecutiveEmptyPages: newConsecutiveEmpty,
         });
-        this.notify('warn', 'Вакансии не найдены. Проверьте параметры профиля.', true);
-        return false;
+
+        // Check exhaustion threshold
+        if (newConsecutiveEmpty >= EXHAUSTION_THRESHOLD) {
+          FileLogger.log('service_worker', 'warn', 'Search space exhausted - no more vacancies available', {
+            consecutiveEmptyPages: newConsecutiveEmpty,
+            threshold: EXHAUSTION_THRESHOLD,
+            totalPagesChecked: currentPage + 1,
+          });
+          return { success: false, reason: 'exhausted', consecutiveEmptyPages: newConsecutiveEmpty };
+        }
+
+        // Not exhausted yet - advance to next page and retry
+        await this.deps.store.advanceSearchPage();
+        return { success: false, reason: 'api_returned_zero' };
       }
+
+      // API returned vacancies - reset empty page counter and advance page
+      await this.deps.store.resetEmptyPageCounter();
+      await this.deps.store.advanceSearchPage();
 
       const cards = apiVacancies.map((v) => ({
         vacancyId: v.id,
@@ -384,21 +476,46 @@ export class BackendAutoApplyEngine {
       const afterState = this.deps.store.getState();
       const afterCount = afterState.vacancyQueue.length;
       const discoveredCount = afterState.vacancyQueue.filter((v) => v.status === 'discovered').length;
+      const newCount = afterCount - beforeCount;
 
       FileLogger.log('service_worker', 'info', 'Vacancies materialized', {
+        fetchedFromAPI: apiVacancies.length,
         beforeCount,
         afterCount,
-        newCount: afterCount - beforeCount,
+        newCount,
         discoveredCount,
+        page: currentPage,
       });
 
-      return true;
+      // Check if prefilter eliminated all vacancies
+      if (newCount === 0 && discoveredCount === 0) {
+        FileLogger.log('service_worker', 'info', 'All fetched vacancies filtered out by profile keywords', {
+          fetchedFromAPI: apiVacancies.length,
+          profileName: profile.name,
+          keywordsInclude: profile.keywordsInclude,
+          keywordsExclude: profile.keywordsExclude,
+          page: currentPage,
+        });
+        return { success: false, reason: 'prefilter_eliminated_all', fetchedCount: apiVacancies.length };
+      }
+
+      // Check if no discovered vacancies after materialization
+      if (discoveredCount === 0) {
+        FileLogger.log('service_worker', 'info', 'No discovered vacancies after materialization', {
+          queueLength: afterCount,
+          newCount,
+          page: currentPage,
+        });
+        return { success: false, reason: 'no_discovered_after_materialize', queueLength: afterCount };
+      }
+
+      return { success: true, discoveredCount };
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Acquisition failed', {
         error: (error as Error).message,
         stack: (error as Error).stack,
       });
-      return false;
+      return { success: false, reason: 'error', error: (error as Error).message };
     }
   }
 

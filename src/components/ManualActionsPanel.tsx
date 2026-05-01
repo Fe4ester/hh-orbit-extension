@@ -13,7 +13,6 @@ interface ManualActionsPanelProps {
   onOpen: (url: string) => void;
   onDone: (id: string) => void;
   onDismiss: (id: string) => void;
-  onClearCompleted: () => void;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -23,7 +22,6 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   onOpen,
   onDone,
   onDismiss,
-  onClearCompleted,
 }) => {
   const [currentPage, setCurrentPage] = useState(0);
 
@@ -55,9 +53,6 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
     <div>
       <div className="manual-actions-header">
         <strong>Pending: {actions.length}</strong>
-        <button className="btn btn-secondary btn-sm" onClick={onClearCompleted}>
-          Clear completed
-        </button>
       </div>
       {currentActions.map((action) => (
         <div key={action.id} className="manual-action-item">

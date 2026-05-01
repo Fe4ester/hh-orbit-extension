@@ -52,14 +52,6 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
       <label className="checkbox-row">
         <input
           type="checkbox"
-          checked={settings.autoSendCoverLetterWhenRequired}
-          onChange={(e) => onPatch({ autoSendCoverLetterWhenRequired: e.target.checked })}
-        />
-        Auto cover letter when required
-      </label>
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
           checked={settings.stopOnManualAction}
           onChange={(e) => onPatch({ stopOnManualAction: e.target.checked })}
         />

@@ -10,11 +10,13 @@ import {
 import { RuntimeSettingsPanel } from '../src/components/RuntimeSettingsPanel';
 import { ManualActionsPanel } from '../src/components/ManualActionsPanel';
 import { ProfileEditor } from '../src/components/ProfileEditor';
+import { LogsViewer } from './LogsViewer';
 import './styles.css';
 
 export const App: React.FC = () => {
   const [state, setState] = useState<AppState | null>(null);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [logsViewerOpen, setLogsViewerOpen] = useState(false);
 
   useEffect(() => {
     console.log('[Sidepanel] Component mounted, setting up listeners');
@@ -251,10 +253,17 @@ export const App: React.FC = () => {
             onOpen={(url) => url && chrome.tabs.create({ url, active: true })}
             onDone={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DONE', id })}
             onDismiss={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DISMISS', id })}
-            onClearCompleted={() => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_CLEAR_COMPLETED' })}
           />
         </section>
+
+        <div style={{ textAlign: 'center', paddingTop: 8 }}>
+          <a className="logs-link" onClick={() => setLogsViewerOpen(true)}>
+            Logs
+          </a>
+        </div>
       </main>
+
+      {logsViewerOpen && <LogsViewer onClose={() => setLogsViewerOpen(false)} />}
     </div>
   );
 };

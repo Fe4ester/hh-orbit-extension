@@ -272,7 +272,6 @@ export interface AppState {
     maxAutoAppliesPerRun: number;
     maxAutoAppliesPerDay: number;
     stopOnManualAction: boolean;
-    autoSendCoverLetterWhenRequired: boolean;
   };
   runtime: {
     currentPhase:
@@ -285,12 +284,15 @@ export interface AppState {
       | 'waiting'
       | 'paused_manual_action'
       | 'paused_auth'
-      | 'paused_no_vacancies';
+      | 'paused_no_vacancies'
+      | 'exhausted';
     processed: number;
     success: number;
     manualActions: number;
     pausedReason: string | null;
     lastEventAt: number | null;
+    currentSearchPage: number;
+    consecutiveEmptyPages: number;
   };
   analytics: AnalyticsState;
   vacancyScan: VacancyScanState;
@@ -322,7 +324,6 @@ export const INITIAL_STATE: AppState = (() => {
       maxAutoAppliesPerRun: 30,
       maxAutoAppliesPerDay: 100,
       stopOnManualAction: true,
-      autoSendCoverLetterWhenRequired: true,
     },
     runtime: {
       currentPhase: 'idle',
@@ -331,6 +332,8 @@ export const INITIAL_STATE: AppState = (() => {
       manualActions: 0,
       pausedReason: null,
       lastEventAt: null,
+      currentSearchPage: 0,
+      consecutiveEmptyPages: 0,
     },
     analytics: {
       attempts: [],

@@ -732,16 +732,6 @@ export class StateStore {
     await this.updateState({ manualActions });
   }
 
-  async clearCompletedManualActions(): Promise<void> {
-    if (!this.state) throw new Error('Store not initialized');
-
-    const manualActions = this.state.manualActions.filter(
-      (action) => action.status === 'pending'
-    );
-
-    await this.updateState({ manualActions });
-  }
-
   // Skip list
   async addToSkipList(vacancyId: string, ttlMs: number, reason: 'questionnaire' | 'test' | 'manual_action' = 'questionnaire'): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
@@ -854,6 +844,53 @@ export class StateStore {
         manualActions: 0,
         pausedReason: null,
         lastEventAt: Date.now(),
+        currentSearchPage: 0,
+        consecutiveEmptyPages: 0,
+      },
+    });
+  }
+
+  async advanceSearchPage(): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    await this.updateState({
+      runtime: {
+        ...this.state.runtime,
+        currentSearchPage: this.state.runtime.currentSearchPage + 1,
+      },
+    });
+  }
+
+  async resetSearchPagination(): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    await this.updateState({
+      runtime: {
+        ...this.state.runtime,
+        currentSearchPage: 0,
+        consecutiveEmptyPages: 0,
+      },
+    });
+  }
+
+  async recordEmptyPage(): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    await this.updateState({
+      runtime: {
+        ...this.state.runtime,
+        consecutiveEmptyPages: this.state.runtime.consecutiveEmptyPages + 1,
+      },
+    });
+  }
+
+  async resetEmptyPageCounter(): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    await this.updateState({
+      runtime: {
+        ...this.state.runtime,
+        consecutiveEmptyPages: 0,
       },
     });
   }

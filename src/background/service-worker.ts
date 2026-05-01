@@ -1305,13 +1305,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-      if (message.type === 'MANUAL_ACTION_CLEAR_COMPLETED') {
-        await store.clearCompletedManualActions();
-        broadcastState();
-        sendResponse({ success: true });
-        return;
-      }
-
       if (message.type === 'OPEN_SIDEPANEL_FOR_CURRENT_TAB') {
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         const tab = tabs[0];

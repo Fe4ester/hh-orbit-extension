@@ -201,6 +201,138 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     });
   });
 
+  describe('prefilter elimination behavior', () => {
+    it('should NOT terminate when all vacancies filtered by prefilter - should retry', async () => {
+      mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
+      mockHttpClient.getMyResumes.mockResolvedValue([
+        { hash: 'test', title: 'Test', isActive: true },
+      ]);
+
+      // API returns vacancies, but prefilter will eliminate all
+      mockHttpClient.fetchVacancies.mockResolvedValue([
+        {
+          id: '12345',
+          name: 'Junior Python Developer',
+          employer: { name: 'Test Company' },
+          alternate_url: 'https://hh.ru/vacancy/12345',
+        },
+      ]);
+
+      await store.updateState({
+        selectedResumeHash: 'test',
+        resumeCandidates: [
+          { hash: 'test', title: 'Test', isActive: true, source: 'hh_detected', lastSeenAt: Date.now() },
+        ],
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            keywordsInclude: ['senior'], // Will filter out "Junior Python Developer"
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [],
+        settings: { maxAutoAppliesPerRun: 0, delayMinSeconds: 1, delayMaxSeconds: 2 }, // 0 = unlimited
+      });
+
+      const startPromise = engine.start();
+
+      // Wait for first cycle to complete
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const stateAfterFirstCycle = store.getState();
+
+      // Behavior: engine should be in 'waiting' phase, NOT terminated
+      expect(stateAfterFirstCycle.runtime.currentPhase).toBe('waiting');
+      expect(engine.isRunning()).toBe(true);
+
+      // Behavior: fetchVacancies was called (acquisition attempted)
+      expect(mockHttpClient.fetchVacancies).toHaveBeenCalled();
+
+      // Behavior: queue is empty because prefilter eliminated all
+      expect(stateAfterFirstCycle.vacancyQueue.length).toBe(0);
+
+      await engine.stop();
+      await startPromise;
+
+      const finalState = store.getState();
+
+      // Behavior: engine stopped gracefully, not due to terminal error
+      expect(finalState.runtimeState).toBe('STOPPED');
+    });
+
+    it('should continue retry loop after prefilter elimination', async () => {
+      mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
+      mockHttpClient.getMyResumes.mockResolvedValue([
+        { hash: 'test', title: 'Test', isActive: true },
+      ]);
+
+      // First call: vacancies filtered out
+      // Second call: vacancies pass filter
+      let callCount = 0;
+      mockHttpClient.fetchVacancies.mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return [
+            {
+              id: '11111',
+              name: 'Junior Developer',
+              employer: { name: 'Company A' },
+              alternate_url: 'https://hh.ru/vacancy/11111',
+            },
+          ];
+        } else {
+          return [
+            {
+              id: '22222',
+              name: 'Senior Python Developer',
+              employer: { name: 'Company B' },
+              alternate_url: 'https://hh.ru/vacancy/22222',
+            },
+          ];
+        }
+      });
+
+      await store.updateState({
+        selectedResumeHash: 'test',
+        resumeCandidates: [
+          { hash: 'test', title: 'Test', isActive: true, source: 'hh_detected', lastSeenAt: Date.now() },
+        ],
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            keywordsInclude: ['senior', 'python'],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [],
+        settings: { maxAutoAppliesPerRun: 1, delayMinSeconds: 1, delayMaxSeconds: 2 },
+      });
+
+      const startPromise = engine.start();
+
+      // Wait for multiple cycles
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      await engine.stop();
+      await startPromise;
+
+      // Behavior: fetchVacancies was called multiple times (retry happened)
+      expect(mockHttpClient.fetchVacancies).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('no vacancies / queue empty outcomes', () => {
     it('should pause when no vacancies found', async () => {
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });

@@ -17,7 +17,6 @@ describe('Runtime settings', () => {
       maxAutoAppliesPerRun: 5,
       maxAutoAppliesPerDay: 55,
       stopOnManualAction: false,
-      autoSendCoverLetterWhenRequired: false,
     });
 
     const state = store.getState();
@@ -26,6 +25,5 @@ describe('Runtime settings', () => {
     expect(state.settings.maxAutoAppliesPerRun).toBe(5);
     expect(state.settings.maxAutoAppliesPerDay).toBe(55);
     expect(state.settings.stopOnManualAction).toBe(false);
-    expect(state.settings.autoSendCoverLetterWhenRequired).toBe(false);
   });
 });
