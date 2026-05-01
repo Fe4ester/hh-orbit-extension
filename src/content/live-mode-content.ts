@@ -10,7 +10,6 @@ import { clickRespondButton, observePostClickState } from '../live/respondButton
 import { detectCoverLetterUI } from '../live/coverLetterExecutor';
 import { observePostSubmitState } from '../live/finalSubmitExecutor';
 import { parseSearchResults } from '../live/searchResultsParser';
-import { fillAndSubmitAdvancedSearchForm } from '../live/advancedSearchFormFiller';
 import { FileLogger } from '../utils/fileLogger';
 
 console.log('[LiveContent] Content script loaded');
@@ -577,15 +576,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       case 'CHECK_AVAILABLE_VACANCIES': {
         // Быстрая проверка DOM на наличие доступных вакансий
-        const { skipList } = message; // Получаем skip list из service worker
+        const { skipList, processedVacancies, runtimeBatchVacancies } = message;
         FileLogger.log('content_script', 'info', 'Checking available vacancies on page', {
-          skipListSize: skipList ? Object.keys(skipList).length : 0
+          skipListSize: skipList ? Object.keys(skipList).length : 0,
+          processedSize: processedVacancies ? Object.keys(processedVacancies).length : 0,
+          runtimeBatchSize: runtimeBatchVacancies ? Object.keys(runtimeBatchVacancies).length : 0
         });
 
         const cards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
         let availableCount = 0;
         let alreadyAppliedCount = 0;
         let manualActionCount = 0;
+        let processedCount = 0;
+        let notInBatchCount = 0;
 
         for (const card of cards) {
           const button = card.querySelector('[data-qa="vacancy-serp__vacancy_response"]');
@@ -593,6 +596,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           const buttonText = button.textContent?.trim() || '';
           const isDisabled = button.hasAttribute('disabled');
+
+          // Extract vacancy ID
+          const vacancyLink = card.querySelector('a[href*="/vacancy/"]');
+          const href = vacancyLink?.getAttribute('href') || '';
+          const vacancyIdMatch = href.match(/\/vacancy\/(\d+)/);
+
+          if (!vacancyIdMatch) continue;
+          const vacancyId = vacancyIdMatch[1];
+
+          // КРИТИЧНО: Проверяем, что вакансия в runtime batch (прошла prefilter)
+          if (runtimeBatchVacancies && !runtimeBatchVacancies[vacancyId]) {
+            notInBatchCount++;
+            continue;
+          }
 
           // Уже откликнулись
           if (
@@ -606,17 +623,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             continue;
           }
 
-          // Проверка на manual action (в skip list из service worker)
-          const vacancyLink = card.querySelector('a[href*="/vacancy/"]');
-          const href = vacancyLink?.getAttribute('href') || '';
-          const vacancyIdMatch = href.match(/\/vacancy\/(\d+)/);
+          // Проверка на skip list
+          if (skipList && skipList[vacancyId]) {
+            manualActionCount++;
+            continue;
+          }
 
-          if (vacancyIdMatch && skipList) {
-            const vacancyId = vacancyIdMatch[1];
-            if (skipList[vacancyId]) {
-              manualActionCount++;
-              continue;
-            }
+          // Проверка на уже обработанные в текущем runtime pass
+          if (processedVacancies && processedVacancies[vacancyId]) {
+            processedCount++;
+            continue;
           }
 
           // Доступна для автоотклика
@@ -629,6 +645,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           availableCount,
           alreadyAppliedCount,
           manualActionCount,
+          processedCount,
+          notInBatchCount,
         };
 
         FileLogger.log('content_script', 'info', 'Available vacancies check result', result);
@@ -1185,25 +1203,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
 
-      case 'FILL_ADVANCED_SEARCH_FORM': {
-        FileLogger.log('content_script', 'info', 'FILL_ADVANCED_SEARCH_FORM received', {
-          profile: message.profile?.name
-        });
-
-        fillAndSubmitAdvancedSearchForm(message.profile, message.resumeHash)
-          .then(result => {
-            FileLogger.log('content_script', 'info', 'Advanced search form filled', result);
-            sendResponse(result);
-          })
-          .catch(error => {
-            FileLogger.log('content_script', 'error', 'Failed to fill advanced search form', {
-              error: error.message
-            });
-            sendResponse({ success: false, error: error.message });
-          });
-
-        return true; // Async response
-      }
+      // FILL_ADVANCED_SEARCH_FORM: removed - dead code, message never sent
 
       default:
         // Not for us - let it pass to background

@@ -146,7 +146,7 @@ export const App: React.FC = () => {
             ))}
           </select>
           <div style={{ marginTop: 10 }}>
-            <button className="btn btn-secondary" onClick={() => chrome.runtime.sendMessage({ type: 'LIVE_MODE_DETECT_RESUMES' })}>
+            <button className="btn btn-secondary" onClick={() => chrome.runtime.sendMessage({ type: 'REFRESH_RESUMES_API' })}>
               Обновить резюме из HH
             </button>
           </div>

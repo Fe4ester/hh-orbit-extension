@@ -36,7 +36,10 @@ export class BackendAutoApplyEngine {
   }
 
   async start(): Promise<void> {
-    if (this.running) return;
+    if (this.running) {
+      FileLogger.log('service_worker', 'warn', 'BackendEngine already running, ignoring duplicate start');
+      return;
+    }
     this.running = true;
     this.stopRequested = false;
 
@@ -267,24 +270,42 @@ export class BackendAutoApplyEngine {
   private async ensureResume(): Promise<boolean> {
     const state = this.deps.store.getState();
 
+    // Check if current selection is valid
     if (state.selectedResumeHash) {
       const exists = state.resumeCandidates.some((r) => r.hash === state.selectedResumeHash);
       if (exists) {
-        FileLogger.log('service_worker', 'info', 'Resume already selected', {
+        FileLogger.log('service_worker', 'info', 'Resume already valid', {
           hash: state.selectedResumeHash
         });
         return true;
       }
+      FileLogger.log('service_worker', 'warn', 'Selected resume not in candidates, refreshing', {
+        hash: state.selectedResumeHash
+      });
+    }
+
+    // Try to select from existing candidates first
+    if (!state.selectedResumeHash && state.resumeCandidates.length > 0) {
+      FileLogger.log('service_worker', 'info', 'Auto-selecting from existing candidates', {
+        count: state.resumeCandidates.length
+      });
+      await this.deps.store.selectResume(state.resumeCandidates[0].hash);
+      return true;
     }
 
     // Fetch resumes via API
+    FileLogger.log('service_worker', 'info', 'Resume auto-refresh started');
     try {
       const resumes = await this.deps.httpClient.getMyResumes();
 
       if (resumes.length === 0) {
-        FileLogger.log('service_worker', 'warn', 'No resumes found');
+        FileLogger.log('service_worker', 'warn', 'Resume recovery failed: no resumes found');
         return false;
       }
+
+      FileLogger.log('service_worker', 'info', 'Resumes re-detected', {
+        count: resumes.length
+      });
 
       await this.deps.store.setResumeCandidates(
         resumes.map((r) => ({
@@ -296,14 +317,14 @@ export class BackendAutoApplyEngine {
 
       await this.deps.store.selectResume(resumes[0].hash);
 
-      FileLogger.log('service_worker', 'info', 'Resume selected', {
+      FileLogger.log('service_worker', 'info', 'Resume auto-selected', {
         hash: resumes[0].hash,
         title: resumes[0].title
       });
 
       return true;
     } catch (error) {
-      FileLogger.log('service_worker', 'error', 'Resume fetch error', {
+      FileLogger.log('service_worker', 'error', 'Resume recovery failed: API error', {
         error: (error as Error).message
       });
       return false;

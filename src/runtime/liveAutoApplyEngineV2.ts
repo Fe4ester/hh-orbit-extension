@@ -71,7 +71,10 @@ export class LiveAutoApplyEngineV2 {
   }
 
   async start(): Promise<void> {
-    if (this.running) return;
+    if (this.running) {
+      FileLogger.log('service_worker', 'warn', 'LiveEngineV2 already running, ignoring duplicate start');
+      return;
+    }
     this.running = true;
     this.stopRequested = false;
 
@@ -89,12 +92,20 @@ export class LiveAutoApplyEngineV2 {
           error: initResult.error
         });
         await this.deps.store.setRuntimePhase('paused_manual_action', initResult.error || 'controlled_tab_init_failed');
+        // Early return will trigger finally block for cleanup
         return;
       }
 
       FileLogger.log('service_worker', 'info', 'Controlled tab initialized', {
         tabId: initResult.tabId
       });
+
+      // Clear stale controlled_tab_lost blocker after successful init/rebind
+      const currentBlocker = this.deps.store.getState().runtimeBlocker;
+      if (currentBlocker === 'controlled_tab_lost') {
+        FileLogger.log('service_worker', 'info', 'Clearing stale controlled_tab_lost blocker after successful init');
+        await this.deps.store.clearRuntimeBlocker();
+      }
 
       // Main loop
       while (!this.stopRequested) {
@@ -114,14 +125,19 @@ export class LiveAutoApplyEngineV2 {
           break;
         }
 
-        // Delay between vacancies
-        const delaySeconds = this.randomInRange(
-          state.settings.delayMinSeconds,
-          state.settings.delayMaxSeconds
-        );
-        FileLogger.log('service_worker', 'info', 'Waiting between vacancies', { delaySeconds });
-        await this.deps.store.setRuntimePhase('waiting');
-        await this.deps.sleep(delaySeconds * 1000);
+        // Delay only if cycle resulted in actual apply (not skip)
+        if (cycleResult === 'applied') {
+          const delaySeconds = this.randomInRange(
+            state.settings.delayMinSeconds,
+            state.settings.delayMaxSeconds
+          );
+          FileLogger.log('service_worker', 'info', 'Waiting after apply', { delaySeconds });
+          await this.deps.store.setRuntimePhase('waiting');
+          await this.deps.sleep(delaySeconds * 1000);
+        } else {
+          // Skipped - no delay, continue immediately
+          FileLogger.log('service_worker', 'info', 'Skipped, no delay');
+        }
       }
 
       FileLogger.log('service_worker', 'info', 'Pipeline finished');
@@ -173,7 +189,7 @@ export class LiveAutoApplyEngineV2 {
     await this.deps.store.setRuntimePhase('idle', null);
   }
 
-  private async runCycle(): Promise<'ok' | 'blocked' | 'no_vacancies'> {
+  private async runCycle(): Promise<'applied' | 'skipped' | 'blocked' | 'no_vacancies'> {
     const cycleStartTime = Date.now();
     FileLogger.log('service_worker', 'info', 'Cycle start', {
       timestamp: new Date().toISOString()
@@ -207,12 +223,25 @@ export class LiveAutoApplyEngineV2 {
 
     // Check session
     await this.deps.store.setRuntimePhase('session_check');
-    if (this.deps.store.getState().runtimeBlocker) {
-      FileLogger.log('service_worker', 'warn', 'Blocked by auth', {
-        blocker: this.deps.store.getState().runtimeBlocker
-      });
-      await this.deps.store.setRuntimePhase('paused_auth', this.deps.store.getState().runtimeBlocker || 'auth required');
-      return 'blocked';
+    const blocker = this.deps.store.getState().runtimeBlocker;
+
+    // Distinguish between auth blockers and operational blockers
+    if (blocker) {
+      if (blocker === 'controlled_tab_lost') {
+        // Operational blocker - tab was lost, not an auth issue
+        FileLogger.log('service_worker', 'warn', 'Controlled tab lost during cycle', {
+          blocker
+        });
+        await this.deps.store.setRuntimePhase('paused_manual_action', blocker);
+        return 'blocked';
+      } else {
+        // Auth blocker (login_required, captcha_required, session_unknown)
+        FileLogger.log('service_worker', 'warn', 'Blocked by auth', {
+          blocker
+        });
+        await this.deps.store.setRuntimePhase('paused_auth', blocker);
+        return 'blocked';
+      }
     }
 
     // Check resume
@@ -253,8 +282,8 @@ export class LiveAutoApplyEngineV2 {
       await this.deps.store.setRuntimePhase('search');
 
       // Проверяем флаг: нужно ли перейти на broad search
-      // Обычный acquisition с текущей страницы
-      const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+      // Обычный acquisition с текущей страницы (skipNavigation: true чтобы не сбросить page=N)
+      const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
       // Save search URL from acquisition
       if (acquisitionResult.success && acquisitionResult.currentUrl) {
@@ -271,16 +300,35 @@ export class LiveAutoApplyEngineV2 {
       // СРАЗУ проверяем DOM - есть ли доступные вакансии на странице
       if (acquisitionResult.success && acquisitionResult.newQueued > 0) {
         try {
-          // Получаем skip list для проверки
+          // Получаем skip list и processed vacancies для проверки
           const skipListArray = this.deps.store.getState().skipList || [];
           const skipListMap: Record<string, boolean> = {};
           for (const entry of skipListArray) {
             skipListMap[entry.vacancyId] = true;
           }
 
+          // Собираем processed vacancies из текущего queue
+          const processedVacanciesMap: Record<string, boolean> = {};
+          const currentQueue = this.deps.store.getState().vacancyQueue;
+          for (const item of currentQueue) {
+            if (item.status === 'processed' && item.vacancyId) {
+              processedVacanciesMap[item.vacancyId] = true;
+            }
+          }
+
+          // Собираем runtime batch vacancies (только discovered - прошли prefilter)
+          const runtimeBatchVacanciesMap: Record<string, boolean> = {};
+          for (const item of currentQueue) {
+            if (item.status === 'discovered' && item.vacancyId) {
+              runtimeBatchVacanciesMap[item.vacancyId] = true;
+            }
+          }
+
           const availCheck = await sendMessageWithTimeout(controlledTabId, {
             type: 'CHECK_AVAILABLE_VACANCIES',
-            skipList: skipListMap
+            skipList: skipListMap,
+            processedVacancies: processedVacanciesMap,
+            runtimeBatchVacancies: runtimeBatchVacanciesMap
           }, 10000);
 
           FileLogger.log('service_worker', 'info', 'Page availability check', {
@@ -313,12 +361,23 @@ export class LiveAutoApplyEngineV2 {
               await this.deps.sleep(2000);
 
               // Acquisition с новой страницы
-              const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+              const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
               if (nextPageAcquisition.success && nextPageAcquisition.newQueued > 0) {
                 FileLogger.log('service_worker', 'info', 'Next page acquisition complete', {
                   count: nextPageAcquisition.newQueued
                 });
+
+                // Save new search URL
+                if (nextPageAcquisition.currentUrl) {
+                  const currentState = this.deps.store.getState();
+                  await this.deps.store.updateState({
+                    liveMode: {
+                      ...currentState.liveMode,
+                      lastAppliedSearchUrl: nextPageAcquisition.currentUrl
+                    }
+                  });
+                }
 
                 // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии (не просто вакансии в очереди)
                 const skipListArray = this.deps.store.getState().skipList || [];
@@ -327,9 +386,28 @@ export class LiveAutoApplyEngineV2 {
                   skipListMap[entry.vacancyId] = true;
                 }
 
+                // Собираем processed vacancies из текущего queue
+                const processedVacanciesMap: Record<string, boolean> = {};
+                const currentQueue = this.deps.store.getState().vacancyQueue;
+                for (const item of currentQueue) {
+                  if (item.status === 'processed' && item.vacancyId) {
+                    processedVacanciesMap[item.vacancyId] = true;
+                  }
+                }
+
+                // Собираем runtime batch vacancies (только discovered - прошли prefilter)
+                const runtimeBatchVacanciesMap: Record<string, boolean> = {};
+                for (const item of currentQueue) {
+                  if (item.status === 'discovered' && item.vacancyId) {
+                    runtimeBatchVacanciesMap[item.vacancyId] = true;
+                  }
+                }
+
                 const availCheck = await sendMessageWithTimeout(controlledTabId, {
                   type: 'CHECK_AVAILABLE_VACANCIES',
-                  skipList: skipListMap
+                  skipList: skipListMap,
+                  processedVacancies: processedVacanciesMap,
+                  runtimeBatchVacancies: runtimeBatchVacanciesMap
                 }, 10000);
 
                 FileLogger.log('service_worker', 'info', 'Next page availability', {
@@ -341,20 +419,20 @@ export class LiveAutoApplyEngineV2 {
 
                 if (availCheck?.hasAvailable) {
                   // Есть доступные вакансии - продолжаем
-                  return 'ok';
+                  return 'skipped';
                 } else {
                   // Вакансии есть, но все недоступные - это последняя страница
                   FileLogger.log('service_worker', 'warn', 'Next page unavailable only');
-                  return 'ok';
+                  return 'skipped';
                 }
               } else {
                 // Нет вакансий на следующей странице - это последняя страница
                 FileLogger.log('service_worker', 'warn', 'Next page empty');
-                return 'ok';
+                return 'skipped';
               }
             } else {
               FileLogger.log('service_worker', 'info', 'No next page available');
-              return 'ok';
+              return 'skipped';
             }
           }
         } catch (error) {
@@ -389,8 +467,8 @@ export class LiveAutoApplyEngineV2 {
 
             await this.deps.sleep(2000);
 
-            // Try acquisition again
-            const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+            // Try acquisition again (skipNavigation: true - already on page after CLICK_NEXT_PAGE)
+            const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
             if (nextPageAcquisition.success && nextPageAcquisition.newQueued > 0) {
               FileLogger.log('service_worker', 'info', 'Next page acquired', {
@@ -485,9 +563,28 @@ export class LiveAutoApplyEngineV2 {
             skipListMap[entry.vacancyId] = true;
           }
 
+          // Собираем processed vacancies из текущего queue
+          const processedVacanciesMap: Record<string, boolean> = {};
+          const currentQueue = state.vacancyQueue;
+          for (const item of currentQueue) {
+            if (item.status === 'processed' && item.vacancyId) {
+              processedVacanciesMap[item.vacancyId] = true;
+            }
+          }
+
+          // Собираем runtime batch vacancies (только discovered - прошли prefilter)
+          const runtimeBatchVacanciesMap: Record<string, boolean> = {};
+          for (const item of currentQueue) {
+            if (item.status === 'discovered' && item.vacancyId) {
+              runtimeBatchVacanciesMap[item.vacancyId] = true;
+            }
+          }
+
           const availCheck = await sendMessageWithTimeout(controlledTabId, {
             type: 'CHECK_AVAILABLE_VACANCIES',
-            skipList: skipListMap
+            skipList: skipListMap,
+            processedVacancies: processedVacanciesMap,
+            runtimeBatchVacancies: runtimeBatchVacanciesMap
           }, 10000);
 
           FileLogger.log('service_worker', 'info', 'Page availability after skip', {
@@ -520,12 +617,23 @@ export class LiveAutoApplyEngineV2 {
               await this.deps.sleep(2000);
 
               // Acquisition с новой страницы
-              const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId);
+              const nextPageAcquisition = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
               if (nextPageAcquisition.success && nextPageAcquisition.newQueued > 0) {
                 FileLogger.log('service_worker', 'info', 'Next page acquired after skip', {
                   count: nextPageAcquisition.newQueued
                 });
+
+                // Save new search URL
+                if (nextPageAcquisition.currentUrl) {
+                  const currentState = this.deps.store.getState();
+                  await this.deps.store.updateState({
+                    liveMode: {
+                      ...currentState.liveMode,
+                      lastAppliedSearchUrl: nextPageAcquisition.currentUrl
+                    }
+                  });
+                }
 
                 // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии
                 const skipListArray2 = this.deps.store.getState().skipList || [];
@@ -534,9 +642,28 @@ export class LiveAutoApplyEngineV2 {
                   skipListMap2[entry.vacancyId] = true;
                 }
 
+                // Собираем processed vacancies из текущего queue
+                const processedVacanciesMap2: Record<string, boolean> = {};
+                const currentQueue2 = this.deps.store.getState().vacancyQueue;
+                for (const item of currentQueue2) {
+                  if (item.status === 'processed' && item.vacancyId) {
+                    processedVacanciesMap2[item.vacancyId] = true;
+                  }
+                }
+
+                // Собираем runtime batch vacancies (только discovered - прошли prefilter)
+                const runtimeBatchVacanciesMap2: Record<string, boolean> = {};
+                for (const item of currentQueue2) {
+                  if (item.status === 'discovered' && item.vacancyId) {
+                    runtimeBatchVacanciesMap2[item.vacancyId] = true;
+                  }
+                }
+
                 const availCheck2 = await sendMessageWithTimeout(controlledTabId, {
                   type: 'CHECK_AVAILABLE_VACANCIES',
-                  skipList: skipListMap2
+                  skipList: skipListMap2,
+                  processedVacancies: processedVacanciesMap2,
+                  runtimeBatchVacancies: runtimeBatchVacanciesMap2
                 }, 10000);
 
                 FileLogger.log('service_worker', 'info', 'Next page availability', {
@@ -575,7 +702,12 @@ export class LiveAutoApplyEngineV2 {
       outcome: result.outcome,
     });
 
-    return 'ok';
+    // Return appropriate cycle result based on outcome
+    if (result.outcome === 'success' || result.outcome === 'manual_action') {
+      return 'applied';
+    } else {
+      return 'skipped';
+    }
   }
 
   /**

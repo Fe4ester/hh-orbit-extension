@@ -19,8 +19,6 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
   showAddDemo,
   onAddDemo,
   showDetectButton = true,
-  liveModeActive = false,
-  controlledTabBound = false,
 }) => {
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
@@ -31,11 +29,13 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
 
     try {
       const response = await chrome.runtime.sendMessage({
-        type: 'LIVE_MODE_DETECT_RESUMES',
+        type: 'REFRESH_RESUMES_API',
       });
 
       if (response.error) {
         setDetectError(response.error);
+      } else if (!response.success) {
+        setDetectError(response.reason || 'Не удалось обновить резюме');
       }
     } catch (error) {
       setDetectError((error as Error).message);
@@ -44,7 +44,7 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
     }
   };
 
-  const detectButtonDisabled = detecting || !liveModeActive || !controlledTabBound;
+  const detectButtonDisabled = detecting;
 
   const demoCount = candidates.filter((c) => c.source === 'demo').length;
   const hhCount = candidates.filter((c) => c.source === 'hh_detected').length;
@@ -57,26 +57,13 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
     return (
       <div className="resume-selector empty">
         <p className="empty-message">Резюме не обнаружены</p>
-        {!liveModeActive && (
-          <p className="info-message">Запустите live mode для обнаружения резюме</p>
-        )}
-        {liveModeActive && !controlledTabBound && (
-          <p className="warning-message">Откройте HH вкладку для обнаружения резюме</p>
-        )}
         {showDetectButton && (
           <button
             className="btn btn-primary"
             onClick={handleDetectResumes}
             disabled={detectButtonDisabled}
-            title={
-              !liveModeActive
-                ? 'Запустите live mode'
-                : !controlledTabBound
-                  ? 'Откройте HH вкладку'
-                  : ''
-            }
           >
-            {detecting ? 'Обнаружение...' : 'Обнаружить резюме из HH'}
+            {detecting ? 'Обновление...' : 'Обновить из HH'}
           </button>
         )}
         {detectError && <p className="error-message">{detectError}</p>}
@@ -118,7 +105,7 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
           onClick={handleDetectResumes}
           disabled={detecting}
         >
-          {detecting ? 'Обнаружение...' : 'Обновить из HH'}
+          {detecting ? 'Обновление...' : 'Обновить из HH'}
         </button>
       )}
 

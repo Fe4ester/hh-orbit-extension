@@ -200,12 +200,6 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
   };
 
   FileLogger.log('service_worker', 'info', 'doCheckRuntimeBlockers: Detection complete', { loginRequired: observation.loginRequired, captchaRequired: observation.captchaRequired, sessionDegraded: observation.sessionDegraded });
-  console.log('[Background] doCheckRuntimeBlockers: Detection complete', {
-    loginRequired: observation.loginRequired,
-    captchaRequired: observation.captchaRequired,
-    sessionDegraded: observation.sessionDegraded,
-    matchedMarkers: observation.debug?.matchedMarkers,
-  });
 
   let finalStatus: 'ok' | 'login_required' | 'captcha_required' | 'degraded' = 'ok';
 
@@ -227,7 +221,6 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
   }
 
   FileLogger.log('service_worker', 'info', 'doCheckRuntimeBlockers: Final status', { finalStatus });
-  console.log('[Background] doCheckRuntimeBlockers: Final status set', { finalStatus });
 
   broadcastState();
   return { success: true, status: finalStatus };
@@ -247,7 +240,6 @@ interface DetectResumesResult {
 
 async function doDetectResumes(): Promise<DetectResumesResult> {
   FileLogger.log('service_worker', 'info', 'doDetectResumes START');
-  console.log('[Background] doDetectResumes START');
 
   const ensureResult = await ensureControlledTabForCurrentHHTab({
     requirePageTypes: ['applicant_resumes', 'resume', 'applicant'],
@@ -255,9 +247,6 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
 
   if (!ensureResult.ok) {
     FileLogger.log('service_worker', 'error', 'doDetectResumes: Ensure failed', { reason: ensureResult.reason });
-    console.error('[Background] doDetectResumes: Ensure failed', {
-      reason: ensureResult.reason,
-    });
 
     const errorMsg =
       ensureResult.reason === 'not_hh_tab'
@@ -275,10 +264,6 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
   const currentUrl = ensureResult.url!;
 
   FileLogger.log('service_worker', 'info', 'doDetectResumes: Executing detection', { controlledTabId, currentUrl });
-  console.log('[Background] doDetectResumes: Executing detection', {
-    controlledTabId,
-    currentUrl,
-  });
 
   const [detectionResult] = await chrome.scripting.executeScript({
     target: { tabId: controlledTabId },
@@ -367,9 +352,6 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
   }>;
 
   FileLogger.log('service_worker', 'info', 'doDetectResumes: Detection complete', { candidatesCount: candidates.length });
-  console.log('[Background] doDetectResumes: Detection complete', {
-    candidatesCount: candidates.length,
-  });
 
   if (candidates.length === 0) {
     store.getNotificationManager().addToast('warn', 'Резюме не найдены на странице');
@@ -391,6 +373,171 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
   return { success: true, candidates };
 }
 
+interface RefreshResumesAPIResult {
+  success: boolean;
+  count?: number;
+  reason?: string;
+}
+
+async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
+  FileLogger.log('service_worker', 'info', 'Resume refresh started', { source: 'api_with_dom_fallback' });
+
+  try {
+    // Try API endpoint first
+    FileLogger.log('service_worker', 'info', 'Resume refresh: trying API source');
+    const resumes = await backendHTTPClient.getMyResumes();
+
+    if (resumes.length > 0) {
+      FileLogger.log('service_worker', 'info', 'Resumes updated', { count: resumes.length, source: 'api' });
+
+      const candidatesWithSource = resumes.map((r) => ({
+        ...r,
+        source: 'hh_detected' as const,
+        lastSeenAt: Date.now(),
+      }));
+
+      await store.setResumeCandidates(candidatesWithSource);
+
+      store.getNotificationManager().addToast('success', `Обновлено резюме: ${resumes.length}`);
+      broadcastNotifications();
+      broadcastState();
+
+      return { success: true, count: resumes.length };
+    }
+
+    // Fallback to DOM detection via temporary tab
+    FileLogger.log('service_worker', 'info', 'Resume refresh: API returned empty, trying DOM fallback via resumes tab');
+
+    // Create temporary tab with resumes page
+    const tab = await chrome.tabs.create({
+      url: 'https://hh.ru/applicant/resumes',
+      active: false,  // Don't steal focus
+    });
+
+    if (!tab.id) {
+      FileLogger.log('service_worker', 'error', 'Resume refresh failed: could not create tab');
+      store.getNotificationManager().addToast('error', 'Не удалось создать вкладку');
+      broadcastNotifications();
+      return { success: false, reason: 'tab_creation_failed' };
+    }
+
+    FileLogger.log('service_worker', 'info', 'Resume refresh: temporary tab created', { tabId: tab.id });
+
+    // Wait for tab to load
+    await new Promise<void>((resolve) => {
+      const listener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+        if (tabId === tab.id && changeInfo.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }, 10000);
+    });
+
+    FileLogger.log('service_worker', 'info', 'Resume refresh: tab loaded, executing DOM detection');
+
+    // Execute DOM detection (same logic as doDetectResumes)
+    const [detectionResult] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        interface ResumeCandidate {
+          hash: string;
+          title: string;
+          url?: string;
+        }
+
+        const candidates: ResumeCandidate[] = [];
+
+        // Try resume cards first
+        const resumeCards = document.querySelectorAll('[data-qa="resume-card"]');
+        if (resumeCards.length > 0) {
+          resumeCards.forEach((card) => {
+            const link = card.querySelector('a[href*="/resume/"]');
+            if (link) {
+              const href = link.getAttribute('href');
+              const match = href?.match(/\/resume\/([a-f0-9]+)/);
+              if (match) {
+                const hash = match[1];
+                const title = link.textContent?.trim() || 'Резюме';
+                candidates.push({
+                  hash,
+                  title,
+                  url: href?.startsWith('http') ? href : `https://hh.ru${href}`,
+                });
+              }
+            }
+          });
+        }
+
+        // Fallback: find any resume links
+        if (candidates.length === 0) {
+          const links = document.querySelectorAll('a[href*="/resume/"]');
+          const seen = new Set<string>();
+          links.forEach((link) => {
+            const href = link.getAttribute('href');
+            const match = href?.match(/\/resume\/([a-f0-9]+)/);
+            if (match && !seen.has(match[1])) {
+              seen.add(match[1]);
+              const hash = match[1];
+              const title = link.textContent?.trim() || 'Резюме';
+              candidates.push({
+                hash,
+                title,
+                url: href?.startsWith('http') ? href : `https://hh.ru${href}`,
+              });
+            }
+          });
+        }
+
+        return candidates;
+      },
+    });
+
+    // Close temporary tab
+    await chrome.tabs.remove(tab.id);
+    FileLogger.log('service_worker', 'info', 'Resume refresh: temporary tab closed');
+
+    const parsedResumes = detectionResult.result as Array<{ hash: string; title: string; url: string }>;
+
+    if (parsedResumes.length === 0) {
+      FileLogger.log('service_worker', 'warn', 'Resume refresh failed: no resumes found via DOM detection');
+      store.getNotificationManager().addToast('warn', 'Резюме не найдены');
+      broadcastNotifications();
+      return { success: false, reason: 'no_resumes_found' };
+    }
+
+    FileLogger.log('service_worker', 'info', 'Resumes updated', { count: parsedResumes.length, source: 'dom_fallback' });
+
+    const candidatesWithSource = parsedResumes.map((r) => ({
+      ...r,
+      source: 'hh_detected' as const,
+      lastSeenAt: Date.now(),
+    }));
+
+    await store.setResumeCandidates(candidatesWithSource);
+
+    store.getNotificationManager().addToast('success', `Обновлено резюме: ${parsedResumes.length}`);
+    broadcastNotifications();
+    broadcastState();
+
+    return { success: true, count: parsedResumes.length };
+  } catch (error) {
+    FileLogger.log('service_worker', 'error', 'Resume refresh failed', {
+      reason: 'exception',
+      error: (error as Error).message
+    });
+    store.getNotificationManager().addToast('error', 'Ошибка обновления резюме');
+    broadcastNotifications();
+    return { success: false, reason: 'exception' };
+  }
+}
+
 interface ObserveVacancyDetailResult {
   success: boolean;
   observation?: any;
@@ -400,7 +547,6 @@ interface ObserveVacancyDetailResult {
 
 async function doObserveVacancyDetail(): Promise<ObserveVacancyDetailResult> {
   FileLogger.log('service_worker', 'info', 'doObserveVacancyDetail START');
-  console.log('[Background] doObserveVacancyDetail START');
 
   const ensureResult = await ensureControlledTabForCurrentHHTab({
     requirePageTypes: ['vacancy'],
@@ -408,9 +554,6 @@ async function doObserveVacancyDetail(): Promise<ObserveVacancyDetailResult> {
 
   if (!ensureResult.ok) {
     FileLogger.log('service_worker', 'error', 'doObserveVacancyDetail: Ensure failed', { reason: ensureResult.reason });
-    console.error('[Background] doObserveVacancyDetail: Ensure failed', {
-      reason: ensureResult.reason,
-    });
 
     const errorMsg =
       ensureResult.reason === 'not_hh_tab'
@@ -427,10 +570,6 @@ async function doObserveVacancyDetail(): Promise<ObserveVacancyDetailResult> {
   const controlledTabId = ensureResult.tabId!;
 
   FileLogger.log('service_worker', 'info', 'doObserveVacancyDetail: Fetching HTML', { controlledTabId, url: ensureResult.url });
-  console.log('[Background] doObserveVacancyDetail: Fetching HTML', {
-    controlledTabId,
-    url: ensureResult.url,
-  });
 
   const [result] = await chrome.scripting.executeScript({
     target: { tabId: controlledTabId },
@@ -468,7 +607,6 @@ interface ExecuteApplyResult {
 
 async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
   FileLogger.log('service_worker', 'info', 'doExecuteApply START', { realClick });
-  console.log('[Background] doExecuteApply START', { realClick });
 
   const state = store.getState();
 
@@ -760,25 +898,11 @@ const liveEngine = new LiveAutoApplyEngine({
 
 // Helper: log controlled tab state changes
 function logControlledTabStateChange(
-  action: string,
-  previous: { tabId: number | null; url: string | null; pageType: any; purpose: any },
-  next: { tabId: number | null; url: string | null; pageType: any; purpose: any }
+  _action: string,
+  _previous: { tabId: number | null; url: string | null; pageType: any; purpose: any },
+  _next: { tabId: number | null; url: string | null; pageType: any; purpose: any }
 ) {
-  console.log(`[Background] CONTROLLED_TAB_STATE_CHANGED`, {
-    action,
-    previous: {
-      tabId: previous.tabId,
-      url: previous.url,
-      pageType: previous.pageType,
-      purpose: previous.purpose,
-    },
-    next: {
-      tabId: next.tabId,
-      url: next.url,
-      pageType: next.pageType,
-      purpose: next.purpose,
-    },
-  });
+  // Controlled tab state changed (logged via FileLogger in callers)
 }
 
 
@@ -794,7 +918,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
   reason?: string;
 }> {
   FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB START', { options });
-  console.log('[Background] ENSURE_CONTROLLED_TAB START', { options });
 
   const stateBefore = store.getState();
   const previousState = {
@@ -809,19 +932,14 @@ async function ensureControlledTabForCurrentHHTab(options?: {
 
   if (!activeTab || !activeTab.id || !activeTab.url) {
     FileLogger.log('service_worker', 'error', 'ENSURE_CONTROLLED_TAB FAIL: No active tab');
-    console.error('[Background] ENSURE_CONTROLLED_TAB FAIL: No active tab');
     return { ok: false, reason: 'no_active_tab' };
   }
 
-  console.log('[Background] ENSURE_CONTROLLED_TAB ACTIVE_TAB', {
-    id: activeTab.id,
-    url: activeTab.url,
-  });
+  // Active tab detected (logged via FileLogger in caller)
 
   // Check if HH tab
   if (!activeTab.url.includes('hh.ru')) {
     FileLogger.log('service_worker', 'error', 'ENSURE_CONTROLLED_TAB FAIL: Not HH tab', { url: activeTab.url });
-    console.error('[Background] ENSURE_CONTROLLED_TAB FAIL: Not HH tab', { url: activeTab.url });
     return { ok: false, reason: 'not_hh_tab' };
   }
 
@@ -832,21 +950,15 @@ async function ensureControlledTabForCurrentHHTab(options?: {
   if (state.liveMode.controlledTabId !== activeTab.id) {
     // Bind current tab
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB BIND', { tabId: activeTab.id });
-    console.log('[Background] ENSURE_CONTROLLED_TAB BIND', { tabId: activeTab.id });
     await store.bindControlledTab(activeTab.id, activeTab.windowId!, activeTab.url);
     rebound = true;
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB BIND ok');
-    console.log('[Background] ENSURE_CONTROLLED_TAB BIND ok');
   } else if (state.liveMode.currentUrl !== activeTab.url) {
     // Refresh stale URL
-    console.log('[Background] ENSURE_CONTROLLED_TAB REFRESH', {
-      oldUrl: state.liveMode.currentUrl,
-      newUrl: activeTab.url,
-    });
+    // Refresh stale URL (logged via FileLogger below)
     await store.updateLiveContextFromUrl(activeTab.url);
     rebound = true;
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB REFRESH ok');
-    console.log('[Background] ENSURE_CONTROLLED_TAB REFRESH ok');
   }
 
   // Get updated state
@@ -854,7 +966,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
   const pageType = updatedState.liveMode.pageType;
 
   FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB PAGE_TYPE', { pageType });
-  console.log('[Background] ENSURE_CONTROLLED_TAB PAGE_TYPE', { pageType });
 
   // Determine purpose based on page type
   let purpose: 'resume_detection' | 'search' | 'vacancy' | 'generic_hh' = 'generic_hh';
@@ -869,10 +980,7 @@ async function ensureControlledTabForCurrentHHTab(options?: {
   // Check page type requirement
   if (options?.requirePageTypes && options.requirePageTypes.length > 0) {
     if (!pageType || !options.requirePageTypes.includes(pageType)) {
-      console.error('[Background] ENSURE_CONTROLLED_TAB PAGE_TYPE fail', {
-        required: options.requirePageTypes,
-        actual: pageType,
-      });
+      // Page type mismatch (logged via FileLogger in caller)
       return {
         ok: false,
         tabId: activeTab.id,
@@ -884,12 +992,7 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     }
   }
 
-  console.log('[Background] ENSURE_CONTROLLED_TAB SUCCESS', {
-    tabId: activeTab.id,
-    url: activeTab.url,
-    pageType,
-    rebound,
-  });
+  // Controlled tab ensured (logged via FileLogger in caller)
 
   // Set live mode active if not already
   if (!updatedState.liveMode.active) {
@@ -941,12 +1044,10 @@ async function ensureControlledTabForCurrentHHTab(options?: {
 // Deterministic side panel open helper
 async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason?: string }> {
   FileLogger.log('service_worker', 'info', 'openSidePanelForTab START', { tabId });
-  console.log(`[Background] openSidePanelForTab(${tabId}) START`);
 
   if (!chrome.sidePanel) {
     const reason = 'sidePanel API not available';
     FileLogger.log('service_worker', 'error', 'sidePanel API not available', { tabId });
-    console.error(`[Background] openSidePanelForTab(${tabId}) FAIL: ${reason}`);
     return { ok: false, reason };
   }
 
@@ -954,7 +1055,6 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
   if (!chrome.sidePanel.setOptions) {
     const reason = 'sidePanel.setOptions not available';
     FileLogger.log('service_worker', 'error', 'sidePanel.setOptions not available', { tabId });
-    console.error(`[Background] openSidePanelForTab(${tabId}) FAIL: ${reason}`);
     return { ok: false, reason };
   }
 
@@ -965,11 +1065,9 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
       enabled: true,
     });
     FileLogger.log('service_worker', 'info', 'openSidePanelForTab PANEL_OPTIONS_SET ok', { tabId });
-    console.log(`[Background] openSidePanelForTab(${tabId}) PANEL_OPTIONS_SET ok`);
   } catch (err) {
     const reason = `setOptions failed: ${(err as Error).message}`;
     FileLogger.log('service_worker', 'error', 'setOptions failed', { tabId, error: (err as Error).message });
-    console.error(`[Background] openSidePanelForTab(${tabId}) PANEL_OPTIONS_SET fail:`, err);
     return { ok: false, reason };
   }
 
@@ -977,19 +1075,16 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
   if (!chrome.sidePanel.open) {
     const reason = 'sidePanel.open not available';
     FileLogger.log('service_worker', 'error', 'sidePanel.open not available', { tabId });
-    console.error(`[Background] openSidePanelForTab(${tabId}) FAIL: ${reason}`);
     return { ok: false, reason };
   }
 
   try {
     await chrome.sidePanel.open({ tabId });
     FileLogger.log('service_worker', 'info', 'openSidePanelForTab PANEL_OPEN ok', { tabId });
-    console.log(`[Background] openSidePanelForTab(${tabId}) PANEL_OPEN ok`);
     return { ok: true };
   } catch (err) {
     const reason = `open failed: ${(err as Error).message}`;
     FileLogger.log('service_worker', 'error', 'sidePanel.open failed', { tabId, error: (err as Error).message });
-    console.error(`[Background] openSidePanelForTab(${tabId}) PANEL_OPEN fail:`, err);
     return { ok: false, reason };
   }
 }
@@ -998,17 +1093,14 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
 async function setPanelBehavior() {
   if (!chrome.sidePanel || !chrome.sidePanel.setPanelBehavior) {
     FileLogger.log('service_worker', 'warn', 'sidePanel.setPanelBehavior not available');
-    console.warn('[Background] sidePanel.setPanelBehavior not available');
     return;
   }
 
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
     FileLogger.log('service_worker', 'info', 'PANEL_BEHAVIOR_SET ok: openPanelOnActionClick=true');
-    console.log('[Background] PANEL_BEHAVIOR_SET ok: openPanelOnActionClick=true');
   } catch (err) {
     FileLogger.log('service_worker', 'error', 'PANEL_BEHAVIOR_SET fail', { error: (err as Error).message });
-    console.error('[Background] PANEL_BEHAVIOR_SET fail:', err);
   }
 }
 
@@ -1016,7 +1108,6 @@ async function setPanelBehavior() {
 async function enableSidePanelForHHTabs() {
   if (!chrome.sidePanel || !chrome.sidePanel.setOptions) {
     FileLogger.log('service_worker', 'warn', 'sidePanel.setOptions not available');
-    console.warn('[Background] sidePanel.setOptions not available');
     return;
   }
 
@@ -1025,7 +1116,6 @@ async function enableSidePanelForHHTabs() {
     const hhTabs = tabs.filter((tab) => tab.url && tab.url.includes('hh.ru'));
 
     FileLogger.log('service_worker', 'info', 'Found HH tabs, enabling side panel', { count: hhTabs.length });
-    console.log(`[Background] Found ${hhTabs.length} HH tabs, enabling side panel`);
 
     for (const tab of hhTabs) {
       if (tab.id) {
@@ -1036,28 +1126,23 @@ async function enableSidePanelForHHTabs() {
             enabled: true,
           });
           FileLogger.log('service_worker', 'info', 'Side panel enabled for tab', { tabId: tab.id });
-          console.log(`[Background] Side panel enabled for tab ${tab.id}`);
         } catch (err) {
           FileLogger.log('service_worker', 'error', 'Failed to enable side panel for tab', { tabId: tab.id, error: (err as Error).message });
-          console.error(`[Background] Failed to enable side panel for tab ${tab.id}:`, err);
         }
       }
     }
   } catch (err) {
     FileLogger.log('service_worker', 'error', 'Failed to query tabs', { error: (err as Error).message });
-    console.error('[Background] Failed to query tabs:', err);
   }
 }
 
 // Initialize store on startup
 store.init().then(async () => {
   FileLogger.log('service_worker', 'info', 'Store initialized');
-  console.log('[Background] Store initialized');
 
   // Subscribe to state changes for real-time UI updates
   store.setOnStateChange(() => {
     FileLogger.log('service_worker', 'info', 'STATE_CHANGED → broadcasting');
-    console.log('[Background] STATE_CHANGED → broadcasting');
     broadcastState();
   });
 
@@ -1073,7 +1158,6 @@ store.init().then(async () => {
 // Enable side panel behavior on install
 chrome.runtime.onInstalled.addListener(async () => {
   FileLogger.log('service_worker', 'info', 'Extension installed');
-  console.log('[Background] Extension installed');
 
   // Set panel behavior
   await setPanelBehavior();
@@ -1087,7 +1171,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   FileLogger.log('service_worker', 'info', 'Extension startup');
-  console.log('[Background] Extension startup');
 
   // Inject content script to existing tabs
   await injectContentScriptToExistingTabs();
@@ -1126,10 +1209,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         enabled: true,
       }).then(() => {
         FileLogger.log('service_worker', 'info', 'Side panel enabled for new HH tab', { tabId });
-        console.log(`[Background] Side panel enabled for new HH tab ${tabId}`);
       }).catch((err) => {
         FileLogger.log('service_worker', 'error', 'Failed to enable side panel for new HH tab', { tabId, error: (err as Error).message });
-        console.error(`[Background] Failed to enable side panel for tab ${tabId}:`, err);
       });
     }
   }
@@ -1140,13 +1221,11 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
 
   FileLogger.log('service_worker', 'info', 'ACTION_CLICK on tab', { tabId: tab.id });
-  console.log(`[Background] ACTION_CLICK on tab ${tab.id}`);
 
   const result = await openSidePanelForTab(tab.id);
 
   if (!result.ok) {
     FileLogger.log('service_worker', 'error', 'ACTION_CLICK failed', { tabId: tab.id, reason: result.reason });
-    console.error(`[Background] ACTION_CLICK failed for tab ${tab.id}: ${result.reason}`);
     // No fallback - side panel only
   }
 });
@@ -1170,18 +1249,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         // Route to correct engine based on mode
         if (state.mode === 'backend') {
           FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: backend mode');
-          console.log('[Background] AUTO_APPLY_START: backend mode');
           backendEngine.start().catch((error) => {
             FileLogger.log('service_worker', 'error', 'Backend engine failed:', error);
-            console.error('[Background] Backend engine failed:', error);
             FileLogger.log('service_worker', 'error', 'Backend engine failed', { error: error.message });
           });
         } else {
           FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: live mode');
-          console.log('[Background] AUTO_APPLY_START: live mode');
           liveEngine.start().catch((error) => {
             FileLogger.log('service_worker', 'error', 'Live engine failed:', error);
-            console.error('[Background] Live engine failed:', error);
             FileLogger.log('service_worker', 'error', 'Live engine failed', { error: error.message });
           });
         }
@@ -1247,7 +1322,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         FileLogger.log('service_worker', 'info', 'OPEN_SIDEPANEL_FOR_CURRENT_TAB requested', { tabId: tab.id });
-        console.log(`[Background] OPEN_SIDEPANEL_FOR_CURRENT_TAB requested for tab ${tab.id}`);
 
         const result = await openSidePanelForTab(tab.id);
 
@@ -1269,7 +1343,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         FileLogger.log('service_worker', 'info', 'DEBUG_OPEN_SIDEPANEL', { tabId: tab.id });
-        console.log(`[Background] DEBUG_OPEN_SIDEPANEL for tab ${tab.id}`);
 
         const result = await openSidePanelForTab(tab.id);
 
@@ -1513,7 +1586,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         if (activeTab && activeTab.url && activeTab.url.includes('hh.ru')) {
           // Active tab is HH - bind it and STOP (do not navigate)
-          console.log('[Background] LIVE_MODE_START: Binding active HH tab', {
+          FileLogger.log('service_worker', 'info', 'LIVE_MODE_START: Binding active HH tab', {
             tabId: activeTab.id,
             url: activeTab.url,
           });
@@ -1553,7 +1626,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         // Active tab is not HH - inform user, do NOT auto-create search tab
         FileLogger.log('service_worker', 'info', 'LIVE_MODE_START: Active tab not HH');
-        console.log('[Background] LIVE_MODE_START: Active tab not HH');
         store.getNotificationManager().addToast('warn', 'Откройте HH страницу и нажмите "Привязать текущую HH вкладку"', true, 'session_warning');
         broadcastNotifications();
         sendResponse({ error: 'Active tab is not HH' });
@@ -1582,21 +1654,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         if (!activeTab || !activeTab.url) {
           FileLogger.log('service_worker', 'error', 'LIVE_MODE_BIND_CURRENT_TAB: No active tab');
-          console.error('[Background] LIVE_MODE_BIND_CURRENT_TAB: No active tab');
           sendResponse({ error: 'No active tab' });
           return;
         }
 
         if (!activeTab.url.includes('hh.ru')) {
           FileLogger.log('service_worker', 'error', 'LIVE_MODE_BIND_CURRENT_TAB: Not HH tab', { url: activeTab.url });
-          console.error('[Background] LIVE_MODE_BIND_CURRENT_TAB: Not HH tab', { url: activeTab.url });
           store.getNotificationManager().addToast('warn', 'Текущая вкладка не на hh.ru', true, 'session_warning');
           broadcastNotifications();
           sendResponse({ error: 'Not HH tab' });
           return;
         }
 
-        console.log('[Background] LIVE_MODE_BIND_CURRENT_TAB: Binding', {
+        FileLogger.log('service_worker', 'info', 'LIVE_MODE_BIND_CURRENT_TAB: Binding', {
           tabId: activeTab.id,
           url: activeTab.url,
         });
@@ -1711,13 +1781,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Vacancy detail preflight actions
       if (message.type === 'LIVE_MODE_OBSERVE_VACANCY_DETAIL') {
         FileLogger.log('service_worker', 'info', 'LIVE_MODE_OBSERVE_VACANCY_DETAIL: Delegating to doObserveVacancyDetail');
-        console.log('[Background] LIVE_MODE_OBSERVE_VACANCY_DETAIL: Delegating to doObserveVacancyDetail');
 
         doObserveVacancyDetail().then((result) => {
           sendResponse(result);
         }).catch((error) => {
           FileLogger.log('service_worker', 'error', 'LIVE_MODE_OBSERVE_VACANCY_DETAIL error:', error);
-          console.error('[Background] LIVE_MODE_OBSERVE_VACANCY_DETAIL error:', error);
           sendResponse({ success: false, error: (error as Error).message });
         });
 
@@ -1734,7 +1802,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Apply executor actions
       if (message.type === 'LIVE_MODE_EXECUTE_APPLY_SKELETON') {
         FileLogger.log('service_worker', 'info', 'LIVE_MODE_EXECUTE_APPLY_SKELETON: Delegating to doExecuteApply');
-        console.log('[Background] LIVE_MODE_EXECUTE_APPLY_SKELETON: Delegating to doExecuteApply');
 
         const realClick = message.realClick === true;
 
@@ -1742,7 +1809,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse(result);
         }).catch((error) => {
           FileLogger.log('service_worker', 'error', 'LIVE_MODE_EXECUTE_APPLY_SKELETON error:', error);
-          console.error('[Background] LIVE_MODE_EXECUTE_APPLY_SKELETON error:', error);
           sendResponse({ success: false, error: (error as Error).message });
         });
 
@@ -1760,13 +1826,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'LIVE_MODE_DETECT_RESUMES') {
         FileLogger.log('service_worker', 'info', 'LIVE_MODE_DETECT_RESUMES: Delegating to doDetectResumes');
-        console.log('[Background] LIVE_MODE_DETECT_RESUMES: Delegating to doDetectResumes');
 
         doDetectResumes().then((result) => {
           sendResponse(result);
         }).catch((err) => {
           FileLogger.log('service_worker', 'error', 'LIVE_MODE_DETECT_RESUMES error', { error: (err as Error).message });
-          console.error('[Background] LIVE_MODE_DETECT_RESUMES error:', err);
+          sendResponse({ success: false, error: (err as Error).message });
+        });
+
+        return;
+      }
+
+      if (message.type === 'REFRESH_RESUMES_API') {
+        FileLogger.log('service_worker', 'info', 'REFRESH_RESUMES_API: Delegating to doRefreshResumesAPI');
+
+        doRefreshResumesAPI().then((result) => {
+          sendResponse(result);
+        }).catch((err) => {
+          FileLogger.log('service_worker', 'error', 'REFRESH_RESUMES_API error', { error: (err as Error).message });
           sendResponse({ success: false, error: (err as Error).message });
         });
 
@@ -1776,7 +1853,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ error: 'Unknown message type' });
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Message handler error', { error: (error as Error).message });
-      console.error('[Background] Error:', error);
       sendResponse({ error: (error as Error).message });
     }
   })();
@@ -1788,7 +1864,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CHECK_RUNTIME_BLOCKERS') {
     FileLogger.log('service_worker', 'info', 'CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
-    console.log('[Background] CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
 
     // Respond immediately
     sendResponse({ success: true });
@@ -1796,7 +1871,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Do async work
     doCheckRuntimeBlockers().catch((error) => {
       FileLogger.log('service_worker', 'error', 'CHECK_RUNTIME_BLOCKERS: Async work failed', error);
-      console.error('[Background] CHECK_RUNTIME_BLOCKERS: Async work failed', error);
     });
 
     return true;
@@ -2076,7 +2150,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Search loop error', { error: (error as Error).message });
-      console.error('[Background] Search loop error:', error);
       sendResponse({ error: (error as Error).message });
     }
   })();
@@ -2087,12 +2160,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // Broadcast state to all sidepanels
 function broadcastState() {
   const state = store.getState();
-  console.log('[Background] broadcastState', {
-    processed: state.runtime.processed,
-    success: state.runtime.success,
-    manualActions: state.runtime.manualActions,
-    phase: state.runtime.currentPhase,
-  });
+  // State broadcast (verbose, removed)
   chrome.runtime.sendMessage({ type: 'STATE_UPDATE', state }).catch(() => {
     // Ignore - sidepanel may not be open
   });
@@ -2209,7 +2277,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
             } catch (error) {
               FileLogger.log('service_worker', 'error', 'Failed to check search sync', { error: (error as Error).message });
-              console.error('[Background] Failed to check search sync:', error);
             }
           }
         }
@@ -2289,7 +2356,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             }
           } catch (error) {
             FileLogger.log('service_worker', 'error', 'Failed to check runtime blockers', { error: (error as Error).message });
-            console.error('[Background] Failed to check runtime blockers:', error);
           }
         }
 
@@ -2349,4 +2415,3 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 FileLogger.log('service_worker', 'info', 'Service worker loaded');
-console.log('[Background] Service worker loaded');

@@ -29,8 +29,8 @@ export interface AcquisitionServiceDeps {
 export class AcquisitionService {
   constructor(private deps: AcquisitionServiceDeps) {}
 
-  async acquireForProfile(profileId: string): Promise<AcquisitionResult> {
-    FileLogger.log('service_worker', 'info', 'Acquisition start', { profileId });
+  async acquireForProfile(profileId: string, skipNavigation = false): Promise<AcquisitionResult> {
+    FileLogger.log('service_worker', 'info', 'Acquisition start', { profileId, skipNavigation });
 
     const state = this.deps.store.getState();
     const profile = state.profiles[profileId];
@@ -65,35 +65,49 @@ export class AcquisitionService {
     }
 
     try {
-      const resumeHash = state.selectedResumeHash;
-      const searchUrl = buildGlobalSearchUrl(resumeHash);
+      // Check current URL first
+      const tab = await chrome.tabs.get(controlledTabId);
+      const currentUrl = tab.url || '';
+      const isOnSearchPage = currentUrl.includes('/search/vacancy') || currentUrl.includes('/applicant/vacancy_search');
 
-      FileLogger.log('service_worker', 'info', 'Acquisition navigate', {
-        searchUrl,
-        strategy: 'global_search',
-        resumeHash: resumeHash || 'none'
-      });
+      // Only navigate if not already on search page OR skipNavigation is false
+      if (!skipNavigation && !isOnSearchPage) {
+        const resumeHash = state.selectedResumeHash;
+        const searchUrl = buildGlobalSearchUrl(resumeHash);
 
-      // Navigate controlled tab to search URL
-      await chrome.tabs.update(controlledTabId, { url: searchUrl, active: true });
+        FileLogger.log('service_worker', 'info', 'Acquisition navigate', {
+          searchUrl,
+          strategy: 'global_search',
+          resumeHash: resumeHash || 'none'
+        });
 
-      const ready = await this.waitForTabReady(controlledTabId, searchUrl, 30000);
-      if (!ready) {
-        FileLogger.log('service_worker', 'error', 'Acquisition: Tab not ready');
-        return {
-          success: false,
-          currentUrl: null,
-          pageType: null,
-          cardsFound: 0,
-          newQueued: 0,
-          queueSizeAfter: 0,
-          error: 'navigation_timeout',
-        };
+        // Navigate controlled tab to search URL
+        await chrome.tabs.update(controlledTabId, { url: searchUrl, active: true });
+
+        const ready = await this.waitForTabReady(controlledTabId, searchUrl, 30000);
+        if (!ready) {
+          FileLogger.log('service_worker', 'error', 'Acquisition: Tab not ready');
+          return {
+            success: false,
+            currentUrl: null,
+            pageType: null,
+            cardsFound: 0,
+            newQueued: 0,
+            queueSizeAfter: 0,
+            error: 'navigation_timeout',
+          };
+        }
+      } else {
+        FileLogger.log('service_worker', 'info', 'Acquisition skip navigation', {
+          skipNavigation,
+          isOnSearchPage,
+          currentUrl
+        });
       }
 
       // Check if we got redirected away from search
-      const tab = await chrome.tabs.get(controlledTabId);
-      const actualUrl = tab.url || '';
+      const tabAfter = await chrome.tabs.get(controlledTabId);
+      const actualUrl = tabAfter.url || '';
 
       if (!actualUrl.includes('/search/vacancy')) {
         FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'not_on_search_page', actualUrl });

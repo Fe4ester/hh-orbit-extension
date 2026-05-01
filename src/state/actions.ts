@@ -56,9 +56,6 @@ export function createProfile(payload: CreateProfilePayload): Profile {
     name: payload.name,
     keywordsInclude: payload.keywordsInclude || [],
     keywordsExclude: payload.keywordsExclude || [],
-    experience: '', // Keep for compatibility but empty
-    schedule: [], // Keep for compatibility but empty
-    employment: [], // Keep for compatibility but empty
     coverLetterTemplate: payload.coverLetterTemplate,
     selectedResumeHash: payload.selectedResumeHash || null,
     createdAt: now,
@@ -95,9 +92,6 @@ export function createDefaultProfiles(now: number = Date.now()): Profile[] {
       name: preset.name,
       keywordsInclude: preset.keywordsInclude || [],
       keywordsExclude: preset.keywordsExclude || [],
-      experience: '', // Keep for compatibility but empty
-      schedule: [], // Keep for compatibility but empty
-      employment: [], // Keep for compatibility but empty
       coverLetterTemplate: preset.coverLetterTemplate,
       selectedResumeHash: null,
       createdAt: stamp,
