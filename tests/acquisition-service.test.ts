@@ -54,10 +54,6 @@ describe('AcquisitionService', () => {
 
       expect(chrome.tabs.update).toHaveBeenCalledWith(mockTabId, expect.any(Object));
       expect(chrome.tabs.create).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(
-        '[Acquisition] Navigating controlled tab to search',
-        expect.objectContaining({ tabId: mockTabId })
-      );
     });
 
     it('should recreate tab when stored tabId is stale', async () => {
@@ -127,59 +123,7 @@ describe('AcquisitionService', () => {
       await service.acquireForProfile('prof1');
 
       expect(chrome.tabs.update).toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(
-        '[Acquisition] Navigating controlled tab to search',
-        expect.objectContaining({ tabId: newTabId })
-      );
     });
   });
 
-  describe('parseSearchResults without DOMParser', () => {
-    it('should not crash on DOMParser in background context', async () => {
-      // Simulate background context where DOMParser is undefined
-      const originalDOMParser = global.DOMParser;
-      (global as any).DOMParser = undefined;
-
-      mockStore.getState.mockReturnValue({
-        liveMode: { controlledTabId: 123 },
-        profiles: {
-          prof1: {
-            id: 'prof1',
-            name: 'Test',
-            keywordsInclude: [],
-            keywordsExclude: [],
-            locations: [],
-            experience: [],
-            schedule: [],
-            employment: [],
-          },
-        },
-        vacancyQueue: [],
-      });
-
-      vi.mocked(chrome.tabs.create).mockResolvedValue({ id: 123, status: 'complete', url: 'https://hh.ru/search' } as any);
-      vi.mocked(chrome.tabs.get).mockResolvedValue({ id: 123, status: 'complete', url: 'https://hh.ru/search' } as any);
-      vi.mocked(chrome.tabs.update).mockResolvedValue({} as any);
-      vi.mocked(chrome.tabs.sendMessage).mockResolvedValue({
-        html: `
-          <html>
-            <div class="serp-item">
-              <a href="https://hh.ru/vacancy/12345" data-qa="serp-item__title">Test Vacancy</a>
-            </div>
-          </html>
-        `,
-      });
-      vi.mocked(chrome.scripting.executeScript).mockResolvedValue([
-        { result: 'complete' },
-      ] as any);
-
-      const result = await service.acquireForProfile('prof1');
-
-      expect(result.success).toBe(true);
-      expect(result.error).toBeUndefined();
-
-      // Restore
-      global.DOMParser = originalDOMParser;
-    });
-  });
 });

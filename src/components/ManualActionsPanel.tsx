@@ -28,16 +28,20 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   const [currentPage, setCurrentPage] = useState(0);
 
   const totalPages = Math.ceil(actions.length / ITEMS_PER_PAGE);
-  const startIndex = currentPage * ITEMS_PER_PAGE;
+
+  // Ensure currentPage is valid before rendering
+  const validCurrentPage = totalPages > 0 ? Math.min(currentPage, totalPages - 1) : 0;
+
+  const startIndex = validCurrentPage * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const currentActions = actions.slice(startIndex, endIndex);
 
-  // Reset to valid page if current page becomes invalid
+  // Reset to valid page when actions change
   useEffect(() => {
-    if (actions.length > 0 && currentPage >= totalPages) {
-      setCurrentPage(Math.max(0, totalPages - 1));
+    if (actions.length > 0 && validCurrentPage !== currentPage) {
+      setCurrentPage(validCurrentPage);
     }
-  }, [actions.length, currentPage, totalPages]);
+  }, [actions.length, validCurrentPage, currentPage]);
 
   const handlePrevPage = () => {
     setCurrentPage((prev) => Math.max(0, prev - 1));

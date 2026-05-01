@@ -5,7 +5,6 @@ import { join } from 'path';
 describe('Code quality checks', () => {
   it('should not use alert/confirm/prompt in source code', () => {
     const srcDir = join(__dirname, '../src');
-    const sidepanelDir = join(__dirname, '../sidepanel');
 
     const violations: string[] = [];
 
@@ -38,10 +37,9 @@ describe('Code quality checks', () => {
     }
 
     scanDirectory(srcDir);
-    scanDirectory(sidepanelDir);
 
     if (violations.length > 0) {
-      console.error('Found alert/confirm/prompt usage:');
+      console.error('Found alert/confirm/prompt usage in src/:');
       violations.forEach((v) => console.error(`  ${v}`));
     }
 

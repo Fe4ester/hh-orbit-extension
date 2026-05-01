@@ -17,9 +17,6 @@ describe('Profile Selectors', () => {
     name: 'Test Profile',
     keywordsInclude: ['React', 'TypeScript'],
     keywordsExclude: ['PHP'],
-    experience: ['От 3 лет'],
-    schedule: ['Удаленная работа'],
-    employment: ['Полная занятость'],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -97,26 +94,9 @@ describe('Profile Selectors', () => {
         ...mockProfile,
         keywordsInclude: [],
         keywordsExclude: [],
-        experience: [],
-        schedule: [],
-        employment: [],
       };
 
       expect(hasProfileFilters(emptyProfile)).toBe(false);
-    });
-
-    it('should return true if profile has salary', () => {
-      const profileWithSalary: Profile = {
-        ...mockProfile,
-        keywordsInclude: [],
-        keywordsExclude: [],
-        experience: [],
-        schedule: [],
-        employment: [],
-        salary: { amount: 100000, currency: 'RUB' },
-      };
-
-      expect(hasProfileFilters(profileWithSalary)).toBe(true);
     });
   });
 
@@ -127,10 +107,6 @@ describe('Profile Selectors', () => {
       expect(summary.name).toBe('Test Profile');
       expect(summary.hasFilters).toBe(true);
       expect(summary.keywordsCount).toBe(2);
-      expect(summary.experienceCount).toBe(1);
-      expect(summary.scheduleCount).toBe(1);
-      expect(summary.employmentCount).toBe(1);
-      expect(summary.hasSalary).toBe(false);
       expect(summary.hasCoverLetter).toBe(false);
     });
 

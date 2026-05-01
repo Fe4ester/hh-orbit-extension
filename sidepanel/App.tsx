@@ -10,12 +10,10 @@ import {
 import { RuntimeSettingsPanel } from '../src/components/RuntimeSettingsPanel';
 import { ManualActionsPanel } from '../src/components/ManualActionsPanel';
 import { ProfileEditor } from '../src/components/ProfileEditor';
-import { FileLogger } from '../src/utils/fileLogger';
 import './styles.css';
 
 export const App: React.FC = () => {
   const [state, setState] = useState<AppState | null>(null);
-  const [debugOpen, setDebugOpen] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -96,7 +94,7 @@ export const App: React.FC = () => {
     <div className="app">
       <header className="header">
         <h1>HH Orbit</h1>
-        <div className="version">v2 - режимы</div>
+        <div className="version">v1.0.0</div>
       </header>
 
       <main className="main">
@@ -255,37 +253,6 @@ export const App: React.FC = () => {
             onDismiss={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DISMISS', id })}
             onClearCompleted={() => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_CLEAR_COMPLETED' })}
           />
-        </section>
-
-        <section className="section">
-          <h2>Логи</h2>
-          <button
-            className="btn btn-secondary"
-            onClick={async () => {
-              try {
-                const logs = await FileLogger.readLogs();
-                const blob = new Blob([logs.map(l => JSON.stringify(l)).join('\n')], { type: 'application/x-ndjson' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `logs-${Date.now()}.jsonl`;
-                a.click();
-                URL.revokeObjectURL(url);
-              } catch (err) {
-                console.error('Failed to export logs:', err);
-                alert('Не удалось экспортировать логи');
-              }
-            }}
-          >
-            Export Logs
-          </button>
-        </section>
-
-        <section className="section">
-          <button className="btn btn-secondary" onClick={() => setDebugOpen((v) => !v)}>
-            Debug / Visual mode
-          </button>
-          {debugOpen && <pre className="debug-state">{JSON.stringify(state.liveMode, null, 2)}</pre>}
         </section>
       </main>
     </div>

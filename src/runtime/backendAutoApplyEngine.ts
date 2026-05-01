@@ -238,6 +238,9 @@ export class BackendAutoApplyEngine {
     await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId);
 
     if (applyResult.requiresManualAction && this.deps.store.getState().settings.stopOnManualAction) {
+      FileLogger.log('service_worker', 'info', 'Manual action detected, stopOnManualAction enabled - pausing', {
+        vacancyId: nextVacancy.vacancyId
+      });
       await this.deps.store.setRuntimePhase('paused_manual_action', applyResult.outcome);
       return 'manual';
     }

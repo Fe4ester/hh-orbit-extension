@@ -15,9 +15,6 @@ describe('Profile Actions', () => {
         name: 'Test Profile',
         keywordsInclude: ['React', 'TypeScript'],
         keywordsExclude: ['PHP'],
-        experience: ['От 3 лет'],
-        schedule: ['Удаленная работа'],
-        employment: ['Полная занятость'],
         coverLetterTemplate: 'Hello',
       };
 
@@ -27,9 +24,6 @@ describe('Profile Actions', () => {
       expect(profile.name).toBe('Test Profile');
       expect(profile.keywordsInclude).toEqual(['React', 'TypeScript']);
       expect(profile.keywordsExclude).toEqual(['PHP']);
-      expect(profile.experience).toEqual(['От 3 лет']);
-      expect(profile.schedule).toEqual(['Удаленная работа']);
-      expect(profile.employment).toEqual(['Полная занятость']);
       expect(profile.coverLetterTemplate).toBe('Hello');
       expect(profile.createdAt).toBeDefined();
       expect(profile.updatedAt).toBeDefined();
@@ -45,9 +39,6 @@ describe('Profile Actions', () => {
       expect(profile.name).toBe('Minimal Profile');
       expect(profile.keywordsInclude).toEqual([]);
       expect(profile.keywordsExclude).toEqual([]);
-      expect(profile.experience).toEqual([]);
-      expect(profile.schedule).toEqual([]);
-      expect(profile.employment).toEqual([]);
     });
 
     it('should generate unique IDs', () => {

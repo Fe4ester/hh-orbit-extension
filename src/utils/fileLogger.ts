@@ -59,24 +59,4 @@ export class FileLogger {
     // Скриншоты отключены из-за ошибок квоты Chrome API
     return undefined;
   }
-
-  static async readLogs(limit?: number): Promise<LogEntry[]> {
-    try {
-      const result = await chrome.storage.local.get(STORAGE_KEY);
-      const logs: LogEntry[] = result[STORAGE_KEY] || [];
-
-      if (limit) {
-        return logs.slice(-limit);
-      }
-
-      return logs;
-    } catch (err) {
-      console.error('[FileLogger] Failed to read logs:', err);
-      return [];
-    }
-  }
-
-  static async clearLogs(): Promise<void> {
-    await chrome.storage.local.remove(STORAGE_KEY);
-  }
 }

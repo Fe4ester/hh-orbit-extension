@@ -543,6 +543,15 @@ export class LiveAutoApplyEngineV2 {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, success: 1 });
     } else if (result.outcome === 'manual_action') {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, manualActions: 1 });
+
+      // Check if we should stop on manual action
+      if (this.deps.store.getState().settings.stopOnManualAction) {
+        FileLogger.log('service_worker', 'info', 'Manual action detected, stopOnManualAction enabled - pausing', {
+          vacancyId: nextVacancy.vacancyId
+        });
+        await this.deps.store.setRuntimePhase('paused_manual_action', 'manual_action_required');
+        return 'blocked';
+      }
     } else if (result.outcome === 'skipped') {
       // Don't increment processed counter for skipped vacancies (already applied, etc)
       FileLogger.log('service_worker', 'info', 'Vacancy skipped, not counting as processed', {
@@ -703,7 +712,7 @@ export class LiveAutoApplyEngineV2 {
     });
 
     // Return appropriate cycle result based on outcome
-    if (result.outcome === 'success' || result.outcome === 'manual_action') {
+    if (result.outcome === 'success') {
       return 'applied';
     } else {
       return 'skipped';

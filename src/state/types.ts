@@ -317,8 +317,8 @@ export const INITIAL_STATE: AppState = (() => {
     profileOrder: [],
     notifications: [],
     settings: {
-      delayMinSeconds: 30,
-      delayMaxSeconds: 90,
+      delayMinSeconds: 5,
+      delayMaxSeconds: 10,
       maxAutoAppliesPerRun: 30,
       maxAutoAppliesPerDay: 100,
       stopOnManualAction: true,

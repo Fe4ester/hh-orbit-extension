@@ -1,6 +1,0 @@
-node_modules/
-dist/
-artifacts/extension-debug/*.jsonl
-artifacts/extension-debug/*.json
-artifacts/extension-debug/*.png
-!artifacts/extension-debug/.gitkeep
