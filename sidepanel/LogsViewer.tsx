@@ -2,6 +2,31 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { FileLogger, LogEntry } from '../src/utils/fileLogger';
 
 type LogsTab = 'overview' | 'errors' | 'vacancies' | 'raw';
+type ErrorReason =
+  | 'all'
+  | 'cover_letter'
+  | 'questionnaire'
+  | 'test'
+  | 'captcha'
+  | 'login'
+  | 'external_apply'
+  | 'timeout'
+  | 'manual_action'
+  | 'error'
+  | 'other';
+
+const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
+  cover_letter: 'Нужно сопроводительное',
+  questionnaire: 'Нужна анкета',
+  test: 'Нужен тест',
+  captcha: 'Капча / верификация',
+  login: 'Нужна авторизация',
+  external_apply: 'Внешний отклик',
+  timeout: 'Таймаут / зависание',
+  manual_action: 'Нужно ручное действие',
+  error: 'Ошибка выполнения',
+  other: 'Другое',
+};
 
 export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -9,6 +34,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [levelFilter, setLevelFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<LogsTab>('overview');
+  const [errorReasonFilter, setErrorReasonFilter] = useState<ErrorReason>('all');
 
   useEffect(() => {
     loadLogs();
@@ -68,7 +94,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     return errorKeywords.some((keyword) => haystack.includes(keyword));
   };
 
-  const detectReason = (log: LogEntry): string => {
+  const detectReason = (log: LogEntry): Exclude<ErrorReason, 'all'> => {
     const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
 
     if (haystack.includes('cover letter') || haystack.includes('сопровод')) return 'cover_letter';
@@ -84,6 +110,20 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   const errorLogs = useMemo(() => filteredLogs.filter(isErrorLike), [filteredLogs]);
+
+  const errorReasonCounts = useMemo(() => {
+    const counts = new Map<Exclude<ErrorReason, 'all'>, number>();
+    errorLogs.forEach((log) => {
+      const reason = detectReason(log);
+      counts.set(reason, (counts.get(reason) || 0) + 1);
+    });
+    return counts;
+  }, [errorLogs]);
+
+  const filteredErrorLogs = useMemo(() => {
+    if (errorReasonFilter === 'all') return errorLogs;
+    return errorLogs.filter((log) => detectReason(log) === errorReasonFilter);
+  }, [errorLogs, errorReasonFilter]);
 
   const vacancyLogs = useMemo(() => {
     const groups = new Map<string, LogEntry[]>();
@@ -105,7 +145,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   const stats = useMemo(() => {
     const sourceSet = new Set(filteredLogs.map((log) => log.source));
-    const reasonCounts = new Map<string, number>();
+    const reasonCounts = new Map<Exclude<ErrorReason, 'all'>, number>();
 
     errorLogs.forEach((log) => {
       const reason = detectReason(log);
@@ -163,7 +203,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             <div className="logs-reason-list">
               {stats.topReasons.map(([reason, count]) => (
                 <div key={reason} className="logs-reason-item">
-                  <span className="logs-reason-badge">{reason}</span>
+                  <span className="logs-reason-badge">{REASON_LABELS[reason]}</span>
                   <strong>{count}</strong>
                 </div>
               ))}
@@ -196,28 +236,81 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   const renderErrors = () => (
     <div className="logs-tab-panel">
-      {errorLogs.length === 0 ? (
+      <div className="logs-errors-toolbar">
+        <div className="logs-errors-summary">
+          <div className="logs-errors-title">Проблемы откликов и остановок</div>
+          <div className="logs-errors-subtitle">
+            Показывает, почему отклик не дошёл до успеха или потребовал ручного разбора.
+          </div>
+        </div>
+        <div className="logs-reason-filters">
+          <button
+            className={`logs-filter-chip ${errorReasonFilter === 'all' ? 'logs-filter-chip-active' : ''}`}
+            onClick={() => setErrorReasonFilter('all')}
+          >
+            Все
+            <span className="logs-filter-chip-count">{errorLogs.length}</span>
+          </button>
+          {Array.from(errorReasonCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([reason, count]) => (
+              <button
+                key={reason}
+                className={`logs-filter-chip ${errorReasonFilter === reason ? 'logs-filter-chip-active' : ''}`}
+                onClick={() => setErrorReasonFilter(reason)}
+              >
+                {REASON_LABELS[reason]}
+                <span className="logs-filter-chip-count">{count}</span>
+              </button>
+            ))}
+        </div>
+      </div>
+      {filteredErrorLogs.length === 0 ? (
         <div className="logs-empty">Проблемные события не найдены</div>
       ) : (
         <div className="logs-event-list">
-          {errorLogs.slice().reverse().map((log, index) => (
-            <div key={`${log.timestamp}-${index}`} className="logs-event-item logs-event-item-danger">
-              <div className="logs-event-topline">
-                <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
-                <span className="logs-reason-badge">{detectReason(log)}</span>
-                <span className="logs-event-source">{log.source}</span>
-                <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
-              </div>
-              <div className="logs-event-message">{log.message}</div>
-              {log.context && (
-                <div className="logs-event-meta">
-                  {log.context.vacancyId && <span>vacancy: {String(log.context.vacancyId)}</span>}
-                  {log.context.profileId && <span>profile: {String(log.context.profileId)}</span>}
-                  {log.context.reasonCode && <span>reasonCode: {String(log.context.reasonCode)}</span>}
+          {filteredErrorLogs.slice().reverse().map((log, index) => {
+            const reason = detectReason(log);
+            const reasonLabel = REASON_LABELS[reason];
+            const vacancyId = log.context?.vacancyId;
+            const profileId = log.context?.profileId;
+            const reasonCode = log.context?.reasonCode;
+
+            return (
+              <div key={`${log.timestamp}-${index}`} className="logs-event-item logs-event-item-danger">
+                <div className="logs-error-priority-line">
+                  <span className="logs-error-priority">Разобрать</span>
+                  <span className="logs-error-hint">{reasonLabel}</span>
                 </div>
-              )}
-            </div>
-          ))}
+                <div className="logs-event-topline">
+                  <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
+                  <span className="logs-reason-badge">{reasonLabel}</span>
+                  <span className="logs-event-source">{log.source}</span>
+                  <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
+                </div>
+                <div className="logs-event-message">{log.message}</div>
+                <div className="logs-error-explanation">
+                  {reason === 'cover_letter' && 'Вакансия просит сопроводительное письмо или логика упёрлась в cover letter flow.'}
+                  {reason === 'questionnaire' && 'Отклик остановился на анкете работодателя. Нужен ручной проход.'}
+                  {reason === 'test' && 'Отклик требует тест. Автоматически не закрывается.'}
+                  {reason === 'captcha' && 'Появилась капча или проверка безопасности. Нужен ручной разбор.'}
+                  {reason === 'login' && 'Сессия протухла или произошёл редирект на авторизацию.'}
+                  {reason === 'external_apply' && 'Отклик ведёт на внешнюю форму, не на стандартный HH flow.'}
+                  {reason === 'timeout' && 'Ожидание ответа/страницы превысило лимит. Проверить сеть, HH или селекторы.'}
+                  {reason === 'manual_action' && 'Сценарий передан пользователю как manual action.'}
+                  {reason === 'error' && 'Техническая ошибка в шаге отклика. Нужен разбор контекста ниже.'}
+                  {reason === 'other' && 'Нестандартный проблемный кейс. Смотри сообщение и raw logs.'}
+                </div>
+                {log.context && (
+                  <div className="logs-event-meta">
+                    {vacancyId && <span>vacancy: {String(vacancyId)}</span>}
+                    {profileId && <span>profile: {String(profileId)}</span>}
+                    {reasonCode && <span>reasonCode: {String(reasonCode)}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
