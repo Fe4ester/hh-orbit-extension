@@ -63,6 +63,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [levelFilter, setLevelFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<LogsTab>('overview');
   const [errorReasonFilter, setErrorReasonFilter] = useState<ErrorReason>('all');
+  const [rawViewMode, setRawViewMode] = useState<'parsed' | 'stream'>('parsed');
 
   useEffect(() => {
     loadLogs();
@@ -409,10 +410,57 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   const renderRaw = () => (
     <div className="logs-tab-panel">
+      <div className="logs-errors-toolbar">
+        <div className="logs-errors-summary">
+          <div className="logs-errors-title">Raw / Debug</div>
+          <div className="logs-errors-subtitle">
+            Есть два режима: удобный просмотр по событиям и сырой поток логов без потерь.
+          </div>
+        </div>
+        <div className="logs-reason-filters">
+          <button
+            className={`logs-filter-chip ${rawViewMode === 'parsed' ? 'logs-filter-chip-active' : ''}`}
+            onClick={() => setRawViewMode('parsed')}
+          >
+            Parsed view
+          </button>
+          <button
+            className={`logs-filter-chip ${rawViewMode === 'stream' ? 'logs-filter-chip-active' : ''}`}
+            onClick={() => setRawViewMode('stream')}
+          >
+            Raw stream
+          </button>
+        </div>
+      </div>
       {filteredLogs.length === 0 ? (
         <div className="logs-empty">No logs found</div>
-      ) : (
+      ) : rawViewMode === 'stream' ? (
         <pre className="logs-stream">{formatLogsAsText()}</pre>
+      ) : (
+        <div className="logs-raw-list">
+          {filteredLogs.slice().reverse().slice(0, 80).map((log, index) => (
+            <details key={`${log.timestamp}-${index}`} className="logs-raw-item">
+              <summary className="logs-raw-summary">
+                <div className="logs-raw-summary-main">
+                  <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
+                  <span className="logs-event-source">{log.source}</span>
+                  <span className="logs-event-message">{log.message}</span>
+                </div>
+                <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
+              </summary>
+              <div className="logs-raw-body">
+                <div className="logs-raw-section">
+                  <div className="logs-raw-section-title">Message</div>
+                  <pre className="logs-raw-json">{log.message}</pre>
+                </div>
+                <div className="logs-raw-section">
+                  <div className="logs-raw-section-title">Context JSON</div>
+                  <pre className="logs-raw-json">{JSON.stringify(log.context || {}, null, 2)}</pre>
+                </div>
+              </div>
+            </details>
+          ))}
+        </div>
       )}
     </div>
   );
