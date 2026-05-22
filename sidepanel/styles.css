@@ -2083,6 +2083,128 @@
   min-width: 0;
 }
 
+.logs-vacancy-title-block,
+.logs-vacancy-status-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.logs-vacancy-title-block strong {
+  font-size: 15px;
+  color: #212529;
+}
+
+.logs-vacancy-status-block {
+  align-items: flex-end;
+}
+
+.logs-vacancy-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.logs-vacancy-status-success {
+  background: #d4edda;
+  color: #155724;
+}
+
+.logs-vacancy-status-warn {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.logs-vacancy-status-error {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.logs-vacancy-status-info {
+  background: #d1ecf1;
+  color: #0c5460;
+}
+
+.logs-vacancy-last-time {
+  font-size: 11px;
+  color: #6c757d;
+}
+
+.logs-vacancy-summary {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8f9fa;
+}
+
+.logs-vacancy-summary-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #495057;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.logs-vacancy-summary-message {
+  font-size: 13px;
+  color: #212529;
+  line-height: 1.4;
+}
+
+.logs-vacancy-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.logs-vacancy-timeline-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.logs-vacancy-timeline-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.logs-vacancy-timeline-dot-success {
+  background: #28a745;
+}
+
+.logs-vacancy-timeline-dot-warn {
+  background: #ffc107;
+}
+
+.logs-vacancy-timeline-dot-error {
+  background: #dc3545;
+}
+
+.logs-vacancy-timeline-dot-info {
+  background: #17a2b8;
+}
+
+.logs-vacancy-timeline-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.logs-vacancy-timeline-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
 .logs-level-badge {
   display: inline-flex;
   align-items: center;
@@ -2127,6 +2249,11 @@
   .logs-error-priority-line {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .logs-vacancy-header,
+  .logs-vacancy-status-block {
+    align-items: flex-start;
   }
 }
 

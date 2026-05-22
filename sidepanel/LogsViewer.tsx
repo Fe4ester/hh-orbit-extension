@@ -28,6 +28,34 @@ const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
   other: 'Другое',
 };
 
+const detectVacancyStage = (log: LogEntry): string => {
+  const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
+
+  if (haystack.includes('acquisition')) return 'Поиск';
+  if (haystack.includes('preflight')) return 'Preflight';
+  if (haystack.includes('validating vacancy') || haystack.includes('validate vacancy')) return 'Проверка';
+  if (haystack.includes('click') || haystack.includes('respond button')) return 'Клик';
+  if (haystack.includes('modal')) return 'Modal';
+  if (haystack.includes('cover letter')) return 'Cover letter';
+  if (haystack.includes('redirect')) return 'Redirect';
+  if (haystack.includes('success')) return 'Успех';
+  if (haystack.includes('manual action')) return 'Manual action';
+  if (haystack.includes('skip') || haystack.includes('skipped')) return 'Скип';
+  if (haystack.includes('fail') || haystack.includes('error')) return 'Ошибка';
+
+  return 'Событие';
+};
+
+const detectVacancyStatus = (log: LogEntry): 'success' | 'warn' | 'error' | 'info' => {
+  const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
+
+  if (log.level === 'error' || haystack.includes('failed') || haystack.includes('error')) return 'error';
+  if (log.level === 'warn' || haystack.includes('manual action') || haystack.includes('test') || haystack.includes('questionnaire')) return 'warn';
+  if (haystack.includes('success') || haystack.includes('processed: success') || haystack.includes('application sent')) return 'success';
+
+  return 'info';
+};
+
 export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -322,22 +350,58 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         <div className="logs-empty">Нет событий, привязанных к vacancyId</div>
       ) : (
         <div className="logs-vacancy-list">
-          {vacancyLogs.slice(0, 30).map(({ vacancyId, entries }) => (
-            <div key={vacancyId} className="logs-vacancy-card">
-              <div className="logs-vacancy-header">
-                <strong>Vacancy {vacancyId}</strong>
-                <span>{entries.length} events</span>
-              </div>
-              <div className="logs-vacancy-events">
-                {entries.slice(-5).reverse().map((log, index) => (
-                  <div key={`${log.timestamp}-${index}`} className="logs-vacancy-event">
-                    <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
-                    <span className="logs-vacancy-message">{log.message}</span>
+          {vacancyLogs.slice(0, 30).map(({ vacancyId, entries }) => {
+            const sortedEntries = [...entries].sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+            const latestEntry = sortedEntries[sortedEntries.length - 1];
+            const latestStatus = detectVacancyStatus(latestEntry);
+            const latestStage = detectVacancyStage(latestEntry);
+            const latestProfileId = latestEntry.context?.profileId;
+
+            return (
+              <div key={vacancyId} className="logs-vacancy-card">
+                <div className="logs-vacancy-header">
+                  <div className="logs-vacancy-title-block">
+                    <strong>Vacancy {vacancyId}</strong>
+                    <span>{entries.length} events</span>
+                    {latestProfileId && <span>profile: {String(latestProfileId)}</span>}
                   </div>
-                ))}
+                  <div className="logs-vacancy-status-block">
+                    <span className={`logs-vacancy-status logs-vacancy-status-${latestStatus}`}>{latestStage}</span>
+                    <span className="logs-vacancy-last-time">
+                      {new Date(latestEntry.timestamp).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="logs-vacancy-summary">
+                  <div className="logs-vacancy-summary-title">Последний итог</div>
+                  <div className="logs-vacancy-summary-message">{latestEntry.message}</div>
+                </div>
+
+                <div className="logs-vacancy-timeline">
+                  {sortedEntries.slice(-6).map((log, index) => {
+                    const stage = detectVacancyStage(log);
+                    const status = detectVacancyStatus(log);
+
+                    return (
+                      <div key={`${log.timestamp}-${index}`} className="logs-vacancy-timeline-item">
+                        <div className={`logs-vacancy-timeline-dot logs-vacancy-timeline-dot-${status}`} />
+                        <div className="logs-vacancy-timeline-content">
+                          <div className="logs-vacancy-timeline-top">
+                            <span className={`logs-vacancy-status logs-vacancy-status-${status}`}>{stage}</span>
+                            <span className="logs-vacancy-last-time">{new Date(log.timestamp).toLocaleString()}</span>
+                          </div>
+                          <div className="logs-vacancy-message">{log.message}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
