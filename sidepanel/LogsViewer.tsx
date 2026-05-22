@@ -197,9 +197,9 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   }, [errorLogs, filteredLogs, vacancyLogs]);
 
   const tabs: Array<{ id: LogsTab; label: string; count?: number }> = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'errors', label: 'Errors', count: errorLogs.length },
-    { id: 'vacancies', label: 'Vacancies', count: vacancyLogs.length },
+    { id: 'overview', label: 'Сводка' },
+    { id: 'errors', label: 'Ошибки', count: errorLogs.length },
+    { id: 'vacancies', label: 'Вакансии', count: vacancyLogs.length },
     { id: 'raw', label: 'Raw', count: filteredLogs.length },
   ];
 
@@ -423,13 +423,13 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             className={`logs-filter-chip ${rawViewMode === 'parsed' ? 'logs-filter-chip-active' : ''}`}
             onClick={() => setRawViewMode('parsed')}
           >
-            Parsed view
+            Удобный вид
           </button>
           <button
             className={`logs-filter-chip ${rawViewMode === 'stream' ? 'logs-filter-chip-active' : ''}`}
             onClick={() => setRawViewMode('stream')}
           >
-            Raw stream
+            Сырой поток
           </button>
         </div>
       </div>
@@ -502,15 +502,15 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     <div className="logs-viewer-overlay">
       <div className="logs-viewer-container">
         <div className="logs-viewer-header">
-          <h2>System Logs</h2>
-          <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
+          <h2>Логи системы</h2>
+          <button className="btn btn-secondary btn-sm" onClick={onClose}>Закрыть</button>
         </div>
 
         <div className="logs-viewer-controls">
           <input
             type="text"
             className="logs-search-input"
-            placeholder="Search logs..."
+            placeholder="Поиск по логам..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -519,21 +519,21 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             value={levelFilter}
             onChange={(e) => setLevelFilter(e.target.value)}
           >
-            <option value="all">All Levels</option>
+            <option value="all">Все уровни</option>
             <option value="debug">Debug</option>
             <option value="info">Info</option>
             <option value="warn">Warn</option>
             <option value="error">Error</option>
           </select>
-          <button className="btn btn-secondary btn-sm" onClick={loadLogs}>Refresh</button>
+          <button className="btn btn-secondary btn-sm" onClick={loadLogs}>Обновить</button>
           <button className="btn btn-primary btn-sm" onClick={handleCopyAll} disabled={filteredLogs.length === 0}>
-            Copy all
+            Скопировать всё
           </button>
           <button
             className={`btn btn-sm ${compactMode ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setCompactMode((value) => !value)}
           >
-            {compactMode ? 'Compact on' : 'Compact off'}
+            {compactMode ? 'Компактный вид: вкл' : 'Компактный вид: выкл'}
           </button>
           <div className="logs-count">{filteredLogs.length} / {logs.length} entries</div>
         </div>
