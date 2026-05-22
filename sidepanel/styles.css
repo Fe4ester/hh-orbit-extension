@@ -1856,6 +1856,10 @@
   padding: 16px 20px 20px;
 }
 
+.logs-tab-panel-compact {
+  padding: 12px 16px 16px;
+}
+
 .logs-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
