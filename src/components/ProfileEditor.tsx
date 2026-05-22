@@ -110,6 +110,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
             rows={4}
             placeholder="Шаблон сопроводительного письма..."
           />
+          <small className="form-hint" style={{ color: '#dc3545', fontWeight: 600 }}>
+            Отправляется только если вакансия сама запрашивает сопроводительное письмо.
+          </small>
         </div>
 
         <div className="form-group">
