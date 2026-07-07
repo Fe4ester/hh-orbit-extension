@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Profile, ResumeCandidate } from '../state/types';
 import { CreateProfilePayload, UpdateProfilePayload } from '../state/actions';
+import { formatResumeLabel } from './resumeLabel';
 
 interface ProfileEditorProps {
   profile?: Profile;
@@ -125,7 +126,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
             <option value="">Не привязано</option>
             {resumeCandidates.map((resume) => (
               <option key={resume.hash} value={resume.hash}>
-                {resume.title}
+                {formatResumeLabel(resume)}
               </option>
             ))}
           </select>

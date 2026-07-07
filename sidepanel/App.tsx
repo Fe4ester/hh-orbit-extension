@@ -10,6 +10,7 @@ import {
 import { RuntimeSettingsPanel } from '../src/components/RuntimeSettingsPanel';
 import { ManualActionsPanel } from '../src/components/ManualActionsPanel';
 import { ProfileEditor } from '../src/components/ProfileEditor';
+import { formatResumeLabel } from '../src/components/resumeLabel';
 import { LogsViewer } from './LogsViewer';
 import './styles.css';
 
@@ -142,7 +143,7 @@ export const App: React.FC = () => {
           >
             <option value="">Резюме не выбрано</option>
             {resumeVm.candidates.map((resume) => (
-              <option key={resume.hash} value={resume.hash}>{resume.title}</option>
+              <option key={resume.hash} value={resume.hash}>{formatResumeLabel(resume)}</option>
             ))}
           </select>
           <div style={{ marginTop: 10 }}>

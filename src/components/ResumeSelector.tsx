@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ResumeCandidate } from '../state/types';
+import { formatResumeLabel } from './resumeLabel';
 
 interface ResumeSelectorProps {
   candidates: ResumeCandidate[];
@@ -92,9 +93,7 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
         <option value="">Резюме не выбрано</option>
         {displayCandidates.map((resume) => (
           <option key={resume.hash} value={resume.hash}>
-            {resume.title}
-            {resume.isActive === false && ' (неактивно)'}
-            {resume.source === 'demo' && ' [DEMO]'}
+            {formatResumeLabel(resume)}
           </option>
         ))}
       </select>
