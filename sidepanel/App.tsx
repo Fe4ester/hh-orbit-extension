@@ -20,15 +20,8 @@ export const App: React.FC = () => {
   const [logsViewerOpen, setLogsViewerOpen] = useState(false);
 
   useEffect(() => {
-    console.log('[Sidepanel] Component mounted, setting up listeners');
-
     // Initial fetch
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
-      console.log('[Sidepanel] GET_STATE response', {
-        hasState: !!response?.state,
-        processed: response?.state?.runtime?.processed,
-        success: response?.state?.runtime?.success,
-      });
       if (response?.state) {
         setState(response.state);
       }
@@ -38,11 +31,6 @@ export const App: React.FC = () => {
     const pollInterval = setInterval(() => {
       chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
         if (response?.state) {
-          console.log('[Sidepanel] Poll update', {
-            processed: response.state.runtime.processed,
-            success: response.state.runtime.success,
-            manualActions: response.state.runtime.manualActions,
-          });
           setState(response.state);
         }
       });
@@ -50,14 +38,7 @@ export const App: React.FC = () => {
 
     // Message listener (for instant updates when available)
     const listener = (message: any) => {
-      console.log('[Sidepanel] Message received', { type: message.type });
-
       if (message.type === 'STATE_UPDATE') {
-        console.log('[Sidepanel] STATE_UPDATE', {
-          processed: message.state.runtime.processed,
-          success: message.state.runtime.success,
-          manualActions: message.state.runtime.manualActions,
-        });
         setState(message.state);
       }
     };
@@ -65,7 +46,6 @@ export const App: React.FC = () => {
     chrome.runtime.onMessage.addListener(listener);
 
     return () => {
-      console.log('[Sidepanel] Component unmounting');
       clearInterval(pollInterval);
       chrome.runtime.onMessage.removeListener(listener);
     };
@@ -74,13 +54,6 @@ export const App: React.FC = () => {
   if (!state) {
     return <div className="app loading"><div className="spinner">Загрузка...</div></div>;
   }
-
-  console.log('[Sidepanel] Rendering with state', {
-    processed: state?.runtime?.processed,
-    success: state?.runtime?.success,
-    manualActions: state?.runtime?.manualActions,
-    runtimeState: state?.runtimeState,
-  });
 
   const runtimeVm = getPrimaryRuntimeStatusViewModel(state);
   const resumeVm = getPrimaryResumeViewModel(state);
@@ -258,9 +231,9 @@ export const App: React.FC = () => {
         </section>
 
         <div style={{ textAlign: 'center', paddingTop: 8 }}>
-          <a className="logs-link" onClick={() => setLogsViewerOpen(true)}>
+          <button type="button" className="logs-link" onClick={() => setLogsViewerOpen(true)}>
             Logs
-          </a>
+          </button>
         </div>
       </main>
 

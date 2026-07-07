@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileLogger, LogEntry } from '../src/utils/fileLogger';
 
 type LogsTab = 'overview' | 'errors' | 'vacancies' | 'raw';
@@ -27,6 +27,21 @@ const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
   error: 'Ошибка выполнения',
   other: 'Другое',
 };
+
+const ERROR_KEYWORDS = [
+  'error',
+  'failed',
+  'timeout',
+  'login',
+  'captcha',
+  'auth',
+  'questionnaire',
+  'test required',
+  'test_required',
+  'manual action',
+  'cover letter',
+  'external apply',
+];
 
 const detectVacancyStage = (log: LogEntry): string => {
   const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
@@ -100,31 +115,16 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     return true;
   });
 
-  const errorKeywords = [
-    'error',
-    'failed',
-    'timeout',
-    'login',
-    'captcha',
-    'auth',
-    'questionnaire',
-    'test required',
-    'test_required',
-    'manual action',
-    'cover letter',
-    'external apply',
-  ];
-
-  const isErrorLike = (log: LogEntry): boolean => {
+  const isErrorLike = useCallback((log: LogEntry): boolean => {
     if (log.level === 'error' || log.level === 'warn') {
       return true;
     }
 
     const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-    return errorKeywords.some((keyword) => haystack.includes(keyword));
-  };
+    return ERROR_KEYWORDS.some((keyword) => haystack.includes(keyword));
+  }, []);
 
-  const detectReason = (log: LogEntry): Exclude<ErrorReason, 'all'> => {
+  const detectReason = useCallback((log: LogEntry): Exclude<ErrorReason, 'all'> => {
     const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
 
     if (haystack.includes('cover letter') || haystack.includes('сопровод')) return 'cover_letter';
@@ -137,9 +137,9 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     if (haystack.includes('manual action')) return 'manual_action';
 
     return log.level === 'error' ? 'error' : 'other';
-  };
+  }, []);
 
-  const errorLogs = useMemo(() => filteredLogs.filter(isErrorLike), [filteredLogs]);
+  const errorLogs = useMemo(() => filteredLogs.filter(isErrorLike), [filteredLogs, isErrorLike]);
 
   const errorReasonCounts = useMemo(() => {
     const counts = new Map<Exclude<ErrorReason, 'all'>, number>();
@@ -148,12 +148,12 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       counts.set(reason, (counts.get(reason) || 0) + 1);
     });
     return counts;
-  }, [errorLogs]);
+  }, [detectReason, errorLogs]);
 
   const filteredErrorLogs = useMemo(() => {
     if (errorReasonFilter === 'all') return errorLogs;
     return errorLogs.filter((log) => detectReason(log) === errorReasonFilter);
-  }, [errorLogs, errorReasonFilter]);
+  }, [detectReason, errorLogs, errorReasonFilter]);
 
   const vacancyLogs = useMemo(() => {
     const groups = new Map<string, LogEntry[]>();
@@ -194,7 +194,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       topReasons,
       recent: [...filteredLogs].slice(-8).reverse(),
     };
-  }, [errorLogs, filteredLogs, vacancyLogs]);
+  }, [detectReason, errorLogs, filteredLogs, vacancyLogs]);
 
   const tabs: Array<{ id: LogsTab; label: string; count?: number }> = [
     { id: 'overview', label: 'Сводка' },

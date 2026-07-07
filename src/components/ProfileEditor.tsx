@@ -67,8 +67,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
 
       <form onSubmit={handleSubmit}>
         <div className="form-group">
-          <label>Название профиля *</label>
+          <label htmlFor="profile-name">Название профиля *</label>
           <input
+            id="profile-name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -78,8 +79,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
         </div>
 
         <div className="form-group">
-          <label>Ключевые слова (включить)</label>
+          <label htmlFor="profile-keywords-include">Ключевые слова (включить)</label>
           <input
+            id="profile-keywords-include"
             type="text"
             value={keywordsInclude}
             onChange={(e) => setKeywordsInclude(e.target.value)}
@@ -91,8 +93,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
         </div>
 
         <div className="form-group">
-          <label>Ключевые слова (исключить)</label>
+          <label htmlFor="profile-keywords-exclude">Ключевые слова (исключить)</label>
           <input
+            id="profile-keywords-exclude"
             type="text"
             value={keywordsExclude}
             onChange={(e) => setKeywordsExclude(e.target.value)}
@@ -104,8 +107,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
         </div>
 
         <div className="form-group">
-          <label>Сопроводительное письмо</label>
+          <label htmlFor="profile-cover-letter">Сопроводительное письмо</label>
           <textarea
+            id="profile-cover-letter"
             value={coverLetter}
             onChange={(e) => setCoverLetter(e.target.value)}
             rows={4}
@@ -117,8 +121,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
         </div>
 
         <div className="form-group">
-          <label>Резюме по умолчанию для профиля</label>
+          <label htmlFor="profile-default-resume">Резюме по умолчанию для профиля</label>
           <select
+            id="profile-default-resume"
             value={selectedResumeHash}
             onChange={(e) => setSelectedResumeHash(e.target.value)}
             className="resume-select"
