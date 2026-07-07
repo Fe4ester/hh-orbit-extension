@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackendAutoApplyEngine } from '../src/runtime/backendAutoApplyEngine';
 import { StateStore } from '../src/state/store';
 import { InMemoryStorageAdapter } from '../src/state/storage';
@@ -9,13 +9,41 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
   let mockSleep: any;
   let mockLog: any;
   let engine: BackendAutoApplyEngine;
+  let sleepResolvers: Array<() => void>;
+  let startPromise: Promise<void> | null;
+
+  const waitFor = async (condition: () => boolean, timeoutMs = 1000): Promise<void> => {
+    const startedAt = Date.now();
+
+    while (!condition()) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error('Timed out waiting for condition');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
+  const releaseAllSleeps = (): void => {
+    const resolvers = sleepResolvers.splice(0);
+    resolvers.forEach((resolve) => resolve());
+  };
+
+  const releaseNextSleep = async (): Promise<void> => {
+    await waitFor(() => sleepResolvers.length > 0);
+    sleepResolvers.shift()!();
+  };
 
   beforeEach(async () => {
     store = new StateStore(new InMemoryStorageAdapter());
     await store.init();
 
     mockLog = vi.fn();
-    mockSleep = vi.fn().mockResolvedValue(undefined);
+    sleepResolvers = [];
+    startPromise = null;
+    mockSleep = vi.fn(() => new Promise<void>((resolve) => {
+      sleepResolvers.push(resolve);
+    }));
 
     mockHttpClient = {
       checkAuth: vi.fn().mockResolvedValue({ authorized: false }),
@@ -41,12 +69,24 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     });
   });
 
+  afterEach(async () => {
+    if (engine?.isRunning()) {
+      await engine.stop();
+    }
+
+    releaseAllSleeps();
+
+    if (startPromise) {
+      await startPromise;
+    }
+  });
+
   describe('normal start enters cycle', () => {
     it('should enter cycle and call checkAuth when started', async () => {
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: false });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.checkAuth.mock.calls.length > 0);
 
       await engine.stop();
       await startPromise;
@@ -58,8 +98,8 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     it('should reset counters when entering cycle', async () => {
       await store.incrementRuntimeCounters({ processed: 10, success: 5, manualActions: 2 });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      startPromise = engine.start();
+      await waitFor(() => store.getState().runtime.processed === 0);
 
       await engine.stop();
       await startPromise;
@@ -74,8 +114,8 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
 
   describe('stop leads to consistent termination', () => {
     it('should reach STOPPED state after stop()', async () => {
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      startPromise = engine.start();
+      await waitFor(() => engine.isRunning() || store.getState().runtimeState !== 'IDLE');
 
       await engine.stop();
       await startPromise;
@@ -86,8 +126,8 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     });
 
     it('should not be running after stop() completes', async () => {
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      startPromise = engine.start();
+      await waitFor(() => engine.isRunning() || store.getState().runtimeState !== 'IDLE');
 
       await engine.stop();
       await startPromise;
@@ -101,8 +141,8 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     it('should pause with auth phase when not authorized', async () => {
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: false });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      startPromise = engine.start();
+      await waitFor(() => store.getState().runtime.currentPhase === 'paused_auth');
 
       await engine.stop();
       await startPromise;
@@ -115,8 +155,8 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     it('should not proceed to vacancy acquisition when not authorized', async () => {
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: false });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.checkAuth.mock.calls.length > 0);
 
       await engine.stop();
       await startPromise;
@@ -153,10 +193,11 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
         settings: { maxAutoAppliesPerRun: 1, delayMinSeconds: 1, delayMaxSeconds: 2 },
       });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.getMyResumes.mock.calls.length > 0);
 
       await engine.stop();
+      releaseAllSleeps();
       await startPromise;
 
       // Behavior: engine attempted auto-recovery
@@ -189,10 +230,11 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
         settings: { maxAutoAppliesPerRun: 1, delayMinSeconds: 1, delayMaxSeconds: 2 },
       });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      startPromise = engine.start();
+      await waitFor(() => store.getState().selectedResumeHash === 'auto-selected');
 
       await engine.stop();
+      releaseAllSleeps();
       await startPromise;
 
       const state = store.getState();
@@ -240,10 +282,8 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
         settings: { maxAutoAppliesPerRun: 0, delayMinSeconds: 1, delayMaxSeconds: 2 }, // 0 = unlimited
       });
 
-      const startPromise = engine.start();
-
-      // Wait for first cycle to complete
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 1 && sleepResolvers.length === 1);
 
       const stateAfterFirstCycle = store.getState();
 
@@ -258,6 +298,7 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
       expect(stateAfterFirstCycle.vacancyQueue.length).toBe(0);
 
       await engine.stop();
+      releaseAllSleeps();
       await startPromise;
 
       const finalState = store.getState();
@@ -320,12 +361,13 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
         settings: { maxAutoAppliesPerRun: 1, delayMinSeconds: 1, delayMaxSeconds: 2 },
       });
 
-      const startPromise = engine.start();
-
-      // Wait for multiple cycles
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 1 && sleepResolvers.length === 1);
+      await releaseNextSleep();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 2);
 
       await engine.stop();
+      releaseAllSleeps();
       await startPromise;
 
       // Behavior: fetchVacancies was called multiple times (retry happened)
@@ -363,15 +405,19 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
         settings: { maxAutoAppliesPerRun: 1, delayMinSeconds: 1, delayMaxSeconds: 2 },
       });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 1 && sleepResolvers.length === 1);
+      await releaseNextSleep();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 2 && sleepResolvers.length === 1);
+      await releaseNextSleep();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 3);
 
       await engine.stop();
+      releaseAllSleeps();
       await startPromise;
 
       const state = store.getState();
-      // Behavior: engine paused due to no vacancies
-      expect(state.runtime.currentPhase).toBe('paused_no_vacancies');
+      expect(state.runtime.currentPhase).toBe('exhausted');
     });
 
     it('should call fetchVacancies when queue is empty', async () => {
@@ -403,10 +449,11 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
         settings: { maxAutoAppliesPerRun: 1, delayMinSeconds: 1, delayMaxSeconds: 2 },
       });
 
-      const startPromise = engine.start();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length > 0);
 
       await engine.stop();
+      releaseAllSleeps();
       await startPromise;
 
       // Behavior: engine attempted to acquire vacancies

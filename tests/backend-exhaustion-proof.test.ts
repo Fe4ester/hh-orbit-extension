@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackendAutoApplyEngine } from '../src/runtime/backendAutoApplyEngine';
 import { StateStore } from '../src/state/store';
 import { InMemoryStorageAdapter } from '../src/state/storage';
@@ -9,13 +9,56 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
   let mockSleep: any;
   let mockLog: any;
   let engine: BackendAutoApplyEngine;
+  let sleepResolvers: Array<() => void>;
+  let startPromise: Promise<void> | null;
+
+  const waitFor = async (condition: () => boolean, timeoutMs = 1000): Promise<void> => {
+    const startedAt = Date.now();
+
+    while (!condition()) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error('Timed out waiting for condition');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
+  const releaseAllSleeps = (): void => {
+    const resolvers = sleepResolvers.splice(0);
+    resolvers.forEach((resolve) => resolve());
+  };
+
+  const releaseNextSleep = async (): Promise<void> => {
+    await waitFor(() => sleepResolvers.length > 0);
+    sleepResolvers.shift()!();
+  };
+
+  const driveUntil = async (condition: () => boolean, maxReleases = 10): Promise<void> => {
+    for (let i = 0; i < maxReleases; i++) {
+      if (condition()) {
+        return;
+      }
+
+      await releaseNextSleep();
+      await waitFor(() => condition() || sleepResolvers.length > 0);
+    }
+
+    if (!condition()) {
+      throw new Error('Condition not reached after releasing controlled sleeps');
+    }
+  };
 
   beforeEach(async () => {
     store = new StateStore(new InMemoryStorageAdapter());
     await store.init();
 
     mockLog = vi.fn();
-    mockSleep = vi.fn().mockResolvedValue(undefined);
+    sleepResolvers = [];
+    startPromise = null;
+    mockSleep = vi.fn(() => new Promise<void>((resolve) => {
+      sleepResolvers.push(resolve);
+    }));
 
     mockHttpClient = {
       checkAuth: vi.fn().mockResolvedValue({ authorized: true }),
@@ -33,6 +76,18 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
       sleep: mockSleep,
       log: mockLog,
     });
+  });
+
+  afterEach(async () => {
+    if (engine?.isRunning()) {
+      await engine.stop();
+    }
+
+    releaseAllSleeps();
+
+    if (startPromise) {
+      await startPromise;
+    }
   });
 
   it('PROOF: backend advances through pages when API returns 0', async () => {
@@ -72,8 +127,12 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
       },
     });
 
-    const startPromise = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    startPromise = engine.start();
+    await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 1 && sleepResolvers.length === 1);
+    await releaseNextSleep();
+    await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 2 && sleepResolvers.length === 1);
+    await releaseNextSleep();
+    await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 3);
 
     // PROOF: fetchVacancies called multiple times with different pages
     expect(mockHttpClient.fetchVacancies).toHaveBeenCalledTimes(3);
@@ -88,6 +147,7 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
     expect(state.runtime.consecutiveEmptyPages).toBe(3);
 
     await engine.stop();
+    releaseAllSleeps();
     await startPromise;
   });
 
@@ -144,8 +204,8 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
       },
     });
 
-    const startPromise = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    startPromise = engine.start();
+    await driveUntil(() => store.getState().runtime.currentPhase === 'exhausted');
 
     // PROOF: Backend continued through multiple pages despite prefilter eliminating all
     expect(callCount).toBeGreaterThanOrEqual(5);
@@ -156,6 +216,7 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
     expect(state.runtime.currentPhase).toBe('exhausted');
 
     await engine.stop();
+    releaseAllSleeps();
     await startPromise;
   });
 
@@ -196,10 +257,11 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
     });
 
     // First run
-    const startPromise1 = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    startPromise = engine.start();
+    await driveUntil(() => store.getState().runtime.currentPhase === 'exhausted');
     await engine.stop();
-    await startPromise1;
+    releaseAllSleeps();
+    await startPromise;
 
     const stateAfterFirstRun = store.getState();
     expect(stateAfterFirstRun.runtime.currentPhase).toBe('exhausted');
@@ -207,13 +269,14 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
 
     // Reset and second run
     mockHttpClient.fetchVacancies.mockClear();
-    const startPromise2 = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    startPromise = engine.start();
+    await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length > 0);
 
     // PROOF: Pagination was reset - starts from page 0 again
     expect(mockHttpClient.fetchVacancies).toHaveBeenCalledWith(expect.anything(), 0);
 
     await engine.stop();
-    await startPromise2;
+    releaseAllSleeps();
+    await startPromise;
   });
 });
