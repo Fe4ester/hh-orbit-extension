@@ -77,8 +77,14 @@ export const App: React.FC = () => {
         <section className="section">
           <h2>Режим работы</h2>
           <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <label
+              htmlFor="mode-backend"
+              aria-label="Backend"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
               <input
+                id="mode-backend"
+                aria-label="Backend"
                 type="radio"
                 name="mode"
                 value="backend"
@@ -91,8 +97,14 @@ export const App: React.FC = () => {
                 <div style={{ fontSize: 12, color: '#666' }}>Скрытые вкладки, только счётчики</div>
               </div>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <label
+              htmlFor="mode-live"
+              aria-label="Live"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
               <input
+                id="mode-live"
+                aria-label="Live"
                 type="radio"
                 name="mode"
                 value="live"

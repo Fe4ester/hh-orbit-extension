@@ -80,6 +80,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [errorReasonFilter, setErrorReasonFilter] = useState<ErrorReason>('all');
   const [rawViewMode, setRawViewMode] = useState<'parsed' | 'stream'>('parsed');
   const [compactMode, setCompactMode] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     loadLogs();
@@ -87,11 +88,12 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   const loadLogs = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const allLogs = await FileLogger.readLogs();
       setLogs(allLogs);
-    } catch (error) {
-      console.error('Failed to load logs:', error);
+    } catch {
+      setLoadError('Не удалось загрузить логи');
     } finally {
       setLoading(false);
     }
@@ -485,8 +487,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const text = formatLogsAsText();
     try {
       await navigator.clipboard.writeText(text);
-    } catch (err) {
-      // Fallback for older browsers
+    } catch {
       const textarea = document.createElement('textarea');
       textarea.value = text;
       textarea.style.position = 'fixed';
@@ -554,6 +555,8 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         <div className="logs-viewer-content">
           {loading ? (
             <div className="logs-loading">Loading logs...</div>
+          ) : loadError ? (
+            <div className="logs-empty">{loadError}</div>
           ) : (
             <>
               {activeTab === 'overview' && renderOverview()}
