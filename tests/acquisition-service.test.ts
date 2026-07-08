@@ -124,6 +124,114 @@ describe('AcquisitionService', () => {
 
       expect(chrome.tabs.update).toHaveBeenCalled();
     });
+
+    it('accepts applicant vacancy search page when navigation is skipped', async () => {
+      const mockTabId = 321;
+      const html = '<html><body><div data-qa="vacancy-serp__vacancy"><a href="https://hh.ru/vacancy/321" data-qa="vacancy-serp__vacancy-title">Test vacancy</a></div></body></html>';
+
+      mockStore.getState.mockReturnValue({
+        liveMode: { controlledTabId: mockTabId },
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test',
+            keywordsInclude: [],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [],
+      });
+
+      vi.mocked(chrome.tabs.get).mockResolvedValue({
+        id: mockTabId,
+        status: 'complete',
+        url: 'https://hh.ru/applicant/vacancy_search?page=1',
+      } as any);
+      vi.mocked(chrome.tabs.sendMessage)
+        .mockResolvedValueOnce({ pong: true } as any)
+        .mockResolvedValueOnce({ html } as any);
+      mockStore.materializeVacanciesFromSearch.mockImplementation(async () => {
+        mockStore.getState.mockReturnValue({
+          liveMode: { controlledTabId: mockTabId },
+          profiles: {
+            prof1: {
+              id: 'prof1',
+              name: 'Test',
+              keywordsInclude: [],
+              keywordsExclude: [],
+              locations: [],
+              experience: [],
+              schedule: [],
+              employment: [],
+            },
+          },
+          vacancyQueue: [
+            { vacancyId: '321', status: 'discovered' },
+          ],
+        });
+      });
+
+      const result = await service.acquireForProfile('prof1', true);
+
+      expect(result.success).toBe(true);
+      expect(result.currentUrl).toContain('/applicant/vacancy_search');
+      expect(result.error).toBeUndefined();
+    });
+
+    it('reports only actually queued vacancies in newQueued', async () => {
+      const mockTabId = 654;
+      const html = `
+        <html><body>
+          <div data-qa="vacancy-serp__vacancy"><a href="https://hh.ru/vacancy/1001" data-qa="vacancy-serp__vacancy-title">First</a></div>
+          <div data-qa="vacancy-serp__vacancy"><a href="https://hh.ru/vacancy/1002" data-qa="vacancy-serp__vacancy-title">Second</a></div>
+        </body></html>
+      `;
+
+      let queueState = [{ vacancyId: 'existing', status: 'discovered' }];
+
+      mockStore.getState.mockImplementation(() => ({
+        liveMode: { controlledTabId: mockTabId },
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test',
+            keywordsInclude: [],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: queueState,
+      }));
+
+      vi.mocked(chrome.tabs.get).mockResolvedValue({
+        id: mockTabId,
+        status: 'complete',
+        url: 'https://hh.ru/search/vacancy?page=0',
+      } as any);
+      vi.mocked(chrome.tabs.sendMessage)
+        .mockResolvedValueOnce({ pong: true } as any)
+        .mockResolvedValueOnce({ html } as any);
+      mockStore.materializeVacanciesFromSearch.mockImplementation(async () => {
+        queueState = [
+          ...queueState,
+          { vacancyId: '1001', status: 'discovered' },
+        ];
+      });
+
+      const result = await service.acquireForProfile('prof1', true);
+
+      expect(result.success).toBe(true);
+      expect(result.cardsFound).toBe(2);
+      expect(result.newQueued).toBe(1);
+      expect(result.queueSizeAfter).toBe(2);
+    });
   });
 
 });

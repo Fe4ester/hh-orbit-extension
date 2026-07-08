@@ -296,7 +296,8 @@ export class BackendHTTPClient {
         return { canProceed: true };
       }
 
-      return { canProceed: true };
+      this.log('[BackendHTTP] preflightApply: unknown type, blocking', { type: data.type });
+      return { canProceed: false, reason: `unknown_preflight_type:${String(data.type)}` };
     } catch (error) {
       this.log('[BackendHTTP] preflightApply error', error);
       return { canProceed: false, reason: 'network_error' };

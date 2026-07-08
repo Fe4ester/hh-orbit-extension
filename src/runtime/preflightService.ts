@@ -208,15 +208,16 @@ export class PreflightService {
       };
     }
 
-    // Unknown type - считаем что можно попробовать
-    FileLogger.log('service_worker', 'warn', 'Preflight: unknown type, assuming can proceed', { type });
+    // Unknown type is not safe to treat as success: it can hide new blockers.
+    FileLogger.log('service_worker', 'warn', 'Preflight: unknown type, blocking apply', { type });
     return {
-      canProceed: true,
-      type: 'modal', // Assume modal to be safe
+      canProceed: false,
+      type: 'error',
       requiresCoverLetter: false,
       requiresRelocationConfirm: false,
       requiresTest: false,
       alreadyApplied: false,
+      error: `unknown_preflight_type:${String(type)}`,
       raw: data,
     };
   }
