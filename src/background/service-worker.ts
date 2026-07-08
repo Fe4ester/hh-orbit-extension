@@ -278,6 +278,16 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
       function detectResumeCandidates(doc: Document, url: string): ResumeCandidate[] {
         const candidates: ResumeCandidate[] = [];
 
+        function getNormalizedElementText(element: Element | null): string {
+          if (!element) {
+            return '';
+          }
+
+          const renderedText = 'innerText' in element ? (element as HTMLElement).innerText : '';
+          const text = renderedText || element.textContent || '';
+          return text.replace(/\s+/g, ' ').trim();
+        }
+
         const resumeCards = doc.querySelectorAll('[data-qa="resume-card"]');
         if (resumeCards.length > 0) {
           resumeCards.forEach((card) => {
@@ -287,7 +297,7 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
               const match = href?.match(/\/resume\/([a-f0-9]+)/);
               if (match) {
                 const hash = match[1];
-                const title = link.textContent?.trim() || 'Резюме';
+                const title = getNormalizedElementText(link) || 'Резюме';
                 candidates.push({
                   hash,
                   title,
@@ -304,7 +314,7 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
           if (match) {
             const hash = match[1];
             const titleEl = doc.querySelector('[data-qa="resume-title"]') || doc.querySelector('h1');
-            const title = titleEl?.textContent?.trim() || 'Резюме';
+            const title = getNormalizedElementText(titleEl) || 'Резюме';
             candidates.push({
               hash,
               title,
@@ -323,7 +333,7 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
             if (match && !seen.has(match[1])) {
               seen.add(match[1]);
               const hash = match[1];
-              const title = link.textContent?.trim() || 'Резюме';
+              const title = getNormalizedElementText(link) || 'Резюме';
               candidates.push({
                 hash,
                 title,
@@ -453,6 +463,16 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
 
         const candidates: ResumeCandidate[] = [];
 
+        function getNormalizedElementText(element: Element | null): string {
+          if (!element) {
+            return '';
+          }
+
+          const renderedText = 'innerText' in element ? (element as HTMLElement).innerText : '';
+          const text = renderedText || element.textContent || '';
+          return text.replace(/\s+/g, ' ').trim();
+        }
+
         // Try resume cards first
         const resumeCards = document.querySelectorAll('[data-qa="resume-card"]');
         if (resumeCards.length > 0) {
@@ -463,7 +483,7 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
               const match = href?.match(/\/resume\/([a-f0-9]+)/);
               if (match) {
                 const hash = match[1];
-                const title = link.textContent?.trim() || 'Резюме';
+                const title = getNormalizedElementText(link) || 'Резюме';
                 candidates.push({
                   hash,
                   title,
@@ -484,7 +504,7 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
             if (match && !seen.has(match[1])) {
               seen.add(match[1]);
               const hash = match[1];
-              const title = link.textContent?.trim() || 'Резюме';
+              const title = getNormalizedElementText(link) || 'Резюме';
               candidates.push({
                 hash,
                 title,

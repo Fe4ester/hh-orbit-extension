@@ -94,5 +94,38 @@ describe('resumeDetector', () => {
       expect(candidates[3].hash).toBe('test123');
       expect(candidates[3].isActive).toBe(false);
     });
+
+    it('keeps spaces in resume titles split across DOM nodes', () => {
+      const innerTextDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText');
+
+      Object.defineProperty(HTMLElement.prototype, 'innerText', {
+        configurable: true,
+        get() {
+          return this.getAttribute('data-inner-text') ?? this.textContent ?? '';
+        },
+      });
+
+      try {
+        const html = `
+          <div data-qa="resume-item">
+            <a href="/resume/abc123def456" data-qa="resume-title-link" data-inner-text="Senior Frontend Developer">
+              <span>Senior</span><span>Frontend</span><span>Developer</span>
+            </a>
+            <div data-qa="resume-status">Опубликовано</div>
+          </div>
+        `;
+
+        const candidates = detectResumeCandidates(html);
+
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0].title).toBe('Senior Frontend Developer');
+      } finally {
+        if (innerTextDescriptor) {
+          Object.defineProperty(HTMLElement.prototype, 'innerText', innerTextDescriptor);
+        } else {
+          delete (HTMLElement.prototype as { innerText?: string }).innerText;
+        }
+      }
+    });
   });
 });

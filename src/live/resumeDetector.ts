@@ -41,6 +41,16 @@ export function detectResumeCandidates(html: string, currentUrl?: string): Resum
   return result.candidates;
 }
 
+function getNormalizedElementText(element: Element | null): string {
+  if (!element) {
+    return '';
+  }
+
+  const renderedText = 'innerText' in element ? (element as HTMLElement).innerText : '';
+  const text = renderedText || element.textContent || '';
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /**
  * Detect resume candidates with debug metadata
  */
@@ -68,7 +78,7 @@ export function detectResumeCandidatesWithDebug(
 
       if (titleElement) {
         const href = titleElement.getAttribute('href');
-        const title = titleElement.textContent?.trim() || 'Без названия';
+        const title = getNormalizedElementText(titleElement) || 'Без названия';
 
         if (href) {
           const hash = extractResumeHash(href);
@@ -100,7 +110,7 @@ export function detectResumeCandidatesWithDebug(
       const hash = extractResumeHash(currentUrl);
       if (hash) {
         strategy = 'single_resume_page';
-        const title = resumeTitleElement.textContent?.trim() || 'Без названия';
+        const title = getNormalizedElementText(resumeTitleElement) || 'Без названия';
 
         // Check if published
         const statusElement = doc.querySelector('[data-qa="resume-status"]');
@@ -130,7 +140,7 @@ export function detectResumeCandidatesWithDebug(
         if (hash && !seen.has(hash)) {
           seen.add(hash);
 
-          const title = link.textContent?.trim() || 'Без названия';
+          const title = getNormalizedElementText(link) || 'Без названия';
 
           // Filter out noise: require meaningful title (>3 chars, not just hash)
           if (title.length > 3 && title !== hash) {
