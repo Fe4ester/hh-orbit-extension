@@ -10,7 +10,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
   return (
     <div className="runtime-settings-grid">
       <label htmlFor="runtime-delay-min">
-        Min delay (sec)
+        Мин. задержка (сек)
         <input
           id="runtime-delay-min"
           type="number"
@@ -20,7 +20,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
         />
       </label>
       <label htmlFor="runtime-delay-max">
-        Max delay (sec)
+        Макс. задержка (сек)
         <input
           id="runtime-delay-max"
           type="number"
@@ -30,7 +30,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
         />
       </label>
       <label htmlFor="runtime-limit-run">
-        Limit per run
+        Лимит за запуск
         <input
           id="runtime-limit-run"
           type="number"
@@ -42,7 +42,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
         <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
       </label>
       <label htmlFor="runtime-limit-day">
-        Limit per day
+        Лимит за день
         <input
           id="runtime-limit-day"
           type="number"
@@ -60,7 +60,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
           checked={settings.stopOnManualAction}
           onChange={(e) => onPatch({ stopOnManualAction: e.target.checked })}
         />
-        Stop on manual action
+        Остановить при ручном действии
       </label>
     </div>
   );
