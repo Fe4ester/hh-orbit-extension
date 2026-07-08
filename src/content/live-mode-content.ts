@@ -5,7 +5,6 @@
  * Получает команды от service worker через chrome.runtime.sendMessage
  */
 
-// Import DOM executors
 import { clickRespondButton, observePostClickState } from '../live/respondButtonExecutor';
 import { detectCoverLetterUI } from '../live/coverLetterExecutor';
 import { observePostSubmitState } from '../live/finalSubmitExecutor';
@@ -48,7 +47,6 @@ window.addEventListener('load', () => {
   }, 1000);
 });
 
-// Message listener
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   console.log('[LiveContent] Message received', { type: message.type });
   FileLogger.log('content_script', 'debug', 'Message received', { type: message.type });
@@ -1203,8 +1201,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
 
-      // FILL_ADVANCED_SEARCH_FORM: removed - dead code, message never sent
-
       default:
         // Not for us - let it pass to background
         return false;
@@ -1214,11 +1210,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ error: (error as Error).message });
   }
 
-  // Return true to indicate async response
   return true;
 });
 
-// Auto-close ONLY non-apply HH.ru modals (avoid closing apply modals)
 setInterval(() => {
   try {
     // Check both old bloko modals and new Magritte modals
@@ -1240,7 +1234,7 @@ setInterval(() => {
         modal.querySelector('textarea') ||
         modal.querySelector('[data-qa*="vacancy-response"]')
       ) {
-        return; // Don't close apply modals
+        return;
       }
 
       // Close non-apply modals (surveys, etc)
@@ -1252,7 +1246,7 @@ setInterval(() => {
         (closeBtn as HTMLElement).click();
       }
     });
-  } catch (error) {
+  } catch {
     // Ignore errors
   }
 }, 3000);
