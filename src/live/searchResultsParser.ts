@@ -112,6 +112,7 @@ export function parseSearchResults(html: string): ParsedVacancyCard[] {
           url,
           cardIndex: index,
         });
+        index++;
         continue;
       }
 

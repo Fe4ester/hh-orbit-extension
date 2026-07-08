@@ -87,7 +87,7 @@ export function extractResumeHash(url: string): string | null {
     const path = parsed.pathname;
 
     // Match /resume/{hash}
-    const match = path.match(/\/resume\/([a-f0-9]+)/);
+    const match = path.match(/\/resume\/([a-z0-9]+)/i);
     if (match && match[1]) {
       return match[1];
     }

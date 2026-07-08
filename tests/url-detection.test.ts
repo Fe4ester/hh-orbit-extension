@@ -81,6 +81,10 @@ describe('URL detection', () => {
       expect(extractResumeHash('https://hh.ru/resume/fedcba987654')).toBe('fedcba987654');
     });
 
+    it('should extract resume hash with non-hex letters', () => {
+      expect(extractResumeHash('https://hh.ru/resume/789xyz012abc')).toBe('789xyz012abc');
+    });
+
     it('should return null when no resume hash', () => {
       expect(extractResumeHash('https://hh.ru/vacancy/123')).toBeNull();
       expect(extractResumeHash('https://hh.ru/search/vacancy')).toBeNull();

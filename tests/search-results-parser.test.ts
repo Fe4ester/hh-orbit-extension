@@ -103,5 +103,22 @@ describe('searchResultsParser', () => {
       const cards = parseSearchResults('<div class="serp-item"></div>');
       expect(cards).toEqual([]);
     });
+
+    it('assigns unique cardIndex values in minimal fallback cards', () => {
+      const html = `
+        <div data-qa="vacancy-serp__vacancy">
+          <a href="/vacancy/300001" data-qa="vacancy-serp__vacancy-title">First fallback card</a>
+        </div>
+        <div data-qa="vacancy-serp__vacancy">
+          <a href="/vacancy/300002" data-qa="vacancy-serp__vacancy-title">Second fallback card</a>
+        </div>
+      `;
+
+      const cards = parseSearchResults(html);
+
+      expect(cards).toHaveLength(2);
+      expect(cards[0].cardIndex).toBe(0);
+      expect(cards[1].cardIndex).toBe(1);
+    });
   });
 });
