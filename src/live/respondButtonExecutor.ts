@@ -31,7 +31,7 @@ export function findRespondButton(doc: Document): HTMLElement | null {
   const buttons = Array.from(doc.querySelectorAll('button, a.bloko-button'));
   for (const btn of buttons) {
     const text = btn.textContent?.trim().toLowerCase() || '';
-    if (text.includes('откликнуться') || text.includes('откликнуться')) {
+    if (text.includes('откликнуться')) {
       return btn as HTMLElement;
     }
   }
