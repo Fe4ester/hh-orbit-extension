@@ -1,5 +1,3 @@
-// Profile selectors - single source of truth
-
 import {
   AppState,
   AttemptRecord,
@@ -11,8 +9,6 @@ import {
   RunStatus,
   VacancyScanState,
 } from './types';
-
-// Run selectors
 
 export interface RunViewModel {
   isRunning: boolean;
@@ -144,8 +140,6 @@ export function getActiveProfileSummary(state: AppState): ProfileSummary | null 
   return formatProfileSummary(profile);
 }
 
-// Resume selectors - single source of truth
-
 export function getResumeCandidates(state: AppState): ResumeCandidate[] {
   return state.resumeCandidates;
 }
@@ -175,8 +169,6 @@ export function isSelectedResumeAvailable(state: AppState): boolean {
   }
   return state.resumeCandidates.some((r) => r.hash === state.selectedResumeHash);
 }
-
-// Analytics selectors - single source of truth
 
 export interface AnalyticsStats {
   attemptsTotal: number;
@@ -261,8 +253,6 @@ export function getRecentAttempts(state: AppState, limit: number = 10): AttemptR
     .slice(0, limit);
 }
 
-// Vacancy scan selectors
-
 export function getVacancyScanState(state: AppState): VacancyScanState {
   return state.vacancyScan;
 }
@@ -284,8 +274,6 @@ export function getExhaustionReason(state: AppState): string | null {
 
   return reasons[state.vacancyScan.exhaustedReason] || state.vacancyScan.exhaustedReason;
 }
-
-// Live mode selectors
 
 export function getLiveModeState(state: AppState): LiveModeState {
   return state.liveMode;
@@ -356,8 +344,6 @@ export function getSearchLoopState(state: AppState) {
     iterations: state.liveMode.searchLoopIterations,
   };
 }
-
-// Session and runtime blocker selectors
 
 export function getSessionStatus(state: AppState): import('./types').SessionStatus {
   return state.sessionStatus;

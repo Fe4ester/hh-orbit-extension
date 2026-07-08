@@ -55,8 +55,6 @@ export class BackendHTTPClient {
       page: String(page),
     });
 
-    // Global search: only resume binding if available
-    // No profile filters in URL - filtering happens in-app
     const state = await chrome.storage.local.get('state');
     const resumeHash = state.state?.selectedResumeHash;
 
@@ -106,7 +104,6 @@ export class BackendHTTPClient {
         hasVacancyCards: html.includes('data-qa="vacancy-serp__vacancy"'),
       });
 
-      // Парсинг HTML
       const vacancies = this.parseVacanciesFromHTML(html);
 
       this.log('[BackendHTTP] fetchVacancies parsed', {
@@ -138,7 +135,6 @@ export class BackendHTTPClient {
   private parseVacanciesFromHTML(html: string): APIVacancy[] {
     const vacancies: APIVacancy[] = [];
 
-    // Split по карточкам вакансий
     const parts = html.split(/<div[^>]*data-qa="vacancy-serp__vacancy"[^>]*>/);
     const cards = parts.slice(1); // Первая часть — до карточек
 
@@ -146,21 +142,17 @@ export class BackendHTTPClient {
 
     for (const cardHtml of cards) {
       try {
-        // Extract ID
         const idMatch = cardHtml.match(/vacancy\/(\d+)/);
         if (!idMatch) continue;
 
         const id = idMatch[1];
 
-        // Extract title
         const titleMatch = cardHtml.match(/data-qa="serp-item__title"[^>]*>([\s\S]*?)<\/a>/);
         const name = titleMatch ? this.stripHtml(titleMatch[1]) : `Vacancy ${id}`;
 
-        // Extract company
         const companyMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-employer"[^>]*>([\s\S]*?)<\/a>/);
         const employerName = companyMatch ? this.stripHtml(companyMatch[1]) : 'Unknown';
 
-        // Extract URL
         const urlMatch = cardHtml.match(/href="([^"]*\/vacancy\/\d+[^"]*)"/);
         let alternate_url: string;
         if (urlMatch) {
@@ -170,7 +162,6 @@ export class BackendHTTPClient {
           alternate_url = `https://hh.ru/vacancy/${id}`;
         }
 
-        // Extract salary (optional)
         let salary: { from?: number; to?: number; currency: string } | undefined;
         const salaryMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-compensation"[^>]*>([\s\S]*?)<\/span>/);
         if (salaryMatch) {
@@ -178,7 +169,6 @@ export class BackendHTTPClient {
           salary = this.parseSalary(salaryText);
         }
 
-        // Extract area (optional)
         const areaMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-address"[^>]*>([\s\S]*?)<\/div>/);
         const areaName = areaMatch ? this.stripHtml(areaMatch[1]) : 'Unknown';
 
@@ -266,7 +256,6 @@ export class BackendHTTPClient {
 
       this.log('[BackendHTTP] preflightApply response', { status: response.status, ok: response.ok });
 
-      // Извлечь XSRF token из cookies через chrome.cookies API
       const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
       if (xsrfCookie?.value) {
         this.xsrfToken = xsrfCookie.value;
@@ -288,7 +277,6 @@ export class BackendHTTPClient {
       this.log('[BackendHTTP] preflightApply data', { type: data.type });
       this.log('[BackendHTTP] preflightApply FULL RESPONSE', { data: JSON.stringify(data) });
 
-      // Проверить preflight response
       if (data.type === 'alreadyApplied') {
         return { canProceed: false, alreadyApplied: true, reason: 'already_applied' };
       }
@@ -308,7 +296,6 @@ export class BackendHTTPClient {
         return { canProceed: true };
       }
 
-      // quickResponse или unknown — можно продолжать
       return { canProceed: true };
     } catch (error) {
       this.log('[BackendHTTP] preflightApply error', error);
@@ -326,7 +313,6 @@ export class BackendHTTPClient {
   ): Promise<ApplyResponse> {
     this.log('[BackendHTTP] applyToVacancy', { vacancyId, hasXsrf: !!this.xsrfToken });
 
-    // Построить body (form-data)
     const body = new URLSearchParams({
       resume_hash: context.resumeHash,
       vacancy_id: vacancyId,
@@ -341,7 +327,6 @@ export class BackendHTTPClient {
       body.append('cover_letter', coverLetter);
     }
 
-    // Headers
     const headers: Record<string, string> = {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
@@ -401,7 +386,6 @@ export class BackendHTTPClient {
 
       this.log('[BackendHTTP] applyToVacancy response body', { data: JSON.stringify(data).substring(0, 200) });
 
-      // Нормализовать response
       return this.normalizeApplyResponse(data);
     } catch (error) {
       this.log('[BackendHTTP] applyToVacancy error', error);
@@ -431,7 +415,6 @@ export class BackendHTTPClient {
       };
     }
 
-    // Already applied
     if (data.alreadyApplied === true || data.type === 'alreadyApplied') {
       return {
         success: false,
@@ -440,7 +423,6 @@ export class BackendHTTPClient {
       };
     }
 
-    // Test/questionnaire required
     if (data.responseStatus?.test?.hasTests === true) {
       return {
         success: false,
@@ -465,7 +447,6 @@ export class BackendHTTPClient {
       };
     }
 
-    // Unknown
     this.log('[BackendHTTP] Unknown response', data);
     return {
       success: false,
@@ -485,13 +466,11 @@ export class BackendHTTPClient {
     this.log('[BackendHTTP] checkAuth');
 
     try {
-      // Проверить наличие cookies через chrome.cookies API
       const hhtoken = await chrome.cookies.get({ url: 'https://hh.ru', name: 'hhtoken' });
       const xsrf = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
 
       this.log('[BackendHTTP] checkAuth cookies', { hasHhtoken: !!hhtoken, hasXsrf: !!xsrf });
 
-      // Если есть хотя бы один cookie — считаем авторизованным
       const authorized = !!(hhtoken || xsrf);
 
       this.log('[BackendHTTP] checkAuth result', { authorized });
@@ -541,13 +520,11 @@ export class BackendHTTPClient {
     }
   }
 
-  // Legacy methods for compatibility
   async searchVacancies(profile: Profile): Promise<any[]> {
     return this.fetchVacancies(profile);
   }
 
   async getVacancyDetail(_vacancyId: string): Promise<any | null> {
-    // Not needed for pure HTTP flow - preflight handles this
     return null;
   }
 

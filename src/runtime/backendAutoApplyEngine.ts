@@ -61,7 +61,6 @@ export class BackendAutoApplyEngine {
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
 
-        // Проверка лимита: 0 = без лимита
         if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
           FileLogger.log('service_worker', 'info', 'Run limit reached', {
             limit: state.settings.maxAutoAppliesPerRun,
@@ -158,7 +157,6 @@ export class BackendAutoApplyEngine {
   private async runCycle(): Promise<'ok' | 'blocked' | 'manual' | 'no_vacancies' | 'retry'> {
     FileLogger.log('service_worker', 'info', 'Cycle start');
 
-    // 1. Check session
     await this.deps.store.setRuntimePhase('session_check');
     this.notify('info', 'Проверка авторизации...');
 
@@ -172,7 +170,6 @@ export class BackendAutoApplyEngine {
 
     this.notify('success', 'Авторизация успешна');
 
-    // 2. Check resume
     await this.deps.store.setRuntimePhase('resume_check');
     this.notify('info', 'Проверка резюме...');
 
