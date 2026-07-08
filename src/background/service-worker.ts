@@ -1,6 +1,6 @@
 import { StateStore } from '../state/store';
 import { ExtensionStorageAdapter } from '../state/storage';
-import { HHPageType, RuntimeEvent } from '../state/types';
+import type { HHPageType, RuntimeEvent } from '../state/types';
 import { createDemoResumes } from '../state/actions';
 import {
   parseVacancyDetail,
