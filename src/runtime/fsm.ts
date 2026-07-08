@@ -1,5 +1,3 @@
-// Runtime FSM
-
 import { RuntimeState, RuntimeEvent } from '../state/types';
 
 type Transition = {

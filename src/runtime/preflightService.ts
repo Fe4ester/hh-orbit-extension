@@ -11,20 +11,16 @@ export interface PreflightResult {
   canProceed: boolean;
   type: 'quickResponse' | 'modal' | 'test-required' | 'alreadyApplied' | 'error';
 
-  // Модалки
   requiresCoverLetter: boolean;
   requiresRelocationConfirm: boolean;
 
-  // Блокеры
   requiresTest: boolean;
   alreadyApplied: boolean;
 
-  // Метаданные
   letterMaxLength?: number;
   relocationRegion?: string;
   error?: string;
 
-  // Raw response для отладки
   raw?: any;
 }
 
@@ -42,10 +38,8 @@ export class PreflightService {
     FileLogger.log('service_worker', 'info', 'Preflight check START', { vacancyId, resumeHash });
 
     try {
-      // Получить XSRF token
       await this.ensureXsrfToken();
 
-      // GET запрос
       const url = `https://hh.ru/applicant/vacancy_response/popup?vacancyId=${vacancyId}&resumeHash=${resumeHash}&lux=true`;
 
       const response = await fetch(url, {
@@ -86,7 +80,6 @@ export class PreflightService {
         rawType: data.type,
       });
 
-      // Парсинг ответа
       return this.parsePreflightResponse(data);
 
     } catch (error) {
@@ -112,7 +105,6 @@ export class PreflightService {
   private parsePreflightResponse(data: any): PreflightResult {
     const type = data.type;
 
-    // 1. Already applied
     if (type === 'alreadyApplied' || data.responseStatus?.alreadyApplied === true) {
       FileLogger.log('service_worker', 'info', 'Preflight: already applied');
       return {
@@ -126,7 +118,6 @@ export class PreflightService {
       };
     }
 
-    // 2. Test required
     if (type === 'test-required' || type === 'testRequired' || data.responseStatus?.test?.hasTests === true) {
       FileLogger.log('service_worker', 'info', 'Preflight: test required');
       return {
@@ -140,7 +131,6 @@ export class PreflightService {
       };
     }
 
-    // 3. Quick response (может быть БЕЗ модалок, но может быть с relocation warning!)
     if (type === 'quickResponse') {
       // ВАЖНО: quickResponse может иметь тесты! Проверяем responseStatus
       const hasTests = data.responseStatus?.test?.hasTests === true;
@@ -192,7 +182,6 @@ export class PreflightService {
       };
     }
 
-    // 4. Modal (может быть cover letter и/или relocation warning)
     if (type === 'modal') {
       const requiresCoverLetter = data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true;
       const requiresRelocationConfirm = data.relocationWarning?.show === true;
