@@ -1,6 +1,6 @@
 import { StateStore } from '../state/store';
 import { ExtensionStorageAdapter } from '../state/storage';
-import { RuntimeEvent } from '../state/types';
+import { HHPageType, RuntimeEvent } from '../state/types';
 import { createDemoResumes } from '../state/actions';
 import {
   parseVacancyDetail,
@@ -11,7 +11,6 @@ import {
   executeApplyPrechecked,
   classifyPostClickResult,
 } from '../live/applyExecutor';
-import { HHPageType } from '../state/types';
 import { BackendAutoApplyEngine } from '../runtime/backendAutoApplyEngine';
 import { LiveAutoApplyEngineV2 as LiveAutoApplyEngine } from '../runtime/liveAutoApplyEngineV2';
 import { AcquisitionService } from '../runtime/acquisitionService';
