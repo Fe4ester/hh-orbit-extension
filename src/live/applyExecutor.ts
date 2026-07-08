@@ -1,15 +1,15 @@
 // Browser-owned apply executor skeleton
 
-import { VacancyDetailObservation, PreflightClassification } from './vacancyDetailParser';
-import {
+import type { VacancyDetailObservation, PreflightClassification } from './vacancyDetailParser';
+import type {
   ClickExecutionObservation,
   PostClickObservation,
 } from './respondButtonExecutor';
-import {
+import type {
   CoverLetterUIObservation,
   FillCoverLetterResult,
 } from './coverLetterExecutor';
-import {
+import type {
   FinalSubmitClickObservation,
   PostSubmitObservation,
 } from './finalSubmitExecutor';

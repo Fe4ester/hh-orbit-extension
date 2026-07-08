@@ -1,6 +1,6 @@
 // HH.ru URL detection and parsing
 
-import { HHPageType } from '../state/types';
+import type { HHPageType } from '../state/types';
 
 export function isHHUrl(url: string): boolean {
   try {

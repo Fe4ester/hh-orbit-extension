@@ -1,6 +1,6 @@
 // Resume detection from HH pages
 
-import { ResumeCandidate } from '../state/types';
+import type { ResumeCandidate } from '../state/types';
 
 export interface ResumeDetectionDebug {
   strategy: 'resumes_list' | 'single_resume_page' | 'resume_links_fallback' | 'no_match';
