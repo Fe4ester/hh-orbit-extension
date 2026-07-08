@@ -1,6 +1,16 @@
 // Profile selectors - single source of truth
 
-import { AppState, Profile, RunStatus, RunStage } from './types';
+import {
+  AppState,
+  AttemptRecord,
+  HHPageType,
+  LiveModeState,
+  Profile,
+  ResumeCandidate,
+  RunStage,
+  RunStatus,
+  VacancyScanState,
+} from './types';
 
 // Run selectors
 
@@ -136,8 +146,6 @@ export function getActiveProfileSummary(state: AppState): ProfileSummary | null 
 
 // Resume selectors - single source of truth
 
-import { ResumeCandidate } from './types';
-
 export function getResumeCandidates(state: AppState): ResumeCandidate[] {
   return state.resumeCandidates;
 }
@@ -169,8 +177,6 @@ export function isSelectedResumeAvailable(state: AppState): boolean {
 }
 
 // Analytics selectors - single source of truth
-
-import { AttemptRecord } from './types';
 
 export interface AnalyticsStats {
   attemptsTotal: number;
@@ -257,8 +263,6 @@ export function getRecentAttempts(state: AppState, limit: number = 10): AttemptR
 
 // Vacancy scan selectors
 
-import { VacancyScanState } from './types';
-
 export function getVacancyScanState(state: AppState): VacancyScanState {
   return state.vacancyScan;
 }
@@ -282,8 +286,6 @@ export function getExhaustionReason(state: AppState): string | null {
 }
 
 // Live mode selectors
-
-import { LiveModeState, HHPageType } from './types';
 
 export function getLiveModeState(state: AppState): LiveModeState {
   return state.liveMode;

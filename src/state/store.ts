@@ -1,6 +1,12 @@
 // Central state store
 
-import { AppState, RuntimeEvent, ResumeCandidate } from './types';
+import {
+  AppState,
+  LocalApplyAttempt,
+  Profile,
+  ResumeCandidate,
+  RuntimeEvent,
+} from './types';
 import { StorageAdapter } from './storage';
 import { RuntimeFSM } from '../runtime/fsm';
 import { NotificationManager } from '../notifications/manager';
@@ -44,7 +50,6 @@ import {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';
-import { LocalApplyAttempt } from './types';
 
 export class StateStore {
   private state: AppState | null = null;
@@ -65,7 +70,7 @@ export class StateStore {
     // First init / empty profiles -> seed defaults
     if (!this.state.profileOrder || this.state.profileOrder.length === 0) {
       const defaults = createDefaultProfiles();
-      const profiles = defaults.reduce<Record<string, import('./types').Profile>>((acc, profile) => {
+      const profiles = defaults.reduce<Record<string, Profile>>((acc, profile) => {
         acc[profile.id] = profile;
         return acc;
       }, {});

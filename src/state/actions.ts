@@ -1,6 +1,14 @@
 // Profile actions
 
-import { Profile } from './types';
+import {
+  AnalyticsEvent,
+  AttemptOutcome,
+  AttemptRecord,
+  LocalApplyAttempt,
+  Profile,
+  ResumeCandidate,
+  VacancyQueueItem,
+} from './types';
 import { FileLogger } from '../utils/fileLogger';
 
 export const DEFAULT_PROFILE_PRESETS: Array<Omit<CreateProfilePayload, 'selectedResumeHash'> & { name: string }> = [
@@ -101,8 +109,6 @@ export function createDefaultProfiles(now: number = Date.now()): Profile[] {
 }
 
 // Resume actions
-
-import { ResumeCandidate, AttemptRecord, AnalyticsEvent, AttemptOutcome } from './types';
 
 export function createDemoResumes(): ResumeCandidate[] {
   const now = Date.now();
@@ -535,7 +541,6 @@ export function clearPreflightState(
 // Vacancy queue actions
 
 import { ParsedVacancyCard } from '../live/searchResultsParser';
-import { VacancyQueueItem } from './types';
 
 export function materializeVacanciesFromSearch(
   currentQueue: VacancyQueueItem[],
@@ -647,8 +652,6 @@ export function markVacancySkipped(
 }
 
 // Apply attempt actions
-
-import { LocalApplyAttempt } from './types';
 
 export function recordLocalApplyAttempt(
   currentAttempts: LocalApplyAttempt[],
