@@ -27,14 +27,12 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
 
   const totalPages = Math.ceil(actions.length / ITEMS_PER_PAGE);
 
-  // Ensure currentPage is valid before rendering
   const validCurrentPage = totalPages > 0 ? Math.min(currentPage, totalPages - 1) : 0;
 
   const startIndex = validCurrentPage * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const currentActions = actions.slice(startIndex, endIndex);
 
-  // Reset to valid page when actions change
   useEffect(() => {
     if (actions.length > 0 && validCurrentPage !== currentPage) {
       setCurrentPage(validCurrentPage);
@@ -61,9 +59,28 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
             <small>{action.company} · {action.type}</small>
           </div>
           <div className="manual-actions-buttons">
-            <button className="btn btn-secondary btn-sm" onClick={() => onOpen(action.url)} disabled={!action.url}>Open</button>
-            <button className="btn btn-primary btn-sm" onClick={() => onDone(action.id)}>Done</button>
-            <button className="btn btn-danger btn-sm" onClick={() => onDismiss(action.id)}>Dismiss</button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => onOpen(action.url)}
+              disabled={!action.url}
+            >
+              Open
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => onDone(action.id)}
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => onDismiss(action.id)}
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       ))}
@@ -71,6 +88,7 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
       {totalPages > 1 && (
         <div className="pagination-controls">
           <button
+            type="button"
             className="btn btn-secondary btn-sm"
             onClick={handlePrevPage}
             disabled={currentPage === 0}
@@ -81,6 +99,7 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
             Page {currentPage + 1} of {totalPages}
           </span>
           <button
+            type="button"
             className="btn btn-secondary btn-sm"
             onClick={handleNextPage}
             disabled={currentPage >= totalPages - 1}

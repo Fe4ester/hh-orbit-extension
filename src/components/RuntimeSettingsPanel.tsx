@@ -9,27 +9,30 @@ interface RuntimeSettingsPanelProps {
 export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ settings, onPatch }) => {
   return (
     <div className="runtime-settings-grid">
-      <label>
+      <label htmlFor="runtime-delay-min">
         Min delay (sec)
         <input
+          id="runtime-delay-min"
           type="number"
           min={1}
           value={settings.delayMinSeconds}
           onChange={(e) => onPatch({ delayMinSeconds: Number(e.target.value) })}
         />
       </label>
-      <label>
+      <label htmlFor="runtime-delay-max">
         Max delay (sec)
         <input
+          id="runtime-delay-max"
           type="number"
           min={1}
           value={settings.delayMaxSeconds}
           onChange={(e) => onPatch({ delayMaxSeconds: Number(e.target.value) })}
         />
       </label>
-      <label>
+      <label htmlFor="runtime-limit-run">
         Limit per run
         <input
+          id="runtime-limit-run"
           type="number"
           min={0}
           value={settings.maxAutoAppliesPerRun}
@@ -38,9 +41,10 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
         />
         <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
       </label>
-      <label>
+      <label htmlFor="runtime-limit-day">
         Limit per day
         <input
+          id="runtime-limit-day"
           type="number"
           min={0}
           value={settings.maxAutoAppliesPerDay}
@@ -49,8 +53,9 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
         />
         <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
       </label>
-      <label className="checkbox-row">
+      <label htmlFor="runtime-stop-manual" className="checkbox-row">
         <input
+          id="runtime-stop-manual"
           type="checkbox"
           checked={settings.stopOnManualAction}
           onChange={(e) => onPatch({ stopOnManualAction: e.target.checked })}
