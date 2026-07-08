@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AppState, AutoApplyMode } from '../src/state/types';
+import type { AppState, AutoApplyMode } from '../src/state/types';
 import {
   getPrimaryControlsState,
   getPrimaryProfileViewModel,
@@ -20,14 +20,12 @@ export const App: React.FC = () => {
   const [logsViewerOpen, setLogsViewerOpen] = useState(false);
 
   useEffect(() => {
-    // Initial fetch
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
       if (response?.state) {
         setState(response.state);
       }
     });
 
-    // Polling every 500ms for real-time updates
     const pollInterval = setInterval(() => {
       chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
         if (response?.state) {
@@ -36,7 +34,6 @@ export const App: React.FC = () => {
       });
     }, 500);
 
-    // Message listener (for instant updates when available)
     const listener = (message: any) => {
       if (message.type === 'STATE_UPDATE') {
         setState(message.state);

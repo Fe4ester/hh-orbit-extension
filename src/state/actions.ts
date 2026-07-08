@@ -1,4 +1,4 @@
-import {
+import type {
   AnalyticsEvent,
   AttemptOutcome,
   AttemptRecord,
@@ -487,7 +487,7 @@ export function markSearchError(
   };
 }
 
-import {
+import type {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';
@@ -522,7 +522,7 @@ export function clearPreflightState(
   };
 }
 
-import { ParsedVacancyCard } from '../live/searchResultsParser';
+import type { ParsedVacancyCard } from '../live/searchResultsParser';
 
 export function materializeVacanciesFromSearch(
   currentQueue: VacancyQueueItem[],

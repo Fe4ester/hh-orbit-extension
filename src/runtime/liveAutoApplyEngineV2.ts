@@ -4,12 +4,13 @@
  * Production-grade architecture with state machine, retry logic, and clear error handling.
  */
 
-import { StateStore } from '../state/store';
-import { AcquisitionService } from './acquisitionService';
+import type { StateStore } from '../state/store';
+import type { AcquisitionService } from './acquisitionService';
 import { FileLogger } from '../utils/fileLogger';
-import { VacancyQueueItem } from '../state/types';
+import type { VacancyQueueItem } from '../state/types';
 import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
-import { PreflightService, PreflightResult } from './preflightService';
+import { PreflightService } from './preflightService';
+import type { PreflightResult } from './preflightService';
 import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
 
 // State machine states

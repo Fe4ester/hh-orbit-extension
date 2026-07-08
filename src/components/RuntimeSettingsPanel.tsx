@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppState } from '../state/types';
+import type { AppState } from '../state/types';
 
 interface RuntimeSettingsPanelProps {
   settings: AppState['settings'];

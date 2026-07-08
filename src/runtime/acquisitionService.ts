@@ -5,7 +5,7 @@
  * Returns structured result, not side effects.
  */
 
-import { StateStore } from '../state/store';
+import type { StateStore } from '../state/store';
 import { parseSearchResults } from '../live/searchResultsParser';
 import { FileLogger } from '../utils/fileLogger';
 import { sendMessageWithTimeout } from '../utils/messageWithTimeout';

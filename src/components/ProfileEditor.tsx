@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Profile, ResumeCandidate } from '../state/types';
-import { CreateProfilePayload, UpdateProfilePayload } from '../state/actions';
+import type { Profile, ResumeCandidate } from '../state/types';
+import type { CreateProfilePayload, UpdateProfilePayload } from '../state/actions';
 import { formatResumeLabel } from './resumeLabel';
 
 interface ProfileEditorProps {
@@ -47,13 +47,11 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
     };
 
     if (profile) {
-      // Update mode
       onUpdate({
         name: name.trim(),
         ...commonFields,
       });
     } else {
-      // Create mode
       onSave({
         name: name.trim(),
         ...commonFields,

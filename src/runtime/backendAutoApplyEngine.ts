@@ -5,8 +5,8 @@
  * Uses BackendHTTPClient for all operations.
  */
 
-import { StateStore } from '../state/store';
-import { BackendHTTPClient } from './backendHTTPClient';
+import type { StateStore } from '../state/store';
+import type { BackendHTTPClient } from './backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
 
 export interface BackendEngineDeps {

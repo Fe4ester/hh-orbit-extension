@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileLogger, LogEntry } from '../src/utils/fileLogger';
+import { FileLogger } from '../src/utils/fileLogger';
+import type { LogEntry } from '../src/utils/fileLogger';
 
 type LogsTab = 'overview' | 'errors' | 'vacancies' | 'raw';
 type ErrorReason =

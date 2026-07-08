@@ -1,4 +1,5 @@
-import { AppState, INITIAL_STATE } from './types';
+import { INITIAL_STATE } from './types';
+import type { AppState } from './types';
 
 export interface StorageAdapter {
   get(): Promise<AppState>;

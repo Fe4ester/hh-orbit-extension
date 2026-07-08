@@ -1,5 +1,5 @@
 import React from 'react';
-import { Notification } from '../state/types';
+import type { Notification } from '../state/types';
 
 interface NotificationListProps {
   notifications: Notification[];

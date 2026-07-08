@@ -1,4 +1,4 @@
-import { ResumeCandidate } from '../state/types';
+import type { ResumeCandidate } from '../state/types';
 
 export function formatResumeLabel(resume: ResumeCandidate): string {
   return [

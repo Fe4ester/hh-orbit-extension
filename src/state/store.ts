@@ -1,13 +1,11 @@
-// Central state store
-
-import {
+import type {
   AppState,
   LocalApplyAttempt,
   Profile,
   ResumeCandidate,
   RuntimeEvent,
 } from './types';
-import { StorageAdapter } from './storage';
+import type { StorageAdapter } from './storage';
 import { RuntimeFSM } from '../runtime/fsm';
 import { NotificationManager } from '../notifications/manager';
 import { FileLogger } from '../utils/fileLogger';
@@ -16,8 +14,6 @@ import {
   createDefaultProfiles,
   updateProfile as updateProfileHelper,
   duplicateProfile as duplicateProfileHelper,
-  CreateProfilePayload,
-  UpdateProfilePayload,
   recordAttemptOutcome,
   recordAnalyticsEvent,
   seedDemoAnalytics,
@@ -45,8 +41,9 @@ import {
   recordLocalApplyAttempt as recordLocalApplyAttemptHelper,
   clearApplyAttempts as clearApplyAttemptsHelper,
 } from './actions';
-import { ParsedVacancyCard } from '../live/searchResultsParser';
-import {
+import type { CreateProfilePayload, UpdateProfilePayload } from './actions';
+import type { ParsedVacancyCard } from '../live/searchResultsParser';
+import type {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';

@@ -5,7 +5,7 @@
  * Uses browser cookies for authentication.
  */
 
-import { Profile } from '../state/types';
+import type { Profile } from '../state/types';
 
 export interface APIVacancy {
   id: string;

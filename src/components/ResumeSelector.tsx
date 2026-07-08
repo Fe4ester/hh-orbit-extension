@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ResumeCandidate } from '../state/types';
+import type { ResumeCandidate } from '../state/types';
 import { formatResumeLabel } from './resumeLabel';
 
 interface ResumeSelectorProps {
@@ -50,7 +50,6 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
   const demoCount = candidates.filter((c) => c.source === 'demo').length;
   const hhCount = candidates.filter((c) => c.source === 'hh_detected').length;
 
-  // Filter: prefer hh_detected in production view
   const productionCandidates = candidates.filter((c) => c.source === 'hh_detected');
   const displayCandidates = productionCandidates.length > 0 ? productionCandidates : candidates;
 
