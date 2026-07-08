@@ -122,7 +122,6 @@ export class AcquisitionService {
         };
       }
 
-      // Ping content script to verify it's loaded
       FileLogger.log('service_worker', 'debug', 'Acquisition content script check', { tabId: controlledTabId });
 
       let contentScriptReady = false;
@@ -132,7 +131,7 @@ export class AcquisitionService {
           FileLogger.log('service_worker', 'debug', 'Content script ready', { tabId: controlledTabId, attempt: attempt + 1 });
           contentScriptReady = true;
           break;
-        } catch (error) {
+        } catch {
           FileLogger.log('service_worker', 'debug', 'Content script not responding', { attempt: attempt + 1 });
           await new Promise(resolve => setTimeout(resolve, 1000));
         }

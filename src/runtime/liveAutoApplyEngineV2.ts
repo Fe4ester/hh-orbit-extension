@@ -785,14 +785,13 @@ export class LiveAutoApplyEngineV2 {
       if (preflight.requiresTest) {
         context.state = 'manual_action';
 
-        // Scroll to vacancy even if skipping (для визуальной обратной связи)
         try {
           await sendMessageWithTimeout(tabId, {
             type: 'SCROLL_TO_VACANCY',
             vacancyId: vacancy.vacancyId,
           }, 3000);
           await this.deps.sleep(500); // Дать время на скролл
-        } catch (error) {
+        } catch {
           // Ignore scroll errors
         }
 
@@ -1354,10 +1353,9 @@ export class LiveAutoApplyEngineV2 {
         error: (error as Error).message,
       });
 
-      // Try to go back anyway
       try {
         await this.returnToSearchPage(tabId);
-      } catch (e) {
+      } catch {
         // ignore
       }
 
@@ -1405,7 +1403,7 @@ export class LiveAutoApplyEngineV2 {
           });
           return { success: true, tabId: tab.id };
         }
-      } catch (error) {
+      } catch {
         // Tab not found, continue to create new one
       }
     }
