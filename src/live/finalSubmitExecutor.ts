@@ -32,8 +32,8 @@ export function findFinalSubmitButton(doc: Document): HTMLElement | null {
     if (submitInModal) return submitInModal as HTMLElement;
   }
 
-  const anySubmit = doc.querySelector('button[type="submit"]');
-  return anySubmit as HTMLElement | null;
+  const submitButtons = Array.from(doc.querySelectorAll('button[type="submit"]')) as HTMLElement[];
+  return submitButtons.find((button) => button.textContent?.toLowerCase().includes('отправ')) || null;
 }
 
 /**
@@ -131,6 +131,7 @@ export function observePostSubmitState(doc: Document): PostSubmitObservation {
     alreadyAppliedVisible ||
     loginRequiredVisible ||
     questionnaireVisible ||
+    coverLetterStillVisible ||
     errorVisible
   );
 
