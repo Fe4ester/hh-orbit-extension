@@ -33,6 +33,15 @@ export interface ApplyResponse {
   error?: string;
 }
 
+function hasQuickResponseQuestionnaireBlocker(data: any): boolean {
+  return (
+    data.responseStatus?.questionnaireRequired === true ||
+    data.responseStatus?.questionnaire?.hasQuestions === true ||
+    data.responseStatus?.questionnaire?.required === true ||
+    data.questionnaireRequired === true
+  );
+}
+
 export class BackendHTTPClient {
   private baseURL = 'https://api.hh.ru';
   private popupURL = 'https://hh.ru/applicant/vacancy_response/popup';
@@ -287,6 +296,19 @@ export class BackendHTTPClient {
 
       if (data.type === 'questionnaireRequired') {
         return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
+      }
+
+      if (data.type === 'quickResponse') {
+        if (data.responseStatus?.test?.hasTests === true) {
+          return { canProceed: false, requiresTest: true, reason: 'test_required' };
+        }
+
+        if (hasQuickResponseQuestionnaireBlocker(data)) {
+          return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
+        }
+
+        this.log('[BackendHTTP] preflightApply: quickResponse type, proceeding');
+        return { canProceed: true };
       }
 
       if (data.type === 'modal') {
