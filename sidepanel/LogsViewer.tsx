@@ -1,20 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileLogger } from '../src/utils/fileLogger';
 import type { LogEntry } from '../src/utils/fileLogger';
+import {
+  classifyLogProblem,
+  detectReason,
+  detectVacancyStatus,
+  type ErrorReason,
+} from './logClassification';
 
 type LogsTab = 'overview' | 'errors' | 'vacancies' | 'raw';
-type ErrorReason =
-  | 'all'
-  | 'cover_letter'
-  | 'questionnaire'
-  | 'test'
-  | 'captcha'
-  | 'login'
-  | 'external_apply'
-  | 'timeout'
-  | 'manual_action'
-  | 'error'
-  | 'other';
 
 const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
   cover_letter: 'Нужно сопроводительное',
@@ -28,21 +22,6 @@ const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
   error: 'Ошибка выполнения',
   other: 'Другое',
 };
-
-const ERROR_KEYWORDS = [
-  'error',
-  'failed',
-  'timeout',
-  'login',
-  'captcha',
-  'auth',
-  'questionnaire',
-  'test required',
-  'test_required',
-  'manual action',
-  'cover letter',
-  'external apply',
-];
 
 const detectVacancyStage = (log: LogEntry): string => {
   const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
@@ -60,16 +39,6 @@ const detectVacancyStage = (log: LogEntry): string => {
   if (haystack.includes('fail') || haystack.includes('error')) return 'Ошибка';
 
   return 'Событие';
-};
-
-const detectVacancyStatus = (log: LogEntry): 'success' | 'warn' | 'error' | 'info' => {
-  const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-
-  if (log.level === 'error' || haystack.includes('failed') || haystack.includes('error')) return 'error';
-  if (log.level === 'warn' || haystack.includes('manual action') || haystack.includes('test') || haystack.includes('questionnaire')) return 'warn';
-  if (haystack.includes('success') || haystack.includes('processed: success') || haystack.includes('application sent')) return 'success';
-
-  return 'info';
 };
 
 export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
@@ -118,27 +87,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   });
 
   const isErrorLike = useCallback((log: LogEntry): boolean => {
-    if (log.level === 'error' || log.level === 'warn') {
-      return true;
-    }
-
-    const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-    return ERROR_KEYWORDS.some((keyword) => haystack.includes(keyword));
-  }, []);
-
-  const detectReason = useCallback((log: LogEntry): Exclude<ErrorReason, 'all'> => {
-    const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-
-    if (haystack.includes('cover letter') || haystack.includes('сопровод')) return 'cover_letter';
-    if (haystack.includes('questionnaire') || haystack.includes('анкет')) return 'questionnaire';
-    if (haystack.includes('test required') || haystack.includes('test_required') || haystack.includes('тест')) return 'test';
-    if (haystack.includes('captcha') || haystack.includes('капч')) return 'captcha';
-    if (haystack.includes('login') || haystack.includes('auth') || haystack.includes('авториза')) return 'login';
-    if (haystack.includes('external apply')) return 'external_apply';
-    if (haystack.includes('timeout')) return 'timeout';
-    if (haystack.includes('manual action')) return 'manual_action';
-
-    return log.level === 'error' ? 'error' : 'other';
+    return classifyLogProblem(log) !== 'none';
   }, []);
 
   const errorLogs = useMemo(() => filteredLogs.filter(isErrorLike), [filteredLogs, isErrorLike]);
@@ -272,7 +221,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         <div className="logs-errors-summary">
           <div className="logs-errors-title">Проблемы откликов и остановок</div>
           <div className="logs-errors-subtitle">
-            Показывает, почему отклик не дошёл до успеха или потребовал ручного разбора.
+            Технические ошибки, warnings и ручные кейсы показаны раздельно, чтобы не путать execution failure с manual flow.
           </div>
         </div>
         <div className="logs-reason-filters">
@@ -304,14 +253,41 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           {filteredErrorLogs.slice().reverse().map((log, index) => {
             const reason = detectReason(log);
             const reasonLabel = REASON_LABELS[reason];
+            const problemKind = classifyLogProblem(log);
             const vacancyId = log.context?.vacancyId;
             const profileId = log.context?.profileId;
             const reasonCode = log.context?.reasonCode;
 
+            const priorityLabel =
+              problemKind === 'execution_error'
+                ? 'Ошибка выполнения'
+                : problemKind === 'warning'
+                ? 'Warning / blocker'
+                : 'Ручной кейс';
+
             return (
-              <div key={`${log.timestamp}-${index}`} className="logs-event-item logs-event-item-danger">
+              <div
+                key={`${log.timestamp}-${index}`}
+                className={`logs-event-item ${
+                  problemKind === 'execution_error'
+                    ? 'logs-event-item-danger'
+                    : problemKind === 'manual_case'
+                    ? 'logs-event-item-manual'
+                    : 'logs-event-item-warning'
+                }`}
+              >
                 <div className="logs-error-priority-line">
-                  <span className="logs-error-priority">Разобрать</span>
+                  <span
+                    className={`logs-error-priority ${
+                      problemKind === 'execution_error'
+                        ? 'logs-error-priority-danger'
+                        : problemKind === 'manual_case'
+                        ? 'logs-error-priority-manual'
+                        : 'logs-error-priority-warning'
+                    }`}
+                  >
+                    {priorityLabel}
+                  </span>
                   <span className="logs-error-hint">{reasonLabel}</span>
                 </div>
                 <div className="logs-event-topline">
@@ -321,7 +297,15 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
                 </div>
                 <div className="logs-event-message">{log.message}</div>
-                <div className="logs-error-explanation">
+                <div
+                  className={`logs-error-explanation ${
+                    problemKind === 'execution_error'
+                      ? 'logs-error-explanation-danger'
+                      : problemKind === 'manual_case'
+                      ? 'logs-error-explanation-manual'
+                      : 'logs-error-explanation-warning'
+                  }`}
+                >
                   {reason === 'cover_letter' && 'Вакансия просит сопроводительное письмо или логика упёрлась в cover letter flow.'}
                   {reason === 'questionnaire' && 'Отклик остановился на анкете работодателя. Нужен ручной проход.'}
                   {reason === 'test' && 'Отклик требует тест. Автоматически не закрывается.'}
@@ -331,7 +315,12 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   {reason === 'timeout' && 'Ожидание ответа/страницы превысило лимит. Проверить сеть, HH или селекторы.'}
                   {reason === 'manual_action' && 'Сценарий передан пользователю как manual action.'}
                   {reason === 'error' && 'Техническая ошибка в шаге отклика. Нужен разбор контекста ниже.'}
-                  {reason === 'other' && 'Нестандартный проблемный кейс. Смотри сообщение и raw logs.'}
+                  {reason === 'other' &&
+                    (problemKind === 'warning'
+                      ? 'Предупреждение или blocker без явной технической поломки. Смотри контекст.'
+                      : problemKind === 'manual_case'
+                      ? 'Нетривиальный ручной кейс. Смотри сообщение и raw logs.'
+                      : 'Нестандартная техническая ошибка. Смотри сообщение и raw logs.')}
                 </div>
                 {log.context && (
                   <div className="logs-event-meta">
