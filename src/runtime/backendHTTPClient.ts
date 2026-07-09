@@ -33,6 +33,10 @@ export interface ApplyResponse {
   error?: string;
 }
 
+function getStructuredPreview(data: unknown): string {
+  return JSON.stringify(data).substring(0, 200);
+}
+
 function hasQuickResponseQuestionnaireBlocker(data: any): boolean {
   return (
     data.responseStatus?.questionnaireRequired === true ||
@@ -428,15 +432,24 @@ export class BackendHTTPClient {
   private async tryNormalizeErrorResponse(response: Response): Promise<ApplyResponse | null> {
     try {
       const data = await response.json();
+      const preview = getStructuredPreview(data);
       this.log('[BackendHTTP] applyToVacancy error body', {
         status: response.status,
-        data: JSON.stringify(data).substring(0, 200),
+        data: preview,
       });
 
       const normalized = this.normalizeApplyResponse(data);
       if (normalized.outcome !== 'unknown') {
         return normalized;
       }
+
+      const typeSuffix = typeof data?.type === 'string' ? ` type=${data.type}` : '';
+      return {
+        success: false,
+        outcome: 'error',
+        message: `HTTP ${response.status} (unrecognized apply response${typeSuffix})`,
+        error: preview,
+      };
     } catch (error) {
       this.log('[BackendHTTP] applyToVacancy error body parse failed', {
         status: response.status,
@@ -489,6 +502,14 @@ export class BackendHTTPClient {
       };
     }
 
+    if (hasQuickResponseQuestionnaireBlocker(data)) {
+      return {
+        success: false,
+        outcome: 'questionnaire_required',
+        message: 'Questionnaire required',
+      };
+    }
+
     if (data.type === 'questionnaireRequired') {
       return {
         success: false,
@@ -502,7 +523,7 @@ export class BackendHTTPClient {
       success: false,
       outcome: 'unknown',
       message: 'Unknown response',
-      error: JSON.stringify(data).substring(0, 200),
+      error: getStructuredPreview(data),
     };
   }
 
