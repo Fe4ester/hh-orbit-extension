@@ -294,7 +294,7 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
             const link = card.querySelector('a[href*="/resume/"]');
             if (link) {
               const href = link.getAttribute('href');
-              const match = href?.match(/\/resume\/([a-f0-9]+)/);
+              const match = href?.match(/\/resume\/([a-z0-9]+)/i);
               if (match) {
                 const hash = match[1];
                 const title = getNormalizedElementText(link) || 'Резюме';
@@ -310,7 +310,7 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
         }
 
         if (candidates.length === 0 && url.includes('/resume/')) {
-          const match = url.match(/\/resume\/([a-f0-9]+)/);
+          const match = url.match(/\/resume\/([a-z0-9]+)/i);
           if (match) {
             const hash = match[1];
             const titleEl = doc.querySelector('[data-qa="resume-title"]') || doc.querySelector('h1');
@@ -329,7 +329,7 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
           const seen = new Set<string>();
           links.forEach((link) => {
             const href = link.getAttribute('href');
-            const match = href?.match(/\/resume\/([a-f0-9]+)/);
+            const match = href?.match(/\/resume\/([a-z0-9]+)/i);
             if (match && !seen.has(match[1])) {
               seen.add(match[1]);
               const hash = match[1];
@@ -480,7 +480,7 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
             const link = card.querySelector('a[href*="/resume/"]');
             if (link) {
               const href = link.getAttribute('href');
-              const match = href?.match(/\/resume\/([a-f0-9]+)/);
+              const match = href?.match(/\/resume\/([a-z0-9]+)/i);
               if (match) {
                 const hash = match[1];
                 const title = getNormalizedElementText(link) || 'Резюме';
@@ -500,7 +500,7 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
           const seen = new Set<string>();
           links.forEach((link) => {
             const href = link.getAttribute('href');
-            const match = href?.match(/\/resume\/([a-f0-9]+)/);
+            const match = href?.match(/\/resume\/([a-z0-9]+)/i);
             if (match && !seen.has(match[1])) {
               seen.add(match[1]);
               const hash = match[1];

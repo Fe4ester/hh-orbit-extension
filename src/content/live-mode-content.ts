@@ -9,6 +9,7 @@ import { clickRespondButton, observePostClickState } from '../live/respondButton
 import { detectCoverLetterUI } from '../live/coverLetterExecutor';
 import { observePostSubmitState } from '../live/finalSubmitExecutor';
 import { parseSearchResults } from '../live/searchResultsParser';
+import { detectTestRequirement } from '../live/testRequirementDetector';
 import { FileLogger } from '../utils/fileLogger';
 
 console.log('[LiveContent] Content script loaded');
@@ -216,14 +217,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'CHECK_TEST_REQUIRED': {
-        const testRequired =
-          !!document.querySelector('[data-qa="vacancy-response-questionnaire"]') ||
-          !!document.querySelector('[data-qa="vacancy-response-letter-toggle"]') ||
-          document.body.textContent?.includes('Работодатель просит ответить на вопросы') ||
-          document.body.textContent?.includes('тестовое задание') ||
-          document.body.textContent?.includes('Пройти тест') ||
-          window.location.href.includes('startedWithQuestion=true') ||
-          false;
+        const testRequired = detectTestRequirement(document, window.location.href);
 
         console.log('[LiveContent] Test required check', {
           testRequired,
