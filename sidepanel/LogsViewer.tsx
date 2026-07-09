@@ -80,7 +80,6 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [activeTab, setActiveTab] = useState<LogsTab>('overview');
   const [errorReasonFilter, setErrorReasonFilter] = useState<ErrorReason>('all');
   const [rawViewMode, setRawViewMode] = useState<'parsed' | 'stream'>('parsed');
-  const [compactMode, setCompactMode] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -207,7 +206,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   ];
 
   const renderOverview = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
+    <div className="logs-tab-panel">
       <div className="logs-summary-grid">
         <div className="logs-summary-card">
           <div className="logs-summary-label">Всего событий</div>
@@ -268,7 +267,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 
   const renderErrors = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
+    <div className="logs-tab-panel">
       <div className="logs-errors-toolbar">
         <div className="logs-errors-summary">
           <div className="logs-errors-title">Проблемы откликов и остановок</div>
@@ -350,7 +349,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 
   const renderVacancies = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
+    <div className="logs-tab-panel">
       {vacancyLogs.length === 0 ? (
         <div className="logs-empty">Нет событий, привязанных к vacancyId</div>
       ) : (
@@ -386,7 +385,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 </div>
 
                 <div className="logs-vacancy-timeline">
-                  {sortedEntries.slice(-(compactMode ? 4 : 6)).map((log, index) => {
+                  {sortedEntries.slice(-6).map((log, index) => {
                     const stage = detectVacancyStage(log);
                     const status = detectVacancyStatus(log);
 
@@ -413,7 +412,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 
   const renderRaw = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
+    <div className="logs-tab-panel">
       <div className="logs-errors-toolbar">
         <div className="logs-errors-summary">
           <div className="logs-errors-title">Raw / Debug</div>
@@ -442,7 +441,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         <pre className="logs-stream">{formatLogsAsText()}</pre>
       ) : (
         <div className="logs-raw-list">
-          {filteredLogs.slice().reverse().slice(0, compactMode ? 40 : 80).map((log, index) => (
+          {filteredLogs.slice().reverse().slice(0, 80).map((log, index) => (
             <details key={`${log.timestamp}-${index}`} className="logs-raw-item">
               <summary className="logs-raw-summary">
                 <div className="logs-raw-summary-main">
@@ -530,12 +529,6 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           <button className="btn btn-secondary btn-sm" onClick={loadLogs}>Обновить</button>
           <button className="btn btn-primary btn-sm" onClick={handleCopyAll} disabled={filteredLogs.length === 0}>
             Скопировать всё
-          </button>
-          <button
-            className={`btn btn-sm ${compactMode ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setCompactMode((value) => !value)}
-          >
-            {compactMode ? 'Компактный вид: вкл' : 'Компактный вид: выкл'}
           </button>
           <div className="logs-count">{filteredLogs.length} / {logs.length} entries</div>
         </div>
