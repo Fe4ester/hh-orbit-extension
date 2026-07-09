@@ -16,12 +16,31 @@ import { LiveAutoApplyEngineV2 as LiveAutoApplyEngine } from '../runtime/liveAut
 import { AcquisitionService } from '../runtime/acquisitionService';
 import { BackendHTTPClient } from '../runtime/backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
+import { createStoreReadyGate } from './storeReadiness';
 
 const store = new StateStore(new ExtensionStorageAdapter());
 const acquisitionService = new AcquisitionService({
   store,
   log: (...args) => console.log(...args),
 });
+
+async function onStoreReady(): Promise<void> {
+  FileLogger.log('service_worker', 'info', 'Store initialized');
+
+  store.setOnStateChange(() => {
+    FileLogger.log('service_worker', 'info', 'STATE_CHANGED → broadcasting');
+    void broadcastState();
+  });
+
+  broadcastStateUnsafe();
+  await setPanelBehavior();
+  await enableSidePanelForHHTabs();
+}
+
+const ensureStoreReady = createStoreReadyGate(
+  () => store.init(),
+  onStoreReady
+);
 
 // ============================================================================
 // INTERNAL BACKGROUND OPERATIONS (direct functions, no messaging)
@@ -1155,24 +1174,7 @@ async function enableSidePanelForHHTabs() {
   }
 }
 
-// Initialize store on startup
-store.init().then(async () => {
-  FileLogger.log('service_worker', 'info', 'Store initialized');
-
-  // Subscribe to state changes for real-time UI updates
-  store.setOnStateChange(() => {
-    FileLogger.log('service_worker', 'info', 'STATE_CHANGED → broadcasting');
-    broadcastState();
-  });
-
-  broadcastState();
-
-  // Set panel behavior on startup
-  await setPanelBehavior();
-
-  // Enable side panel for existing HH tabs
-  await enableSidePanelForHHTabs();
-});
+void ensureStoreReady();
 
 // Enable side panel behavior on install
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1253,6 +1255,8 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {
+      await ensureStoreReady();
+
       if (message.type === 'GET_STATE') {
         const state = store.getState();
         sendResponse({ state });
@@ -1881,7 +1885,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ success: true });
 
     // Do async work
-    doCheckRuntimeBlockers().catch((error) => {
+    ensureStoreReady().then(() => doCheckRuntimeBlockers()).catch((error) => {
       FileLogger.log('service_worker', 'error', 'CHECK_RUNTIME_BLOCKERS: Async work failed', error);
     });
 
@@ -1890,6 +1894,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'CLEAR_RUNTIME_BLOCKER') {
     (async () => {
+      await ensureStoreReady();
       await store.clearRuntimeBlocker();
       await store.setSessionStatus('unknown');
       broadcastState();
@@ -1905,6 +1910,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {
+      await ensureStoreReady();
+
       if (message.type === 'LIVE_MODE_NEXT_SEARCH_PAGE') {
         const state = store.getState();
         const controlledTabId = state.liveMode.controlledTabId;
@@ -2170,7 +2177,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // Broadcast state to all sidepanels
-function broadcastState() {
+function broadcastStateUnsafe() {
   const state = store.getState();
   // State broadcast (verbose, removed)
   chrome.runtime.sendMessage({ type: 'STATE_UPDATE', state }).catch(() => {
@@ -2178,29 +2185,44 @@ function broadcastState() {
   });
 }
 
+async function broadcastState() {
+  await ensureStoreReady();
+  broadcastStateUnsafe();
+}
+
 // Broadcast notifications
-function broadcastNotifications() {
+function broadcastNotificationsUnsafe() {
   const notifications = store.getNotificationManager().getAll();
   chrome.runtime.sendMessage({ type: 'NOTIFICATIONS_UPDATE', notifications }).catch(() => {
     // Ignore if no listeners
   });
 }
 
+async function broadcastNotifications() {
+  await ensureStoreReady();
+  broadcastNotificationsUnsafe();
+}
+
 // Clear expired notifications periodically
 setInterval(() => {
-  store.getNotificationManager().clearExpired();
-  broadcastNotifications();
+  void (async () => {
+    await ensureStoreReady();
+    store.getNotificationManager().clearExpired();
+    await broadcastNotifications();
+  })();
 }, 5000);
 
 // Live mode tab listeners
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  const state = store.getState();
+  void (async () => {
+    await ensureStoreReady();
+    const state = store.getState();
 
-  // Only track controlled tab
-  if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
-    if (changeInfo.url && tab.url) {
-      store.updateLiveContextFromUrl(tab.url).then(async () => {
-        const state = store.getState();
+    // Only track controlled tab
+    if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
+      if (changeInfo.url && tab.url) {
+        store.updateLiveContextFromUrl(tab.url).then(async () => {
+          const state = store.getState();
 
         // Check search sync with DOM context
         if (state.liveMode.pageType === 'search' && state.activeProfileId && tab.url) {
@@ -2391,20 +2413,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           }
         }
 
-        broadcastState();
-      });
+          await broadcastState();
+        });
+      }
     }
-  }
+  })();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  const state = store.getState();
+  void (async () => {
+    await ensureStoreReady();
+    const state = store.getState();
 
-  // If controlled tab was closed
-  if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
-    store.clearControlledTab().then(async () => {
-      // Set runtime blocker
-      await store.setRuntimeBlocker('controlled_tab_lost', 'Controlled tab was closed');
+    // If controlled tab was closed
+    if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
+      store.clearControlledTab().then(async () => {
+        // Set runtime blocker
+        await store.setRuntimeBlocker('controlled_tab_lost', 'Controlled tab was closed');
 
       store
         .getNotificationManager()
@@ -2420,10 +2445,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         await store.stopSearchLoop();
       }
 
-      broadcastState();
-      broadcastNotifications();
-    });
-  }
+        await broadcastState();
+        await broadcastNotifications();
+      });
+    }
+  })();
 });
 
 FileLogger.log('service_worker', 'info', 'Service worker loaded');
