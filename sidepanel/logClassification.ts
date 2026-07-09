@@ -15,6 +15,7 @@ export type ErrorReason =
 
 export type LogProblemKind = 'execution_error' | 'warning' | 'manual_case' | 'none';
 export type VacancyVisualStatus = 'success' | 'warn' | 'error' | 'info';
+export type ProblemBadgeLevel = 'error' | 'warn' | 'info';
 
 const MANUAL_KEYWORDS = [
   'manual action',
@@ -46,6 +47,20 @@ function getHaystack(log: LogEntry): string {
   return `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
 }
 
+function hasExecutionErrorOutcome(log: LogEntry): boolean {
+  const context = log.context || {};
+  const outcome = typeof context.outcome === 'string' ? context.outcome.toLowerCase() : null;
+  const success = context.success;
+
+  return (
+    outcome === 'error' ||
+    outcome === 'failed' ||
+    outcome === 'failure' ||
+    outcome === 'server_error' ||
+    success === false
+  );
+}
+
 export function detectReason(log: LogEntry): Exclude<ErrorReason, 'all'> {
   const haystack = getHaystack(log);
 
@@ -57,6 +72,7 @@ export function detectReason(log: LogEntry): Exclude<ErrorReason, 'all'> {
   if (haystack.includes('external apply')) return 'external_apply';
   if (haystack.includes('timeout')) return 'timeout';
   if (haystack.includes('manual action')) return 'manual_action';
+  if (hasExecutionErrorOutcome(log)) return 'error';
 
   return log.level === 'error' ? 'error' : 'other';
 }
@@ -75,7 +91,11 @@ export function classifyLogProblem(log: LogEntry): LogProblemKind {
     return 'manual_case';
   }
 
-  if (log.level === 'error' || EXECUTION_ERROR_KEYWORDS.some((keyword) => haystack.includes(keyword))) {
+  if (
+    log.level === 'error' ||
+    hasExecutionErrorOutcome(log) ||
+    EXECUTION_ERROR_KEYWORDS.some((keyword) => haystack.includes(keyword))
+  ) {
     return 'execution_error';
   }
 
@@ -101,6 +121,15 @@ export function detectVacancyStatus(log: LogEntry): VacancyVisualStatus {
   if (haystack.includes('success') || haystack.includes('processed: success') || haystack.includes('application sent')) {
     return 'success';
   }
+
+  if (problemKind === 'execution_error') return 'error';
+  if (problemKind === 'warning' || problemKind === 'manual_case') return 'warn';
+
+  return 'info';
+}
+
+export function getProblemBadgeLevel(log: LogEntry): ProblemBadgeLevel {
+  const problemKind = classifyLogProblem(log);
 
   if (problemKind === 'execution_error') return 'error';
   if (problemKind === 'warning' || problemKind === 'manual_case') return 'warn';

@@ -79,4 +79,52 @@ describe('BackendHTTPClient', () => {
     expect(result.canProceed).toBe(false);
     expect(result.reason).toBe('unknown_preflight_type:brandNewServerState');
   });
+
+  it('preserves already_applied classification from non-ok apply responses', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: vi.fn().mockResolvedValue({ type: 'alreadyApplied' }),
+    });
+
+    const result = await client.applyToVacancy('123', {
+      resumeHash: 'resume123',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe('already_applied');
+    expect(result.message).toContain('Already applied');
+  });
+
+  it('preserves questionnaire_required classification from non-ok apply responses', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: vi.fn().mockResolvedValue({ type: 'questionnaireRequired' }),
+    });
+
+    const result = await client.applyToVacancy('123', {
+      resumeHash: 'resume123',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe('questionnaire_required');
+    expect(result.message).toBe('Questionnaire required');
+  });
+
+  it('keeps generic error fallback for unrecognized non-ok apply responses', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: vi.fn().mockResolvedValue({ type: 'brandNewServerState' }),
+    });
+
+    const result = await client.applyToVacancy('123', {
+      resumeHash: 'resume123',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe('error');
+    expect(result.message).toBe('HTTP 400');
+  });
 });

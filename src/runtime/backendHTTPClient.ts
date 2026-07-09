@@ -398,6 +398,11 @@ export class BackendHTTPClient {
           };
         }
 
+        const normalizedErrorResponse = await this.tryNormalizeErrorResponse(response);
+        if (normalizedErrorResponse) {
+          return normalizedErrorResponse;
+        }
+
         return {
           success: false,
           outcome: 'error',
@@ -418,6 +423,28 @@ export class BackendHTTPClient {
         error: (error as Error).message,
       };
     }
+  }
+
+  private async tryNormalizeErrorResponse(response: Response): Promise<ApplyResponse | null> {
+    try {
+      const data = await response.json();
+      this.log('[BackendHTTP] applyToVacancy error body', {
+        status: response.status,
+        data: JSON.stringify(data).substring(0, 200),
+      });
+
+      const normalized = this.normalizeApplyResponse(data);
+      if (normalized.outcome !== 'unknown') {
+        return normalized;
+      }
+    } catch (error) {
+      this.log('[BackendHTTP] applyToVacancy error body parse failed', {
+        status: response.status,
+        error: (error as Error).message,
+      });
+    }
+
+    return null;
   }
 
   private normalizeApplyResponse(data: any): ApplyResponse {

@@ -4,6 +4,7 @@ import {
   classifyLogProblem,
   detectReason,
   detectVacancyStatus,
+  getProblemBadgeLevel,
   isProblemLog,
 } from '../sidepanel/logClassification';
 
@@ -45,9 +46,23 @@ describe('logClassification', () => {
     expect(detectVacancyStatus(log)).toBe('error');
   });
 
+  it('treats neutral cycle-complete logs with outcome:error as execution errors', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Cycle complete',
+      context: { outcome: 'error' },
+    });
+
+    expect(detectReason(log)).toBe('error');
+    expect(classifyLogProblem(log)).toBe('execution_error');
+    expect(detectVacancyStatus(log)).toBe('error');
+    expect(getProblemBadgeLevel(log)).toBe('error');
+  });
+
   it('maps manual cases to warn vacancy status instead of error', () => {
     const log = makeLog({ level: 'warn', message: 'test_required while processing vacancy' });
 
     expect(detectVacancyStatus(log)).toBe('warn');
+    expect(getProblemBadgeLevel(log)).toBe('warn');
   });
 });

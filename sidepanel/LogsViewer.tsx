@@ -5,6 +5,7 @@ import {
   classifyLogProblem,
   detectReason,
   detectVacancyStatus,
+  getProblemBadgeLevel,
   type ErrorReason,
 } from './logClassification';
 
@@ -254,6 +255,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             const reason = detectReason(log);
             const reasonLabel = REASON_LABELS[reason];
             const problemKind = classifyLogProblem(log);
+            const badgeLevel = getProblemBadgeLevel(log);
             const vacancyId = log.context?.vacancyId;
             const profileId = log.context?.profileId;
             const reasonCode = log.context?.reasonCode;
@@ -291,7 +293,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   <span className="logs-error-hint">{reasonLabel}</span>
                 </div>
                 <div className="logs-event-topline">
-                  <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
+                  <span className={`logs-level-badge logs-level-${badgeLevel}`}>{badgeLevel}</span>
                   <span className="logs-reason-badge">{reasonLabel}</span>
                   <span className="logs-event-source">{log.source}</span>
                   <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
