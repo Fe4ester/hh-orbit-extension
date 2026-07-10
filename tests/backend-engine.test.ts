@@ -460,4 +460,55 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
       expect(mockHttpClient.fetchVacancies).toHaveBeenCalled();
     });
   });
+
+  describe('backend cover letter modal handling', () => {
+    it('creates manual action and skips HTTP apply when preflight requires cover letter', async () => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            keywordsInclude: ['test'],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [
+          {
+            vacancyId: 'vac-1',
+            title: 'Backend Engineer',
+            company: 'HH',
+            url: 'https://hh.ru/vacancy/vac-1',
+            source: 'search_dom',
+            discoveredAt: Date.now(),
+            profileId: 'prof1',
+            status: 'discovered',
+          },
+        ],
+      });
+
+      mockHttpClient.preflightApply.mockResolvedValue({
+        canProceed: false,
+        reason: 'cover_letter_required',
+        requiresCoverLetter: true,
+      });
+
+      const result = await (engine as any).executeApply('vac-1');
+      const state = store.getState();
+
+      expect(result).toEqual({
+        outcome: 'cover_letter_required',
+        requiresManualAction: true,
+      });
+      expect(mockHttpClient.applyToVacancy).not.toHaveBeenCalled();
+      expect(state.manualActions).toHaveLength(1);
+      expect(state.manualActions[0].type).toBe('cover_letter_missing');
+      expect(state.manualActions[0].reasonCode).toBe('cover_letter_required');
+    });
+  });
 });

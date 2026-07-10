@@ -274,6 +274,8 @@ export class BackendAutoApplyEngine {
       this.notify('warn', `Требуется тест: ${nextVacancy.title || nextVacancy.vacancyId}`);
     } else if (applyResult.outcome === 'questionnaire_required') {
       this.notify('warn', `Требуется анкета: ${nextVacancy.title || nextVacancy.vacancyId}`);
+    } else if (applyResult.outcome === 'cover_letter_required') {
+      this.notify('warn', `Требуется сопроводительное письмо: ${nextVacancy.title || nextVacancy.vacancyId}`);
     } else {
       this.notify('error', `Ошибка отклика: ${nextVacancy.title || nextVacancy.vacancyId}`);
     }
@@ -542,6 +544,7 @@ export class BackendAutoApplyEngine {
         alreadyApplied: preflight.alreadyApplied,
         requiresTest: preflight.requiresTest,
         requiresQuestionnaire: preflight.requiresQuestionnaire,
+        requiresCoverLetter: preflight.requiresCoverLetter,
       });
 
       if (!preflight.canProceed) {
@@ -578,6 +581,31 @@ export class BackendAutoApplyEngine {
 
           return {
             outcome: preflight.requiresTest ? 'test_required' : 'questionnaire_required',
+            requiresManualAction: true,
+          };
+        }
+
+        if (preflight.requiresCoverLetter) {
+          const nextVacancy = state.vacancyQueue.find((v) => v.vacancyId === vacancyId);
+
+          FileLogger.log('service_worker', 'warn', 'Manual action required', {
+            type: 'cover_letter_missing',
+            vacancyId,
+          });
+
+          await this.deps.store.createManualAction({
+            type: 'cover_letter_missing',
+            vacancyId,
+            vacancyTitle: nextVacancy?.title || `Vacancy ${vacancyId}`,
+            company: nextVacancy?.company,
+            url: nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
+            profileId: state.activeProfileId || undefined,
+            status: 'pending',
+            reasonCode: 'cover_letter_required',
+          });
+
+          return {
+            outcome: 'cover_letter_required',
             requiresManualAction: true,
           };
         }

@@ -250,6 +250,7 @@ export class BackendHTTPClient {
     reason?: string;
     requiresTest?: boolean;
     requiresQuestionnaire?: boolean;
+    requiresCoverLetter?: boolean;
     alreadyApplied?: boolean;
   }> {
     const url = `${this.popupURL}?vacancyId=${vacancyId}&resumeHash=${resumeHash}&lux=true&alreadyApplied=false&isTest=no&withoutTest=no`;
@@ -311,13 +312,20 @@ export class BackendHTTPClient {
           return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
         }
 
+        if (data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true) {
+          return { canProceed: false, requiresCoverLetter: true, reason: 'cover_letter_required' };
+        }
+
         this.log('[BackendHTTP] preflightApply: quickResponse type, proceeding');
         return { canProceed: true };
       }
 
       if (data.type === 'modal') {
-        // Modal popup — может быть cover letter или другое
-        // Попробовать POST anyway
+        if (data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true) {
+          this.log('[BackendHTTP] preflightApply: modal cover letter required, blocking backend apply');
+          return { canProceed: false, requiresCoverLetter: true, reason: 'cover_letter_required' };
+        }
+
         this.log('[BackendHTTP] preflightApply: modal type, proceeding with POST');
         return { canProceed: true };
       }
