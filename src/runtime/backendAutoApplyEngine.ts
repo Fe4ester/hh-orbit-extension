@@ -290,6 +290,7 @@ export class BackendAutoApplyEngine {
     FileLogger.log('service_worker', 'info', 'Cycle complete', {
       vacancyId: nextVacancy.vacancyId,
       outcome: applyResult.outcome,
+      coverLetterFlow: applyResult.coverLetterFlow,
       processed: this.deps.store.getState().runtime.processed,
       success: this.deps.store.getState().runtime.success,
       manualActions: this.deps.store.getState().runtime.manualActions,
@@ -521,13 +522,14 @@ export class BackendAutoApplyEngine {
   private async executeApply(vacancyId: string): Promise<{
     outcome: string;
     requiresManualAction: boolean;
+    coverLetterFlow: boolean;
   }> {
     const state = this.deps.store.getState();
     const profile = state.activeProfileId ? state.profiles[state.activeProfileId] : null;
 
     if (!state.selectedResumeHash) {
       FileLogger.log('service_worker', 'error', 'No resume selected');
-      return { outcome: 'error', requiresManualAction: false };
+      return { outcome: 'error', requiresManualAction: false, coverLetterFlow: false };
     }
 
     try {
@@ -536,6 +538,8 @@ export class BackendAutoApplyEngine {
         vacancyId,
         state.selectedResumeHash
       );
+      let shouldAttemptApplyDespitePreflightBlock = false;
+      let attemptedCoverLetterHTTPPath = false;
 
       FileLogger.log('service_worker', 'info', 'Preflight result', {
         vacancyId,
@@ -545,6 +549,7 @@ export class BackendAutoApplyEngine {
         requiresTest: preflight.requiresTest,
         requiresQuestionnaire: preflight.requiresQuestionnaire,
         requiresCoverLetter: preflight.requiresCoverLetter,
+        letterMaxLength: preflight.letterMaxLength,
       });
 
       if (!preflight.canProceed) {
@@ -557,7 +562,7 @@ export class BackendAutoApplyEngine {
             message: 'Already applied',
           });
 
-          return { outcome: 'already_applied', requiresManualAction: false };
+          return { outcome: 'already_applied', requiresManualAction: false, coverLetterFlow: false };
         }
 
         if (preflight.requiresTest || preflight.requiresQuestionnaire) {
@@ -582,39 +587,61 @@ export class BackendAutoApplyEngine {
           return {
             outcome: preflight.requiresTest ? 'test_required' : 'questionnaire_required',
             requiresManualAction: true,
+            coverLetterFlow: false,
           };
         }
 
         if (preflight.requiresCoverLetter) {
-          const nextVacancy = state.vacancyQueue.find((v) => v.vacancyId === vacancyId);
+          const coverLetterTemplate = profile?.coverLetterTemplate?.trim();
 
-          FileLogger.log('service_worker', 'warn', 'Manual action required', {
-            type: 'cover_letter_missing',
+          if (!coverLetterTemplate) {
+            await this.createCoverLetterManualAction(
+              state,
+              vacancyId,
+              'cover_letter_template_missing'
+            );
+
+            return {
+              outcome: 'cover_letter_required',
+              requiresManualAction: true,
+              coverLetterFlow: true,
+            };
+          }
+
+          if (preflight.letterMaxLength && coverLetterTemplate.length > preflight.letterMaxLength) {
+            await this.createCoverLetterManualAction(
+              state,
+              vacancyId,
+              'cover_letter_template_too_long',
+              {
+                letterLength: coverLetterTemplate.length,
+                letterMaxLength: preflight.letterMaxLength,
+              }
+            );
+
+            return {
+              outcome: 'cover_letter_required',
+              requiresManualAction: true,
+              coverLetterFlow: true,
+            };
+          }
+
+          FileLogger.log('service_worker', 'info', 'Preflight requires cover letter, attempting HTTP apply with template', {
             vacancyId,
+            templateLength: coverLetterTemplate.length,
+            letterMaxLength: preflight.letterMaxLength,
           });
-
-          await this.deps.store.createManualAction({
-            type: 'cover_letter_missing',
-            vacancyId,
-            vacancyTitle: nextVacancy?.title || `Vacancy ${vacancyId}`,
-            company: nextVacancy?.company,
-            url: nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
-            profileId: state.activeProfileId || undefined,
-            status: 'pending',
-            reasonCode: 'cover_letter_required',
-          });
-
-          return {
-            outcome: 'cover_letter_required',
-            requiresManualAction: true,
-          };
+          shouldAttemptApplyDespitePreflightBlock = true;
+          attemptedCoverLetterHTTPPath = true;
         }
 
-        FileLogger.log('service_worker', 'warn', 'Preflight blocked', {
-          vacancyId,
-          reason: preflight.reason
-        });
-        return { outcome: 'error', requiresManualAction: false };
+        if (!shouldAttemptApplyDespitePreflightBlock) {
+          FileLogger.log('service_worker', 'warn', 'Preflight blocked', {
+            vacancyId,
+            reason: preflight.reason
+          });
+          return { outcome: 'error', requiresManualAction: false, coverLetterFlow: false };
+        }
       }
 
       // 2. Apply
@@ -632,6 +659,8 @@ export class BackendAutoApplyEngine {
         vacancyId,
         success: applyResult.success,
         outcome: applyResult.outcome,
+        coverLetterFlow: attemptedCoverLetterHTTPPath,
+        diagnostics: applyResult.diagnostics,
       });
 
       // 3. Record attempt
@@ -641,12 +670,43 @@ export class BackendAutoApplyEngine {
         resumeHash: state.selectedResumeHash,
         outcome: applyResult.outcome,
         message: applyResult.message || '',
+        metadata: applyResult.diagnostics ? { diagnostics: applyResult.diagnostics } : undefined,
       });
+
+      if (applyResult.outcome === 'cover_letter_required') {
+        await this.createCoverLetterManualAction(
+          state,
+          vacancyId,
+          'cover_letter_required_after_http_apply'
+        );
+      }
+
+      if (
+        attemptedCoverLetterHTTPPath &&
+        (applyResult.outcome === 'error' || applyResult.outcome === 'unknown')
+      ) {
+        await this.createCoverLetterManualAction(
+          state,
+          vacancyId,
+          'cover_letter_http_protocol_gap',
+          {
+            applyOutcome: applyResult.outcome,
+            applyMessage: applyResult.message,
+            applyError: applyResult.error,
+            diagnostics: applyResult.diagnostics,
+          }
+        );
+      }
 
       return {
         outcome: applyResult.outcome,
         requiresManualAction:
-          applyResult.outcome === 'test_required' || applyResult.outcome === 'questionnaire_required',
+          applyResult.outcome === 'test_required' ||
+          applyResult.outcome === 'questionnaire_required' ||
+          applyResult.outcome === 'cover_letter_required' ||
+          (attemptedCoverLetterHTTPPath &&
+            (applyResult.outcome === 'error' || applyResult.outcome === 'unknown')),
+        coverLetterFlow: attemptedCoverLetterHTTPPath,
       };
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Apply error', {
@@ -657,11 +717,40 @@ export class BackendAutoApplyEngine {
       return {
         outcome: 'error',
         requiresManualAction: false,
+        coverLetterFlow: false,
       };
     }
   }
 
   private randomInRange(min: number, max: number): number {
     return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  private async createCoverLetterManualAction(
+    state: ReturnType<StateStore['getState']>,
+    vacancyId: string,
+    reasonCode: string,
+    details?: Record<string, any>
+  ): Promise<void> {
+    const nextVacancy = state.vacancyQueue.find((v) => v.vacancyId === vacancyId);
+
+    FileLogger.log('service_worker', 'warn', 'Manual action required', {
+      type: 'cover_letter_missing',
+      vacancyId,
+      reasonCode,
+      details,
+    });
+
+    await this.deps.store.createManualAction({
+      type: 'cover_letter_missing',
+      vacancyId,
+      vacancyTitle: nextVacancy?.title || `Vacancy ${vacancyId}`,
+      company: nextVacancy?.company,
+      url: nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
+      profileId: state.activeProfileId || undefined,
+      status: 'pending',
+      reasonCode,
+      details,
+    });
   }
 }

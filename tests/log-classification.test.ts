@@ -39,6 +39,108 @@ describe('logClassification', () => {
     expect(detectReason(manualLog)).toBe('manual_action');
   });
 
+  it('does not treat handled cover-letter blocker with success:false as execution error', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: {
+        outcome: 'cover_letter_required',
+        success: false,
+      },
+    });
+
+    expect(detectReason(log)).toBe('cover_letter');
+    expect(classifyLogProblem(log)).toBe('warning');
+    expect(detectVacancyStatus(log)).toBe('warn');
+    expect(getProblemBadgeLevel(log)).toBe('warn');
+  });
+
+  it('does not treat success apply result with diagnostics errorSignal:null as execution error', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: {
+        outcome: 'success',
+        success: true,
+        diagnostics: {
+          responseKind: 'json',
+          errorSignal: null,
+          keys: ['diagnostics', 'success'],
+          preview: '{"success":"true"}',
+        },
+      },
+    });
+
+    expect(detectReason(log)).toBe('other');
+    expect(classifyLogProblem(log)).toBe('none');
+    expect(detectVacancyStatus(log)).toBe('success');
+    expect(getProblemBadgeLevel(log)).toBe('info');
+  });
+
+  it('does not treat handled cycle-complete test blocker as execution error', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Cycle complete',
+      context: {
+        outcome: 'test_required',
+        success: false,
+      },
+    });
+
+    expect(detectReason(log)).toBe('test');
+    expect(classifyLogProblem(log)).toBe('manual_case');
+    expect(detectVacancyStatus(log)).toBe('warn');
+  });
+
+  it('keeps handled cover_letter_required with diagnostics as manual case', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: {
+        outcome: 'cover_letter_required',
+        success: false,
+        diagnostics: {
+          responseKind: 'json',
+          errorSignal: null,
+          keys: ['diagnostics', 'outcome'],
+        },
+      },
+    });
+
+    expect(classifyLogProblem(log)).toBe('warning');
+    expect(detectVacancyStatus(log)).toBe('warn');
+  });
+
+  it('keeps real manual action as manual_case', () => {
+    const log = makeLog({
+      level: 'warn',
+      message: 'Manual action created',
+      context: {
+        type: 'cover_letter_missing',
+        reasonCode: 'cover_letter_required_after_http_apply',
+      },
+    });
+
+    expect(detectReason(log)).toBe('manual_action');
+    expect(classifyLogProblem(log)).toBe('manual_case');
+    expect(getProblemBadgeLevel(log)).toBe('warn');
+  });
+
+  it('does not treat already_applied as execution error', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: {
+        outcome: 'already_applied',
+        success: false,
+      },
+    });
+
+    expect(classifyLogProblem(log)).not.toBe('execution_error');
+    expect(detectReason(log)).toBe('other');
+    expect(detectVacancyStatus(log)).toBe('info');
+  });
+
   it('keeps real execution errors as execution errors', () => {
     const log = makeLog({ level: 'error', message: 'Apply failed with exception' });
 
@@ -57,6 +159,55 @@ describe('logClassification', () => {
     expect(classifyLogProblem(log)).toBe('execution_error');
     expect(detectVacancyStatus(log)).toBe('error');
     expect(getProblemBadgeLevel(log)).toBe('error');
+  });
+
+  it('keeps explicit unknown/unhandled runtime failures as execution errors', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: { outcome: 'unknown', success: false },
+    });
+
+    expect(detectReason(log)).toBe('error');
+    expect(classifyLogProblem(log)).toBe('execution_error');
+  });
+
+  it('treats explicit outcome:error with diagnostics as execution error', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: {
+        outcome: 'error',
+        success: false,
+        diagnostics: {
+          responseKind: 'json',
+          errorSignal: null,
+        },
+      },
+    });
+
+    expect(detectReason(log)).toBe('error');
+    expect(classifyLogProblem(log)).toBe('execution_error');
+    expect(detectVacancyStatus(log)).toBe('error');
+  });
+
+  it('shows successful cover-letter apply as success when coverLetterFlow hint is present', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: {
+        outcome: 'success',
+        success: true,
+        coverLetterFlow: true,
+        diagnostics: {
+          responseKind: 'json',
+          errorSignal: null,
+        },
+      },
+    });
+
+    expect(classifyLogProblem(log)).toBe('none');
+    expect(detectVacancyStatus(log)).toBe('success');
   });
 
   it('maps manual cases to warn vacancy status instead of error', () => {

@@ -225,7 +225,7 @@ export const App: React.FC = () => {
             <div className="status-indicator" data-state={runtimeVm.runtimeState}>{runtimeVm.phaseLabel}</div>
             <div className="stat-row"><span>Обработано</span><strong>{runtimeVm.processed}</strong></div>
             <div className="stat-row"><span>Успех</span><strong>{runtimeVm.success}</strong></div>
-            <div className="stat-row"><span>manual actions</span><strong>{runtimeVm.manualActions}</strong></div>
+            <div className="stat-row"><span>Ручные действия</span><strong>{runtimeVm.manualActions}</strong></div>
           </div>
         </section>
 
@@ -241,7 +241,7 @@ export const App: React.FC = () => {
 
         <div style={{ textAlign: 'center', paddingTop: 8 }}>
           <button type="button" className="logs-link" onClick={() => setLogsViewerOpen(true)}>
-            Logs
+            Логи
           </button>
         </div>
       </main>

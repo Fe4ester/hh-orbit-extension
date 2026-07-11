@@ -462,7 +462,67 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
   });
 
   describe('backend cover letter modal handling', () => {
-    it('creates manual action and skips HTTP apply when preflight requires cover letter', async () => {
+    it('attempts HTTP apply when preflight requires cover letter and profile has template', async () => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            coverLetterTemplate: 'Template text',
+            keywordsInclude: ['test'],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [
+          {
+            vacancyId: 'vac-1',
+            title: 'Backend Engineer',
+            company: 'HH',
+            url: 'https://hh.ru/vacancy/vac-1',
+            source: 'search_dom',
+            discoveredAt: Date.now(),
+            profileId: 'prof1',
+            status: 'discovered',
+          },
+        ],
+      });
+
+      mockHttpClient.preflightApply.mockResolvedValue({
+        canProceed: false,
+        reason: 'cover_letter_required',
+        requiresCoverLetter: true,
+        letterMaxLength: 4000,
+      });
+
+      mockHttpClient.applyToVacancy.mockResolvedValue({
+        success: true,
+        outcome: 'success',
+        message: 'Application sent successfully',
+      });
+
+      const result = await (engine as any).executeApply('vac-1');
+      const state = store.getState();
+
+      expect(result).toEqual({
+        outcome: 'success',
+        requiresManualAction: false,
+        coverLetterFlow: true,
+      });
+      expect(mockHttpClient.applyToVacancy).toHaveBeenCalledWith(
+        'vac-1',
+        expect.objectContaining({ resumeHash: 'resume123' }),
+        'Template text'
+      );
+      expect(state.manualActions).toHaveLength(0);
+    });
+
+    it('creates manual action and skips HTTP apply when cover letter template is missing', async () => {
       await store.updateState({
         selectedResumeHash: 'resume123',
         activeProfileId: 'prof1',
@@ -504,11 +564,206 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
       expect(result).toEqual({
         outcome: 'cover_letter_required',
         requiresManualAction: true,
+        coverLetterFlow: true,
       });
       expect(mockHttpClient.applyToVacancy).not.toHaveBeenCalled();
       expect(state.manualActions).toHaveLength(1);
       expect(state.manualActions[0].type).toBe('cover_letter_missing');
-      expect(state.manualActions[0].reasonCode).toBe('cover_letter_required');
+      expect(state.manualActions[0].reasonCode).toBe('cover_letter_template_missing');
+    });
+
+    it('does not report false success when HTTP apply still returns cover letter blocker', async () => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            coverLetterTemplate: 'Template text',
+            keywordsInclude: ['test'],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [
+          {
+            vacancyId: 'vac-1',
+            title: 'Backend Engineer',
+            company: 'HH',
+            url: 'https://hh.ru/vacancy/vac-1',
+            source: 'search_dom',
+            discoveredAt: Date.now(),
+            profileId: 'prof1',
+            status: 'discovered',
+          },
+        ],
+      });
+
+      mockHttpClient.preflightApply.mockResolvedValue({
+        canProceed: false,
+        reason: 'cover_letter_required',
+        requiresCoverLetter: true,
+      });
+
+      mockHttpClient.applyToVacancy.mockResolvedValue({
+        success: false,
+        outcome: 'cover_letter_required',
+        message: 'Cover letter required',
+      });
+
+      const result = await (engine as any).executeApply('vac-1');
+      const state = store.getState();
+
+      expect(result).toEqual({
+        outcome: 'cover_letter_required',
+        requiresManualAction: true,
+        coverLetterFlow: true,
+      });
+      expect(mockHttpClient.applyToVacancy).toHaveBeenCalledTimes(1);
+      expect(state.manualActions).toHaveLength(1);
+      expect(state.manualActions[0].reasonCode).toBe('cover_letter_required_after_http_apply');
+    });
+
+    it('routes structured { error: \"letter-required\" } apply response into explicit cover letter blocker path', async () => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            coverLetterTemplate: 'Template text',
+            keywordsInclude: ['test'],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [
+          {
+            vacancyId: 'vac-1',
+            title: 'Backend Engineer',
+            company: 'HH',
+            url: 'https://hh.ru/vacancy/vac-1',
+            source: 'search_dom',
+            discoveredAt: Date.now(),
+            profileId: 'prof1',
+            status: 'discovered',
+          },
+        ],
+      });
+
+      mockHttpClient.preflightApply.mockResolvedValue({
+        canProceed: false,
+        reason: 'cover_letter_required',
+        requiresCoverLetter: true,
+      });
+
+      mockHttpClient.applyToVacancy.mockResolvedValue({
+        success: false,
+        outcome: 'cover_letter_required',
+        message: 'Cover letter required (server validation)',
+        diagnostics: {
+          responseKind: 'json',
+          status: 400,
+          keys: ['error'],
+          errorSignal: 'letter-required',
+          preview: '{"error":"letter-required"}',
+        },
+      });
+
+      const result = await (engine as any).executeApply('vac-1');
+      const state = store.getState();
+
+      expect(result).toEqual({
+        outcome: 'cover_letter_required',
+        requiresManualAction: true,
+        coverLetterFlow: true,
+      });
+      expect(state.manualActions).toHaveLength(1);
+      expect(state.manualActions[0].reasonCode).toBe('cover_letter_required_after_http_apply');
+      expect(state.applyAttempts[0].metadata).toEqual(
+        expect.objectContaining({
+          diagnostics: expect.objectContaining({
+            errorSignal: 'letter-required',
+          }),
+        })
+      );
+    });
+
+    it('creates manual action when cover letter HTTP path ends in unrecognized error', async () => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1',
+            name: 'Test Profile',
+            coverLetterTemplate: 'Template text',
+            keywordsInclude: ['test'],
+            keywordsExclude: [],
+            locations: [],
+            experience: [],
+            schedule: [],
+            employment: [],
+          },
+        },
+        vacancyQueue: [
+          {
+            vacancyId: 'vac-1',
+            title: 'Backend Engineer',
+            company: 'HH',
+            url: 'https://hh.ru/vacancy/vac-1',
+            source: 'search_dom',
+            discoveredAt: Date.now(),
+            profileId: 'prof1',
+            status: 'discovered',
+          },
+        ],
+      });
+
+      mockHttpClient.preflightApply.mockResolvedValue({
+        canProceed: false,
+        reason: 'cover_letter_required',
+        requiresCoverLetter: true,
+      });
+
+      mockHttpClient.applyToVacancy.mockResolvedValue({
+        success: false,
+        outcome: 'error',
+        message: 'HTTP 400 (unrecognized text apply response)',
+        error: '<html>unknown modal handshake</html>',
+        diagnostics: {
+          responseKind: 'text',
+          status: 400,
+          preview: '<html>unknown modal handshake</html>',
+        },
+      });
+
+      const result = await (engine as any).executeApply('vac-1');
+      const state = store.getState();
+
+      expect(result).toEqual({
+        outcome: 'error',
+        requiresManualAction: true,
+        coverLetterFlow: true,
+      });
+      expect(state.manualActions).toHaveLength(1);
+      expect(state.manualActions[0].reasonCode).toBe('cover_letter_http_protocol_gap');
+      expect(state.manualActions[0].details).toEqual(
+        expect.objectContaining({
+          applyOutcome: 'error',
+          diagnostics: expect.objectContaining({
+            responseKind: 'text',
+          }),
+        })
+      );
     });
   });
 });

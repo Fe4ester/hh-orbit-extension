@@ -12,7 +12,7 @@ import {
 type LogsTab = 'overview' | 'errors' | 'vacancies' | 'raw';
 
 const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
-  cover_letter: 'Нужно сопроводительное',
+  cover_letter: 'Сопроводительное письмо',
   questionnaire: 'Нужна анкета',
   test: 'Нужен тест',
   captcha: 'Капча / верификация',
@@ -26,16 +26,20 @@ const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
 
 const detectVacancyStage = (log: LogEntry): string => {
   const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
+  const outcome = typeof log.context?.outcome === 'string' ? log.context.outcome.toLowerCase() : null;
+  const coverLetterFlow = log.context?.coverLetterFlow === true;
 
   if (haystack.includes('acquisition')) return 'Поиск';
-  if (haystack.includes('preflight')) return 'Preflight';
+  if (haystack.includes('preflight')) return 'Предпроверка';
   if (haystack.includes('validating vacancy') || haystack.includes('validate vacancy')) return 'Проверка';
   if (haystack.includes('click') || haystack.includes('respond button')) return 'Клик';
-  if (haystack.includes('modal')) return 'Modal';
-  if (haystack.includes('cover letter')) return 'Cover letter';
-  if (haystack.includes('redirect')) return 'Redirect';
+  if (haystack.includes('modal')) return 'Модальное окно';
+  if (coverLetterFlow && outcome === 'success') return 'Письмо отправлено';
+  if (coverLetterFlow) return 'Сопроводительное письмо';
+  if (haystack.includes('cover letter')) return 'Сопроводительное письмо';
+  if (haystack.includes('redirect')) return 'Редирект';
   if (haystack.includes('success')) return 'Успех';
-  if (haystack.includes('manual action')) return 'Manual action';
+  if (haystack.includes('manual action')) return 'Ручное действие';
   if (haystack.includes('skip') || haystack.includes('skipped')) return 'Скип';
   if (haystack.includes('fail') || haystack.includes('error')) return 'Ошибка';
 
@@ -152,7 +156,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     { id: 'overview', label: 'Сводка' },
     { id: 'errors', label: 'Ошибки', count: errorLogs.length },
     { id: 'vacancies', label: 'Вакансии', count: vacancyLogs.length },
-    { id: 'raw', label: 'Raw', count: filteredLogs.length },
+    { id: 'raw', label: 'Сырой вид', count: filteredLogs.length },
   ];
 
   const renderOverview = () => (
@@ -222,7 +226,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         <div className="logs-errors-summary">
           <div className="logs-errors-title">Проблемы откликов и остановок</div>
           <div className="logs-errors-subtitle">
-            Технические ошибки, warnings и ручные кейсы показаны раздельно, чтобы не путать execution failure с manual flow.
+            Технические ошибки, блокеры и ручные действия показаны раздельно, чтобы не путать сбой выполнения с управляемым сценарием.
           </div>
         </div>
         <div className="logs-reason-filters">
@@ -264,8 +268,10 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
               problemKind === 'execution_error'
                 ? 'Ошибка выполнения'
                 : problemKind === 'warning'
-                ? 'Warning / blocker'
-                : 'Ручной кейс';
+                ? reason === 'cover_letter'
+                  ? 'Блокер сопроводительного письма'
+                  : 'Предупреждение / блокер'
+                : 'Ручное действие';
 
             return (
               <div
@@ -308,14 +314,14 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                       : 'logs-error-explanation-warning'
                   }`}
                 >
-                  {reason === 'cover_letter' && 'Вакансия просит сопроводительное письмо или логика упёрлась в cover letter flow.'}
+                  {reason === 'cover_letter' && 'Вакансия просит сопроводительное письмо или сценарий остановился на шаге работы с письмом.'}
                   {reason === 'questionnaire' && 'Отклик остановился на анкете работодателя. Нужен ручной проход.'}
                   {reason === 'test' && 'Отклик требует тест. Автоматически не закрывается.'}
                   {reason === 'captcha' && 'Появилась капча или проверка безопасности. Нужен ручной разбор.'}
                   {reason === 'login' && 'Сессия протухла или произошёл редирект на авторизацию.'}
                   {reason === 'external_apply' && 'Отклик ведёт на внешнюю форму, не на стандартный HH flow.'}
                   {reason === 'timeout' && 'Ожидание ответа/страницы превысило лимит. Проверить сеть, HH или селекторы.'}
-                  {reason === 'manual_action' && 'Сценарий передан пользователю как manual action.'}
+                  {reason === 'manual_action' && 'Сценарий уже явно оформлен как manual action и передан пользователю.'}
                   {reason === 'error' && 'Техническая ошибка в шаге отклика. Нужен разбор контекста ниже.'}
                   {reason === 'other' &&
                     (problemKind === 'warning'
@@ -326,8 +332,8 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 </div>
                 {log.context && (
                   <div className="logs-event-meta">
-                    {vacancyId && <span>vacancy: {String(vacancyId)}</span>}
-                    {profileId && <span>profile: {String(profileId)}</span>}
+                    {vacancyId && <span>vacancyId: {String(vacancyId)}</span>}
+                    {profileId && <span>profileId: {String(profileId)}</span>}
                     {reasonCode && <span>reasonCode: {String(reasonCode)}</span>}
                   </div>
                 )}
@@ -359,8 +365,8 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 <div className="logs-vacancy-header">
                   <div className="logs-vacancy-title-block">
                     <strong>Vacancy {vacancyId}</strong>
-                    <span>{entries.length} events</span>
-                    {latestProfileId && <span>profile: {String(latestProfileId)}</span>}
+                    <span>{entries.length} событий</span>
+                    {latestProfileId && <span>profileId: {String(latestProfileId)}</span>}
                   </div>
                   <div className="logs-vacancy-status-block">
                     <span className={`logs-vacancy-status logs-vacancy-status-${latestStatus}`}>{latestStage}</span>
@@ -406,7 +412,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     <div className="logs-tab-panel">
       <div className="logs-errors-toolbar">
         <div className="logs-errors-summary">
-          <div className="logs-errors-title">Raw / Debug</div>
+          <div className="logs-errors-title">Сырой вид / отладка</div>
           <div className="logs-errors-subtitle">
             Есть два режима: удобный просмотр по событиям и сырой поток логов без потерь.
           </div>
@@ -427,7 +433,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         </div>
       </div>
       {filteredLogs.length === 0 ? (
-        <div className="logs-empty">No logs found</div>
+        <div className="logs-empty">Логи не найдены</div>
       ) : rawViewMode === 'stream' ? (
         <pre className="logs-stream">{formatLogsAsText()}</pre>
       ) : (
@@ -512,16 +518,16 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             onChange={(e) => setLevelFilter(e.target.value)}
           >
             <option value="all">Все уровни</option>
-            <option value="debug">Debug</option>
-            <option value="info">Info</option>
-            <option value="warn">Warn</option>
-            <option value="error">Error</option>
+            <option value="debug">Отладка</option>
+            <option value="info">Инфо</option>
+            <option value="warn">Предупреждения</option>
+            <option value="error">Ошибки</option>
           </select>
           <button className="btn btn-secondary btn-sm" onClick={loadLogs}>Обновить</button>
           <button className="btn btn-primary btn-sm" onClick={handleCopyAll} disabled={filteredLogs.length === 0}>
             Скопировать всё
           </button>
-          <div className="logs-count">{filteredLogs.length} / {logs.length} entries</div>
+          <div className="logs-count">{filteredLogs.length} / {logs.length} записей</div>
         </div>
 
         <div className="logs-tabs">
@@ -539,7 +545,7 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
         <div className="logs-viewer-content">
           {loading ? (
-            <div className="logs-loading">Loading logs...</div>
+            <div className="logs-loading">Загрузка логов...</div>
           ) : loadError ? (
             <div className="logs-empty">{loadError}</div>
           ) : (

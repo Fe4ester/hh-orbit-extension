@@ -19,12 +19,6 @@ export type ProblemBadgeLevel = 'error' | 'warn' | 'info';
 
 const MANUAL_KEYWORDS = [
   'manual action',
-  'questionnaire',
-  'questionnaire_required',
-  'test required',
-  'test_required',
-  'cover letter',
-  'external apply',
 ];
 
 const WARNING_KEYWORDS = [
@@ -43,35 +37,109 @@ const EXECUTION_ERROR_KEYWORDS = [
   'crash',
 ];
 
+const HANDLED_MANUAL_OUTCOMES = new Set([
+  'manual_action_required',
+  'manual_action',
+]);
+
+const HANDLED_NON_ERROR_OUTCOMES = new Set([
+  ...HANDLED_MANUAL_OUTCOMES,
+  'cover_letter_required',
+  'questionnaire_required',
+  'test_required',
+  'external_apply',
+  'already_applied',
+  'already_applied_to_vacancy',
+  'auth_required',
+  'login_required',
+  'captcha_required',
+  'timeout',
+  'blocked',
+]);
+
+function getContextStrings(log: LogEntry): string[] {
+  const context = log.context || {};
+  const values = [
+    context.outcome,
+    context.reason,
+    context.reasonCode,
+    context.error,
+    context.status,
+    context.blocker,
+    context.type,
+  ];
+
+  return values
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.toLowerCase());
+}
+
 function getHaystack(log: LogEntry): string {
   return `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
 }
 
+function getMessageHaystack(log: LogEntry): string {
+  return log.message.toLowerCase();
+}
+
 function hasExecutionErrorOutcome(log: LogEntry): boolean {
-  const context = log.context || {};
-  const outcome = typeof context.outcome === 'string' ? context.outcome.toLowerCase() : null;
-  const success = context.success;
+  const contextStrings = getContextStrings(log);
+  const outcome = contextStrings[0] || null;
+
+  if (contextStrings.some((value) => HANDLED_NON_ERROR_OUTCOMES.has(value))) {
+    return false;
+  }
 
   return (
     outcome === 'error' ||
     outcome === 'failed' ||
     outcome === 'failure' ||
     outcome === 'server_error' ||
-    success === false
+    outcome === 'unknown' ||
+    contextStrings.some((value) =>
+      value === 'exception' ||
+      value === 'network_error' ||
+      value === 'runtime_error' ||
+      value === 'execution_error'
+    )
   );
 }
 
 export function detectReason(log: LogEntry): Exclude<ErrorReason, 'all'> {
   const haystack = getHaystack(log);
+  const contextStrings = getContextStrings(log);
 
-  if (haystack.includes('cover letter') || haystack.includes('сопровод')) return 'cover_letter';
-  if (haystack.includes('questionnaire') || haystack.includes('анкет')) return 'questionnaire';
-  if (haystack.includes('test required') || haystack.includes('test_required') || haystack.includes('тест')) return 'test';
-  if (haystack.includes('captcha') || haystack.includes('капч')) return 'captcha';
-  if (haystack.includes('login') || haystack.includes('auth') || haystack.includes('авториза')) return 'login';
-  if (haystack.includes('external apply')) return 'external_apply';
+  if (
+    haystack.includes('manual action') ||
+    haystack.includes('manual_action') ||
+    contextStrings.includes('manual_action_required')
+  ) return 'manual_action';
+  if (
+    haystack.includes('cover letter') ||
+    haystack.includes('cover_letter') ||
+    haystack.includes('сопровод') ||
+    contextStrings.includes('cover_letter_required')
+  ) return 'cover_letter';
+  if (
+    haystack.includes('questionnaire') ||
+    haystack.includes('questionnaire_required') ||
+    haystack.includes('анкет')
+  ) return 'questionnaire';
+  if (
+    haystack.includes('test required') ||
+    haystack.includes('test_required') ||
+    haystack.includes('тест')
+  ) return 'test';
+  if (haystack.includes('captcha') || haystack.includes('captcha_required') || haystack.includes('капч')) return 'captcha';
+  if (
+    haystack.includes('login') ||
+    haystack.includes('auth') ||
+    haystack.includes('login_required') ||
+    haystack.includes('auth_required') ||
+    haystack.includes('авториза')
+  ) return 'login';
+  if (haystack.includes('external apply') || haystack.includes('external_apply')) return 'external_apply';
   if (haystack.includes('timeout')) return 'timeout';
-  if (haystack.includes('manual action')) return 'manual_action';
   if (hasExecutionErrorOutcome(log)) return 'error';
 
   return log.level === 'error' ? 'error' : 'other';
@@ -79,24 +147,31 @@ export function detectReason(log: LogEntry): Exclude<ErrorReason, 'all'> {
 
 export function classifyLogProblem(log: LogEntry): LogProblemKind {
   const haystack = getHaystack(log);
+  const messageHaystack = getMessageHaystack(log);
   const reason = detectReason(log);
 
-  if (
-    reason === 'questionnaire' ||
-    reason === 'test' ||
-    reason === 'manual_action' ||
-    reason === 'cover_letter' ||
-    reason === 'external_apply'
-  ) {
+  if (reason === 'manual_action') {
     return 'manual_case';
   }
 
   if (
     log.level === 'error' ||
     hasExecutionErrorOutcome(log) ||
-    EXECUTION_ERROR_KEYWORDS.some((keyword) => haystack.includes(keyword))
+    EXECUTION_ERROR_KEYWORDS.some((keyword) => messageHaystack.includes(keyword))
   ) {
     return 'execution_error';
+  }
+
+  if (
+    reason === 'questionnaire' ||
+    reason === 'test' ||
+    reason === 'external_apply'
+  ) {
+    return 'manual_case';
+  }
+
+  if (reason === 'cover_letter') {
+    return 'warning';
   }
 
   if (log.level === 'warn' || WARNING_KEYWORDS.some((keyword) => haystack.includes(keyword))) {
@@ -117,8 +192,14 @@ export function isProblemLog(log: LogEntry): boolean {
 export function detectVacancyStatus(log: LogEntry): VacancyVisualStatus {
   const haystack = getHaystack(log);
   const problemKind = classifyLogProblem(log);
+  const contextStrings = getContextStrings(log);
+  const hasPositiveSuccessOutcome =
+    contextStrings.includes('success') ||
+    haystack.includes('processed: success') ||
+    haystack.includes('application sent') ||
+    haystack.includes('отклик отправлен');
 
-  if (haystack.includes('success') || haystack.includes('processed: success') || haystack.includes('application sent')) {
+  if (hasPositiveSuccessOutcome) {
     return 'success';
   }
 
