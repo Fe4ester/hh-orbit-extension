@@ -572,6 +572,36 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
       expect(state.manualActions[0].reasonCode).toBe('cover_letter_template_missing');
     });
 
+    it('creates manual action and skips HTTP apply when the template exceeds the preflight limit', async () => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1', name: 'Test Profile', coverLetterTemplate: 'Too long',
+            keywordsInclude: ['test'], keywordsExclude: [], locations: [], experience: [], schedule: [], employment: [],
+          },
+        },
+        vacancyQueue: [{
+          vacancyId: 'vac-1', title: 'Backend Engineer', company: 'HH', url: 'https://hh.ru/vacancy/vac-1',
+          source: 'search_dom', discoveredAt: Date.now(), profileId: 'prof1', status: 'discovered',
+        }],
+      });
+      mockHttpClient.preflightApply.mockResolvedValue({
+        canProceed: false, reason: 'cover_letter_required', requiresCoverLetter: true, letterMaxLength: 3,
+      });
+
+      const result = await (engine as any).executeApply('vac-1');
+      const state = store.getState();
+
+      expect(result).toEqual({ outcome: 'cover_letter_required', requiresManualAction: true, coverLetterFlow: true });
+      expect(mockHttpClient.applyToVacancy).not.toHaveBeenCalled();
+      expect(state.manualActions[0]).toMatchObject({
+        reasonCode: 'cover_letter_template_too_long',
+        details: { letterLength: 8, letterMaxLength: 3 },
+      });
+    });
+
     it('does not report false success when HTTP apply still returns cover letter blocker', async () => {
       await store.updateState({
         selectedResumeHash: 'resume123',
@@ -764,6 +794,72 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
           }),
         })
       );
+    });
+  });
+
+  describe('apply decision counters and stop semantics', () => {
+    const configureQueuedVacancy = async (stopOnManualAction = false) => {
+      await store.updateState({
+        selectedResumeHash: 'resume123',
+        resumeCandidates: [{ hash: 'resume123', title: 'Resume', isActive: true, source: 'hh_detected', lastSeenAt: Date.now() }],
+        activeProfileId: 'prof1',
+        profiles: {
+          prof1: {
+            id: 'prof1', name: 'Test Profile', keywordsInclude: ['test'], keywordsExclude: [],
+            locations: [], experience: [], schedule: [], employment: [],
+          },
+        },
+        vacancyQueue: [{
+          vacancyId: 'vac-1', title: 'Backend Engineer', company: 'HH', url: 'https://hh.ru/vacancy/vac-1',
+          source: 'search_dom', discoveredAt: Date.now(), profileId: 'prof1', status: 'discovered',
+        }],
+        settings: { maxAutoAppliesPerRun: 0, delayMinSeconds: 1, delayMaxSeconds: 1, stopOnManualAction },
+      });
+      mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
+    };
+
+    it('counts a successful apply without creating a manual action', async () => {
+      await configureQueuedVacancy();
+      mockHttpClient.preflightApply.mockResolvedValue({ canProceed: true });
+      mockHttpClient.applyToVacancy.mockResolvedValue({ success: true, outcome: 'success' });
+
+      startPromise = engine.start();
+      await waitFor(() => sleepResolvers.length === 1);
+
+      expect(store.getState().runtime).toMatchObject({ processed: 1, success: 1, manualActions: 0 });
+      expect(store.getState().manualActions).toHaveLength(0);
+      await engine.stop();
+      releaseAllSleeps();
+      await startPromise;
+    });
+
+    it.each([
+      ['test_required', { requiresTest: true }],
+      ['questionnaire_required', { requiresQuestionnaire: true }],
+    ])('counts preflight %s as a manual action', async (outcome, blocker) => {
+      await configureQueuedVacancy();
+      mockHttpClient.preflightApply.mockResolvedValue({ canProceed: false, reason: outcome, ...blocker });
+
+      startPromise = engine.start();
+      await waitFor(() => sleepResolvers.length === 1);
+
+      expect(store.getState().runtime).toMatchObject({ processed: 1, success: 0, manualActions: 1 });
+      expect(store.getState().manualActions[0]).toMatchObject({ reasonCode: outcome });
+      expect(mockHttpClient.applyToVacancy).not.toHaveBeenCalled();
+      await engine.stop();
+      releaseAllSleeps();
+      await startPromise;
+    });
+
+    it('pauses after a manual blocker when stopOnManualAction is enabled', async () => {
+      await configureQueuedVacancy(true);
+      mockHttpClient.preflightApply.mockResolvedValue({ canProceed: false, reason: 'test_required', requiresTest: true });
+
+      await engine.start();
+
+      expect(store.getState().runtime).toMatchObject({ processed: 1, success: 0, manualActions: 1, currentPhase: 'paused_manual_action' });
+      expect(mockSleep).not.toHaveBeenCalled();
+      expect(engine.isRunning()).toBe(false);
     });
   });
 });

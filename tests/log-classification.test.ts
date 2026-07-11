@@ -172,6 +172,18 @@ describe('logClassification', () => {
     expect(classifyLogProblem(log)).toBe('execution_error');
   });
 
+  it('treats server_error as an execution error even when the log level is neutral', () => {
+    const log = makeLog({
+      level: 'info',
+      message: 'Apply result',
+      context: { outcome: 'server_error', success: false },
+    });
+
+    expect(detectReason(log)).toBe('error');
+    expect(classifyLogProblem(log)).toBe('execution_error');
+    expect(detectVacancyStatus(log)).toBe('error');
+  });
+
   it('treats explicit outcome:error with diagnostics as execution error', () => {
     const log = makeLog({
       level: 'info',

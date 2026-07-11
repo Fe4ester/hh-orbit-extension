@@ -363,6 +363,45 @@ describe('BackendHTTPClient', () => {
     );
   });
 
+  it('classifies text/html questionnaire markers before treating the response as an error', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      json: vi.fn().mockRejectedValue(new Error('Unexpected token < in JSON')),
+      text: vi.fn().mockResolvedValue('<html><div>Работодатель просит ответить на вопросы</div></html>'),
+    });
+
+    const result = await client.applyToVacancy('123', { resumeHash: 'resume123' });
+
+    expect(result).toMatchObject({
+      success: false,
+      outcome: 'questionnaire_required',
+      message: 'Questionnaire required',
+      diagnostics: { responseKind: 'text', status: 200 },
+    });
+  });
+
+  it('preserves an unrecognized text/html apply response as a diagnosable error', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      json: vi.fn().mockRejectedValue(new Error('Unexpected token < in JSON')),
+      text: vi.fn().mockResolvedValue('<html><div>New server state</div></html>'),
+    });
+
+    const result = await client.applyToVacancy('123', { resumeHash: 'resume123' });
+
+    expect(result).toMatchObject({
+      success: false,
+      outcome: 'error',
+      message: 'HTTP 200 (unrecognized text apply response)',
+      error: '<html><div>New server state</div></html>',
+      diagnostics: { responseKind: 'text', status: 200 },
+    });
+  });
+
   it('preserves diff-friendly diagnostics for successful cover-letter apply responses', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
