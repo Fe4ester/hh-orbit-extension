@@ -5,6 +5,7 @@
  */
 
 import type { StateStore } from '../state/store';
+import { hasReachedRunApplyLimit } from './runLimit';
 import type { AcquisitionService } from './acquisitionService';
 import { FileLogger } from '../utils/fileLogger';
 import type { VacancyQueueItem } from '../state/types';
@@ -26,7 +27,6 @@ type VacancyState =
   | 'failed'
   | 'skipped';
 
-// Processing context for a single vacancy
 interface VacancyContext {
   vacancy: VacancyQueueItem;
   state: VacancyState;
@@ -86,7 +86,6 @@ export class LiveAutoApplyEngineV2 {
       await this.deps.store.dispatch('START_CONFIRMED');
       await this.deps.store.resetRuntimeCounters();
 
-      // Initialize controlled tab
       const initResult = await this.initializeControlledTab();
       if (!initResult.success) {
         FileLogger.log('service_worker', 'error', 'Failed to initialize controlled tab', {
@@ -108,14 +107,13 @@ export class LiveAutoApplyEngineV2 {
         await this.deps.store.clearRuntimeBlocker();
       }
 
-      // Main loop
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
         // Проверка лимита: 0 = без лимита
-        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+        if (hasReachedRunApplyLimit(state.settings.maxAutoAppliesPerRun, state.runtime.success)) {
           FileLogger.log('service_worker', 'info', 'Run limit reached', {
             limit: state.settings.maxAutoAppliesPerRun,
-            processed: state.runtime.processed
+            success: state.runtime.success,
           });
           break;
         }
@@ -196,7 +194,6 @@ export class LiveAutoApplyEngineV2 {
       timestamp: new Date().toISOString()
     });
 
-    // Get controlled tab
     const state = this.deps.store.getState();
     let controlledTabId = state.liveMode.controlledTabId;
 
@@ -222,7 +219,6 @@ export class LiveAutoApplyEngineV2 {
       });
     }
 
-    // Check session
     await this.deps.store.setRuntimePhase('session_check');
     const blocker = this.deps.store.getState().runtimeBlocker;
 
@@ -245,7 +241,6 @@ export class LiveAutoApplyEngineV2 {
       }
     }
 
-    // Check resume
     await this.deps.store.setRuntimePhase('resume_check');
     const currentState = this.deps.store.getState();
     if (!currentState.selectedResumeHash) {
@@ -254,7 +249,6 @@ export class LiveAutoApplyEngineV2 {
       return 'blocked';
     }
 
-    // Acquire vacancies if needed
     const activeProfileId = currentState.activeProfileId;
     if (!activeProfileId) {
       FileLogger.log('service_worker', 'warn', 'No active profile');
@@ -262,7 +256,6 @@ export class LiveAutoApplyEngineV2 {
       return 'no_vacancies';
     }
 
-    // Clean processed vacancies
     const processedCount = currentState.vacancyQueue.filter(v => v.status === 'processed').length;
     if (processedCount > 0) {
       FileLogger.log('service_worker', 'info', 'Cleaning processed vacancies', { count: processedCount });
@@ -286,7 +279,6 @@ export class LiveAutoApplyEngineV2 {
       // Обычный acquisition с текущей страницы (skipNavigation: true чтобы не сбросить page=N)
       const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
-      // Save search URL from acquisition
       if (acquisitionResult.success && acquisitionResult.currentUrl) {
         const currentState = this.deps.store.getState();
         await this.deps.store.updateState({
@@ -369,7 +361,6 @@ export class LiveAutoApplyEngineV2 {
                   count: nextPageAcquisition.newQueued
                 });
 
-                // Save new search URL
                 if (nextPageAcquisition.currentUrl) {
                   const currentState = this.deps.store.getState();
                   await this.deps.store.updateState({
@@ -476,7 +467,6 @@ export class LiveAutoApplyEngineV2 {
                 count: nextPageAcquisition.newQueued
               });
 
-              // Save new search URL
               if (nextPageAcquisition.currentUrl) {
                 const currentState = this.deps.store.getState();
                 await this.deps.store.updateState({
@@ -512,7 +502,6 @@ export class LiveAutoApplyEngineV2 {
       }
     }
 
-    // Get next vacancy
     const nextVacancy = this.deps.store.getState().vacancyQueue.find(item => item.status === 'discovered');
     if (!nextVacancy) {
       FileLogger.log('service_worker', 'warn', 'Queue empty after acquisition');
@@ -520,11 +509,9 @@ export class LiveAutoApplyEngineV2 {
       return 'no_vacancies';
     }
 
-    // Process vacancy
     await this.deps.store.setRuntimePhase('apply');
     const result = await this.processSingleVacancy(nextVacancy, controlledTabId);
 
-    // Log cycle completion with metrics
     const cycleElapsed = Date.now() - cycleStartTime;
     FileLogger.log('service_worker', 'info', 'Cycle COMPLETE', {
       vacancyId: nextVacancy.vacancyId,
@@ -539,7 +526,6 @@ export class LiveAutoApplyEngineV2 {
       errors: result.context.errors,
     });
 
-    // Update counters
     if (result.outcome === 'success') {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, success: 1 });
     } else if (result.outcome === 'manual_action') {
@@ -634,7 +620,6 @@ export class LiveAutoApplyEngineV2 {
                   count: nextPageAcquisition.newQueued
                 });
 
-                // Save new search URL
                 if (nextPageAcquisition.currentUrl) {
                   const currentState = this.deps.store.getState();
                   await this.deps.store.updateState({
@@ -712,7 +697,6 @@ export class LiveAutoApplyEngineV2 {
       outcome: result.outcome,
     });
 
-    // Return appropriate cycle result based on outcome
     if (result.outcome === 'success') {
       return 'applied';
     } else {
@@ -744,7 +728,6 @@ export class LiveAutoApplyEngineV2 {
     });
 
     try {
-      // Step 0: Preflight check (КРИТИЧНО!)
       context.state = 'pending';
       const state = this.deps.store.getState();
       const resumeHash = state.selectedResumeHash;
@@ -796,7 +779,6 @@ export class LiveAutoApplyEngineV2 {
           // Ignore scroll errors
         }
 
-        // Create manual action
         await this.deps.store.createManualAction({
           type: 'questionnaire',
           vacancyId: vacancy.vacancyId,
@@ -824,7 +806,6 @@ export class LiveAutoApplyEngineV2 {
         return { success: false, outcome: 'skipped', reason: preflight.error || 'preflight_blocked', context };
       }
 
-      // Step 1: Validate on page
       context.state = 'validating';
 
       const validationResult = await this.validateVacancy(context, tabId);
@@ -837,7 +818,6 @@ export class LiveAutoApplyEngineV2 {
         return { success: false, outcome: 'skipped', reason: validationResult.reason, context };
       }
 
-      // Step 2: Click with retry
       context.state = 'clicking';
 
       const clickResult = await this.clickWithRetry(context, tabId);
@@ -851,7 +831,6 @@ export class LiveAutoApplyEngineV2 {
 
       await this.deps.sleep(500);
 
-      // Step 3: Handle modal sequence (если preflight показал модалки)
       if (preflight.requiresRelocationConfirm || preflight.requiresCoverLetter) {
         context.state = 'handling_modal';
 
@@ -919,11 +898,9 @@ export class LiveAutoApplyEngineV2 {
         return { success: true, outcome: 'success', context };
       }
 
-      // Step 4: Detect response (fallback если preflight не показал модалки)
       context.state = 'waiting_response';
       const responseType = await this.detectResponse(context, tabId);
 
-      // Step 5: Handle response
       if (responseType === 'modal') {
         context.state = 'handling_modal';
         const modalResult = await this.handleModal(context, tabId);
@@ -1136,7 +1113,6 @@ export class LiveAutoApplyEngineV2 {
     FileLogger.log('service_worker', 'info', 'Handling modal', { vacancyId: context.vacancy.vacancyId });
 
     try {
-      // Get cover letter from profile
       const state = this.deps.store.getState();
       const profile = Object.values(state.profiles).find(p => p.id === context.vacancy.profileId);
       const coverLetter = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
@@ -1178,7 +1154,6 @@ export class LiveAutoApplyEngineV2 {
     });
 
     try {
-      // Get cover letter from profile
       const state = this.deps.store.getState();
       const profile = Object.values(state.profiles).find(p => p.id === context.vacancy.profileId);
       const coverLetter = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
@@ -1253,7 +1228,6 @@ export class LiveAutoApplyEngineV2 {
           return { success: false };
         }
 
-        // Handle cover letter modal
         const coverLetterResult = await sendMessageWithTimeout(tabId, {
           type: 'HANDLE_ANY_MODAL',
           coverLetter,
@@ -1296,7 +1270,6 @@ export class LiveAutoApplyEngineV2 {
       if (testCheck?.testRequired) {
         FileLogger.log('service_worker', 'info', 'Test detected', { vacancyId: context.vacancy.vacancyId });
 
-        // Create manual action
         await this.deps.store.createManualAction({
           type: 'questionnaire',
           vacancyId: context.vacancy.vacancyId,
@@ -1325,7 +1298,6 @@ export class LiveAutoApplyEngineV2 {
       if (coverLetterCheck?.visible || coverLetterCheck?.textareaFound) {
         FileLogger.log('service_worker', 'info', 'Cover letter UI found, filling', { vacancyId: context.vacancy.vacancyId });
 
-        // Get cover letter from profile
         const state = this.deps.store.getState();
         const profile = Object.values(state.profiles).find(p => p.id === context.vacancy.profileId);
         const coverLetter = profile?.coverLetterTemplate || 'Здравствуйте! Заинтересован в данной вакансии.';
@@ -1409,7 +1381,6 @@ export class LiveAutoApplyEngineV2 {
       }
     }
 
-    // Create new tab
     const activeProfileId = state.activeProfileId;
     if (!activeProfileId) {
       return { success: false, error: 'no_active_profile' };

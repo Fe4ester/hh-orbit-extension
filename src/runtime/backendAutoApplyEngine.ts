@@ -7,6 +7,7 @@
 
 import type { StateStore } from '../state/store';
 import type { BackendHTTPClient } from './backendHTTPClient';
+import { hasReachedRunApplyLimit } from './runLimit';
 import { FileLogger } from '../utils/fileLogger';
 
 export interface BackendEngineDeps {
@@ -63,10 +64,10 @@ export class BackendAutoApplyEngine {
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
 
-        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+        if (hasReachedRunApplyLimit(state.settings.maxAutoAppliesPerRun, state.runtime.success)) {
           FileLogger.log('service_worker', 'info', 'Run limit reached', {
             limit: state.settings.maxAutoAppliesPerRun,
-            processed: state.runtime.processed
+            success: state.runtime.success,
           });
           break;
         }
