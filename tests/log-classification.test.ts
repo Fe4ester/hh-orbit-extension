@@ -141,6 +141,14 @@ describe('logClassification', () => {
     expect(detectVacancyStatus(log)).toBe('info');
   });
 
+  it.each([
+    'cover_letter_required', 'questionnaire_required', 'test_required', 'external_apply',
+    'already_applied', 'auth_required', 'login_required', 'captcha_required', 'timeout', 'blocked',
+  ])('never promotes handled outcome %s to execution_error', (outcome) => {
+    const log = makeLog({ level: 'error', message: 'Handled apply result', context: { outcome, success: false } });
+    expect(classifyLogProblem(log)).not.toBe('execution_error');
+  });
+
   it('keeps real execution errors as execution errors', () => {
     const log = makeLog({ level: 'error', message: 'Apply failed with exception' });
 

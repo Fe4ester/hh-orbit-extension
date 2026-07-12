@@ -1802,8 +1802,10 @@
 .logs-count {
   font-size: 13px;
   color: #666;
-  white-space: nowrap;
   margin-left: auto;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .logs-viewer-content {
@@ -1858,7 +1860,7 @@
 
 .logs-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -2031,6 +2033,16 @@
   color: #0c5460;
 }
 
+.logs-error-priority-execution_error {
+  background: #dc3545;
+  color: #fff;
+}
+
+.logs-error-priority-manual_case {
+  background: #d1ecf1;
+  color: #0c5460;
+}
+
 .logs-error-hint {
   font-size: 12px;
   font-weight: 600;
@@ -2060,6 +2072,16 @@
   color: #0c5460;
 }
 
+.logs-error-explanation-execution_error {
+  background: rgba(220, 53, 69, 0.08);
+  color: #5a1a1f;
+}
+
+.logs-error-explanation-manual_case {
+  background: rgba(23, 162, 184, 0.12);
+  color: #0c5460;
+}
+
 .logs-event-item,
 .logs-vacancy-card {
   padding: 12px;
@@ -2068,7 +2090,7 @@
   background: #fff;
 }
 
-.logs-event-item-danger {
+.logs-event-item-execution_error {
   border-color: #f5c2c7;
   background: #fff5f5;
 }
@@ -2078,7 +2100,7 @@
   background: #fff9e6;
 }
 
-.logs-event-item-manual {
+.logs-event-item-manual_case {
   border-color: #b6effb;
   background: #eefbff;
 }
@@ -2384,6 +2406,30 @@
   overflow-x: auto;
   user-select: text;
   cursor: text;
+}
+
+.logs-limit-note {
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: #fff3cd;
+  color: #6a4d00;
+  font-size: 12px;
+}
+
+.logs-copy-success { color: #155724; font-weight: 600; }
+.logs-copy-error { color: #721c24; font-weight: 600; }
+.logs-copy-fallback { position: fixed; opacity: 0; pointer-events: none; }
+
+@media (max-width: 560px) {
+  .logs-viewer-overlay { align-items: stretch; }
+  .logs-viewer-container { width: 100%; height: 100vh; border-radius: 0; }
+  .logs-viewer-header, .logs-viewer-controls, .logs-tabs, .logs-tab-panel { padding-left: 12px; padding-right: 12px; }
+  .logs-search-input, .logs-level-filter { width: 100%; flex-basis: 100%; min-width: 0; }
+  .logs-viewer-controls .btn { flex: 1; }
+  .logs-count { width: 100%; margin-left: 0; }
+  .logs-raw-summary { align-items: flex-start; flex-direction: column; }
+  .logs-event-message, .logs-vacancy-message, .logs-raw-json { overflow-wrap: anywhere; }
 }
 
 .logs-link {

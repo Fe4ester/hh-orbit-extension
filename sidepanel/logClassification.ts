@@ -1,4 +1,5 @@
 import type { LogEntry } from '../src/utils/fileLogger';
+import { safeStringify } from './logSerialization';
 
 export type ErrorReason =
   | 'all'
@@ -75,7 +76,7 @@ function getContextStrings(log: LogEntry): string[] {
 }
 
 function getHaystack(log: LogEntry): string {
-  return `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
+  return `${log.message} ${safeStringify(log.context || {})}`.toLowerCase();
 }
 
 function getMessageHaystack(log: LogEntry): string {
@@ -149,6 +150,21 @@ export function classifyLogProblem(log: LogEntry): LogProblemKind {
   const haystack = getHaystack(log);
   const messageHaystack = getMessageHaystack(log);
   const reason = detectReason(log);
+  const outcome = typeof log.context?.outcome === 'string' ? log.context.outcome.toLowerCase() : null;
+
+  if (outcome === 'success' || log.context?.success === true) {
+    return 'none';
+  }
+
+  if (outcome && HANDLED_NON_ERROR_OUTCOMES.has(outcome)) {
+    if (HANDLED_MANUAL_OUTCOMES.has(outcome) || reason === 'questionnaire' || reason === 'test' || reason === 'external_apply') {
+      return 'manual_case';
+    }
+    if (reason === 'cover_letter' || reason === 'captcha' || reason === 'login' || reason === 'timeout' || outcome === 'blocked') {
+      return 'warning';
+    }
+    return 'none';
+  }
 
   if (reason === 'manual_action') {
     return 'manual_case';
