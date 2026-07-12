@@ -83,6 +83,21 @@ function getMessageHaystack(log: LogEntry): string {
   return log.message.toLowerCase();
 }
 
+function isNeutralAuthDiagnostic(log: LogEntry): boolean {
+  const message = getMessageHaystack(log);
+  const isCheckAuthDiagnostic =
+    message === '[backendhttp] checkauth' ||
+    message === '[backendhttp] checkauth cookies' ||
+    message === '[backendhttp] checkauth result';
+
+  if (!isCheckAuthDiagnostic || log.context?.authorized === false) {
+    return false;
+  }
+
+  const contextStrings = getContextStrings(log);
+  return !contextStrings.some((value) => value === 'login_required' || value === 'auth_required');
+}
+
 function hasExecutionErrorOutcome(log: LogEntry): boolean {
   const contextStrings = getContextStrings(log);
   const outcome = contextStrings[0] || null;
@@ -107,6 +122,8 @@ function hasExecutionErrorOutcome(log: LogEntry): boolean {
 }
 
 export function detectReason(log: LogEntry): Exclude<ErrorReason, 'all'> {
+  if (isNeutralAuthDiagnostic(log)) return 'other';
+
   const haystack = getHaystack(log);
   const contextStrings = getContextStrings(log);
 
@@ -147,6 +164,10 @@ export function detectReason(log: LogEntry): Exclude<ErrorReason, 'all'> {
 }
 
 export function classifyLogProblem(log: LogEntry): LogProblemKind {
+  if (isNeutralAuthDiagnostic(log)) {
+    return 'none';
+  }
+
   const haystack = getHaystack(log);
   const messageHaystack = getMessageHaystack(log);
   const reason = detectReason(log);
@@ -168,6 +189,10 @@ export function classifyLogProblem(log: LogEntry): LogProblemKind {
 
   if (reason === 'manual_action') {
     return 'manual_case';
+  }
+
+  if (reason === 'login') {
+    return 'warning';
   }
 
   if (

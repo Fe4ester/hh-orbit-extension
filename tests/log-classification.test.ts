@@ -19,6 +19,63 @@ function makeLog(overrides: Partial<LogEntry>): LogEntry {
 }
 
 describe('logClassification', () => {
+  it('does not treat a successful checkAuth result as a problem', () => {
+    const log = makeLog({
+      level: 'warn',
+      message: '[BackendHTTP] checkAuth result',
+      context: { authorized: true },
+    });
+
+    expect(detectReason(log)).toBe('other');
+    expect(classifyLogProblem(log)).toBe('none');
+    expect(isProblemLog(log)).toBe(false);
+    expect(detectVacancyStatus(log)).toBe('info');
+  });
+
+  it('does not treat checkAuth cookies diagnostics as problems', () => {
+    const log = makeLog({
+      level: 'info',
+      message: '[BackendHTTP] checkAuth cookies',
+      context: { hasHhtoken: true, hasXsrf: true },
+    });
+
+    expect(detectReason(log)).toBe('other');
+    expect(classifyLogProblem(log)).toBe('none');
+    expect(isProblemLog(log)).toBe(false);
+  });
+
+  it('keeps an unsuccessful checkAuth result as an auth warning', () => {
+    const log = makeLog({
+      level: 'info',
+      message: '[BackendHTTP] checkAuth result',
+      context: { authorized: false },
+    });
+
+    expect(detectReason(log)).toBe('login');
+    expect(classifyLogProblem(log)).toBe('warning');
+    expect(isProblemLog(log)).toBe(true);
+  });
+
+  it('keeps explicit session authorization failures as auth warnings', () => {
+    const log = makeLog({ level: 'warn', message: 'Session check failed: not authorized' });
+
+    expect(detectReason(log)).toBe('login');
+    expect(classifyLogProblem(log)).toBe('warning');
+    expect(isProblemLog(log)).toBe(true);
+  });
+
+  it('keeps explicit login blockers as auth warnings', () => {
+    const log = makeLog({
+      level: 'info',
+      message: '[BackendHTTP] checkAuth cookies',
+      context: { blocker: 'login_required' },
+    });
+
+    expect(detectReason(log)).toBe('login');
+    expect(classifyLogProblem(log)).toBe('warning');
+    expect(isProblemLog(log)).toBe(true);
+  });
+
   it('does not treat generic warn as execution error', () => {
     const log = makeLog({ level: 'warn', message: 'Login required, session expired' });
 
