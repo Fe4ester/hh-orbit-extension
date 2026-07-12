@@ -1,12 +1,6 @@
 // Manual action detection module
 
-export type ManualActionType =
-  | 'questionnaire'
-  | 'test'
-  | 'cover_letter_missing'
-  | 'login_required'
-  | 'captcha'
-  | 'manual_review';
+import type { ManualActionType } from '../state/types';
 
 export interface ManualActionDetectionResult {
   requiresManualAction: boolean;
