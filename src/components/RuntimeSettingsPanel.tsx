@@ -18,6 +18,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
           value={settings.delayMinSeconds}
           onChange={(e) => onPatch({ delayMinSeconds: Number(e.target.value) })}
         />
+        <small style={{ fontSize: '11px', color: '#666' }}>Мин. пауза между откликами.</small>
       </label>
       <label htmlFor="runtime-delay-max">
         Макс. задержка (сек)
@@ -28,6 +29,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
           value={settings.delayMaxSeconds}
           onChange={(e) => onPatch({ delayMaxSeconds: Number(e.target.value) })}
         />
+        <small style={{ fontSize: '11px', color: '#666' }}>Макс. пауза. Итоговая задержка выбирается случайно между мин. и макс.</small>
       </label>
       <label htmlFor="runtime-limit-run">
         Лимит за запуск
