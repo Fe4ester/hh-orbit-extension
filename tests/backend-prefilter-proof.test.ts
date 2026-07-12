@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackendAutoApplyEngine } from '../src/runtime/backendAutoApplyEngine';
 import { StateStore } from '../src/state/store';
 import { InMemoryStorageAdapter } from '../src/state/storage';
@@ -9,13 +9,41 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
   let mockSleep: any;
   let mockLog: any;
   let engine: BackendAutoApplyEngine;
+  let sleepResolvers: Array<() => void>;
+  let startPromise: Promise<void> | null;
+
+  const waitFor = async (condition: () => boolean, timeoutMs = 1000): Promise<void> => {
+    const startedAt = Date.now();
+
+    while (!condition()) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error('Timed out waiting for condition');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
+  const releaseAllSleeps = (): void => {
+    const resolvers = sleepResolvers.splice(0);
+    resolvers.forEach((resolve) => resolve());
+  };
+
+  const releaseNextSleep = async (): Promise<void> => {
+    await waitFor(() => sleepResolvers.length > 0);
+    sleepResolvers.shift()!();
+  };
 
   beforeEach(async () => {
     store = new StateStore(new InMemoryStorageAdapter());
     await store.init();
 
     mockLog = vi.fn();
-    mockSleep = vi.fn().mockResolvedValue(undefined);
+    sleepResolvers = [];
+    startPromise = null;
+    mockSleep = vi.fn(() => new Promise<void>((resolve) => {
+      sleepResolvers.push(resolve);
+    }));
 
     mockHttpClient = {
       checkAuth: vi.fn().mockResolvedValue({ authorized: true }),
@@ -33,6 +61,18 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
       sleep: mockSleep,
       log: mockLog,
     });
+  });
+
+  afterEach(async () => {
+    if (engine?.isRunning()) {
+      await engine.stop();
+    }
+
+    releaseAllSleeps();
+
+    if (startPromise) {
+      await startPromise;
+    }
   });
 
   it('PROOF: explicit outcome for prefilter_eliminated_all triggers retry', async () => {
@@ -85,8 +125,8 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
       },
     });
 
-    const startPromise = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    startPromise = engine.start();
+    await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 1 && sleepResolvers.length === 1);
 
     const stateAfterCycle = store.getState();
 
@@ -106,6 +146,7 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
     expect(stateAfterCycle.runtimeState).toBe('RUNNING');
 
     await engine.stop();
+    releaseAllSleeps();
     await startPromise;
 
     const finalState = store.getState();
@@ -150,8 +191,8 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
       },
     });
 
-    const startPromise = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    startPromise = engine.start();
+    await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length === 1 && sleepResolvers.length === 1);
 
     const stateAfterCycle = store.getState();
 
@@ -161,6 +202,7 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
     expect(mockHttpClient.fetchVacancies).toHaveBeenCalledTimes(1);
 
     await engine.stop();
+    releaseAllSleeps();
     await startPromise;
   });
 
@@ -213,8 +255,10 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
       },
     });
 
-    const startPromise = engine.start();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    startPromise = engine.start();
+    await waitFor(() => fetchCallCount === 1 && sleepResolvers.length === 1);
+    await releaseNextSleep();
+    await waitFor(() => fetchCallCount >= 2);
 
     // PROOF: fetchVacancies was called multiple times (retry loop works)
     expect(fetchCallCount).toBeGreaterThanOrEqual(2);
@@ -223,6 +267,7 @@ describe('Backend Explicit Acquisition Outcome - Runtime Proof', () => {
     expect(engine.isRunning()).toBe(true);
 
     await engine.stop();
+    releaseAllSleeps();
     await startPromise;
   });
 });

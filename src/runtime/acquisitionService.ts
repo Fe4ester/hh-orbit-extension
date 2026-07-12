@@ -5,7 +5,7 @@
  * Returns structured result, not side effects.
  */
 
-import { StateStore } from '../state/store';
+import type { StateStore } from '../state/store';
 import { parseSearchResults } from '../live/searchResultsParser';
 import { FileLogger } from '../utils/fileLogger';
 import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
@@ -109,7 +109,7 @@ export class AcquisitionService {
       const tabAfter = await chrome.tabs.get(controlledTabId);
       const actualUrl = tabAfter.url || '';
 
-      if (!actualUrl.includes('/search/vacancy')) {
+      if (!actualUrl.includes('/search/vacancy') && !actualUrl.includes('/applicant/vacancy_search')) {
         FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'not_on_search_page', actualUrl });
         return {
           success: false,
@@ -122,7 +122,6 @@ export class AcquisitionService {
         };
       }
 
-      // Ping content script to verify it's loaded
       FileLogger.log('service_worker', 'debug', 'Acquisition content script check', { tabId: controlledTabId });
 
       let contentScriptReady = false;
@@ -132,7 +131,7 @@ export class AcquisitionService {
           FileLogger.log('service_worker', 'debug', 'Content script ready', { tabId: controlledTabId, attempt: attempt + 1 });
           contentScriptReady = true;
           break;
-        } catch (error) {
+        } catch {
           FileLogger.log('service_worker', 'debug', 'Content script not responding', { attempt: attempt + 1 });
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
@@ -212,7 +211,7 @@ export class AcquisitionService {
         currentUrl: actualUrl,
         pageType: 'search',
         cardsFound: cards.length,
-        newQueued: cards.length,
+        newQueued: queueAfter - queueBefore,
         queueSizeAfter: queueCount,
       };
     } catch (error) {

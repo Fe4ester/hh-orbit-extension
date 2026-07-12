@@ -5,8 +5,9 @@
  * Uses BackendHTTPClient for all operations.
  */
 
-import { StateStore } from '../state/store';
-import { BackendHTTPClient } from './backendHTTPClient';
+import type { StateStore } from '../state/store';
+import type { BackendHTTPClient } from './backendHTTPClient';
+import { hasReachedRunApplyLimit } from './runLimit';
 import { FileLogger } from '../utils/fileLogger';
 
 export interface BackendEngineDeps {
@@ -23,6 +24,8 @@ export type AcquisitionOutcome =
   | { success: false; reason: 'no_discovered_after_materialize'; queueLength: number }
   | { success: false; reason: 'exhausted'; consecutiveEmptyPages: number }
   | { success: false; reason: 'error'; error: string };
+
+type CycleOutcome = 'applied' | 'skipped' | 'manual' | 'blocked' | 'no_vacancies' | 'retry';
 
 export class BackendAutoApplyEngine {
   private running = false;
@@ -61,35 +64,35 @@ export class BackendAutoApplyEngine {
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
 
-        // Проверка лимита: 0 = без лимита
-        if (state.settings.maxAutoAppliesPerRun > 0 && state.runtime.processed >= state.settings.maxAutoAppliesPerRun) {
+        if (hasReachedRunApplyLimit(state.settings.maxAutoAppliesPerRun, state.runtime.success)) {
           FileLogger.log('service_worker', 'info', 'Run limit reached', {
             limit: state.settings.maxAutoAppliesPerRun,
-            processed: state.runtime.processed
+            success: state.runtime.success,
           });
           break;
         }
 
         const cycleResult = await this.runCycle();
 
-        if (cycleResult === 'blocked' || cycleResult === 'manual') {
+        if (cycleResult === 'blocked' || cycleResult === 'manual' || cycleResult === 'no_vacancies') {
           FileLogger.log('service_worker', 'info', 'Cycle stopped due to blocker', { reason: cycleResult });
           break;
         }
 
-        if (cycleResult === 'retry') {
-          FileLogger.log('service_worker', 'info', 'Cycle returned retry, continuing to next iteration');
-          // Continue to delay and next cycle
+        if (cycleResult === 'applied' || cycleResult === 'retry') {
+          const delaySeconds = this.randomInRange(
+            state.settings.delayMinSeconds,
+            state.settings.delayMaxSeconds
+          );
+          await this.deps.store.setRuntimePhase('waiting');
+          FileLogger.log(
+            'service_worker',
+            'info',
+            cycleResult === 'applied' ? 'Waiting after successful apply' : 'Waiting before acquisition retry',
+            { delaySeconds }
+          );
+          await this.deps.sleep(delaySeconds * 1000);
         }
-
-        const delaySeconds = this.randomInRange(
-          state.settings.delayMinSeconds,
-          state.settings.delayMaxSeconds
-        );
-
-        await this.deps.store.setRuntimePhase('waiting');
-        FileLogger.log('service_worker', 'info', 'Waiting between cycles', { delaySeconds });
-        await this.deps.sleep(delaySeconds * 1000);
       }
 
       FileLogger.log('service_worker', 'info', 'Pipeline finished');
@@ -155,10 +158,9 @@ export class BackendAutoApplyEngine {
     FileLogger.log('service_worker', 'info', 'BackendEngine stopped');
   }
 
-  private async runCycle(): Promise<'ok' | 'blocked' | 'manual' | 'no_vacancies' | 'retry'> {
+  private async runCycle(): Promise<CycleOutcome> {
     FileLogger.log('service_worker', 'info', 'Cycle start');
 
-    // 1. Check session
     await this.deps.store.setRuntimePhase('session_check');
     this.notify('info', 'Проверка авторизации...');
 
@@ -172,7 +174,6 @@ export class BackendAutoApplyEngine {
 
     this.notify('success', 'Авторизация успешна');
 
-    // 2. Check resume
     await this.deps.store.setRuntimePhase('resume_check');
     this.notify('info', 'Проверка резюме...');
 
@@ -277,6 +278,8 @@ export class BackendAutoApplyEngine {
       this.notify('warn', `Требуется тест: ${nextVacancy.title || nextVacancy.vacancyId}`);
     } else if (applyResult.outcome === 'questionnaire_required') {
       this.notify('warn', `Требуется анкета: ${nextVacancy.title || nextVacancy.vacancyId}`);
+    } else if (applyResult.outcome === 'cover_letter_required') {
+      this.notify('warn', `Требуется сопроводительное письмо: ${nextVacancy.title || nextVacancy.vacancyId}`);
     } else {
       this.notify('error', `Ошибка отклика: ${nextVacancy.title || nextVacancy.vacancyId}`);
     }
@@ -291,6 +294,7 @@ export class BackendAutoApplyEngine {
     FileLogger.log('service_worker', 'info', 'Cycle complete', {
       vacancyId: nextVacancy.vacancyId,
       outcome: applyResult.outcome,
+      coverLetterFlow: applyResult.coverLetterFlow,
       processed: this.deps.store.getState().runtime.processed,
       success: this.deps.store.getState().runtime.success,
       manualActions: this.deps.store.getState().runtime.manualActions,
@@ -298,6 +302,10 @@ export class BackendAutoApplyEngine {
 
     // Mark vacancy as processed
     await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId);
+
+    if (applyResult.outcome === 'success') {
+      return 'applied';
+    }
 
     if (applyResult.requiresManualAction && this.deps.store.getState().settings.stopOnManualAction) {
       FileLogger.log('service_worker', 'info', 'Manual action detected, stopOnManualAction enabled - pausing', {
@@ -307,7 +315,12 @@ export class BackendAutoApplyEngine {
       return 'manual';
     }
 
-    return 'ok';
+    FileLogger.log('service_worker', 'info', 'Continuing without delay after non-success apply outcome', {
+      vacancyId: nextVacancy.vacancyId,
+      outcome: applyResult.outcome,
+      requiresManualAction: applyResult.requiresManualAction,
+    });
+    return 'skipped';
   }
 
   private async checkSession(): Promise<boolean> {
@@ -358,7 +371,6 @@ export class BackendAutoApplyEngine {
       return true;
     }
 
-    // Fetch resumes via API
     FileLogger.log('service_worker', 'info', 'Resume auto-refresh started');
     try {
       const resumes = await this.deps.httpClient.getMyResumes();
@@ -440,7 +452,6 @@ export class BackendAutoApplyEngine {
           consecutiveEmptyPages: newConsecutiveEmpty,
         });
 
-        // Check exhaustion threshold
         if (newConsecutiveEmpty >= EXHAUSTION_THRESHOLD) {
           FileLogger.log('service_worker', 'warn', 'Search space exhausted - no more vacancies available', {
             consecutiveEmptyPages: newConsecutiveEmpty,
@@ -522,13 +533,14 @@ export class BackendAutoApplyEngine {
   private async executeApply(vacancyId: string): Promise<{
     outcome: string;
     requiresManualAction: boolean;
+    coverLetterFlow: boolean;
   }> {
     const state = this.deps.store.getState();
     const profile = state.activeProfileId ? state.profiles[state.activeProfileId] : null;
 
     if (!state.selectedResumeHash) {
       FileLogger.log('service_worker', 'error', 'No resume selected');
-      return { outcome: 'error', requiresManualAction: false };
+      return { outcome: 'error', requiresManualAction: false, coverLetterFlow: false };
     }
 
     try {
@@ -537,6 +549,8 @@ export class BackendAutoApplyEngine {
         vacancyId,
         state.selectedResumeHash
       );
+      let shouldAttemptApplyDespitePreflightBlock = false;
+      let attemptedCoverLetterHTTPPath = false;
 
       FileLogger.log('service_worker', 'info', 'Preflight result', {
         vacancyId,
@@ -545,6 +559,8 @@ export class BackendAutoApplyEngine {
         alreadyApplied: preflight.alreadyApplied,
         requiresTest: preflight.requiresTest,
         requiresQuestionnaire: preflight.requiresQuestionnaire,
+        requiresCoverLetter: preflight.requiresCoverLetter,
+        letterMaxLength: preflight.letterMaxLength,
       });
 
       if (!preflight.canProceed) {
@@ -557,7 +573,7 @@ export class BackendAutoApplyEngine {
             message: 'Already applied',
           });
 
-          return { outcome: 'already_applied', requiresManualAction: false };
+          return { outcome: 'already_applied', requiresManualAction: false, coverLetterFlow: false };
         }
 
         if (preflight.requiresTest || preflight.requiresQuestionnaire) {
@@ -582,14 +598,61 @@ export class BackendAutoApplyEngine {
           return {
             outcome: preflight.requiresTest ? 'test_required' : 'questionnaire_required',
             requiresManualAction: true,
+            coverLetterFlow: false,
           };
         }
 
-        FileLogger.log('service_worker', 'warn', 'Preflight blocked', {
-          vacancyId,
-          reason: preflight.reason
-        });
-        return { outcome: 'error', requiresManualAction: false };
+        if (preflight.requiresCoverLetter) {
+          const coverLetterTemplate = profile?.coverLetterTemplate?.trim();
+
+          if (!coverLetterTemplate) {
+            await this.createCoverLetterManualAction(
+              state,
+              vacancyId,
+              'cover_letter_template_missing'
+            );
+
+            return {
+              outcome: 'cover_letter_required',
+              requiresManualAction: true,
+              coverLetterFlow: true,
+            };
+          }
+
+          if (preflight.letterMaxLength && coverLetterTemplate.length > preflight.letterMaxLength) {
+            await this.createCoverLetterManualAction(
+              state,
+              vacancyId,
+              'cover_letter_template_too_long',
+              {
+                letterLength: coverLetterTemplate.length,
+                letterMaxLength: preflight.letterMaxLength,
+              }
+            );
+
+            return {
+              outcome: 'cover_letter_required',
+              requiresManualAction: true,
+              coverLetterFlow: true,
+            };
+          }
+
+          FileLogger.log('service_worker', 'info', 'Preflight requires cover letter, attempting HTTP apply with template', {
+            vacancyId,
+            templateLength: coverLetterTemplate.length,
+            letterMaxLength: preflight.letterMaxLength,
+          });
+          shouldAttemptApplyDespitePreflightBlock = true;
+          attemptedCoverLetterHTTPPath = true;
+        }
+
+        if (!shouldAttemptApplyDespitePreflightBlock) {
+          FileLogger.log('service_worker', 'warn', 'Preflight blocked', {
+            vacancyId,
+            reason: preflight.reason
+          });
+          return { outcome: 'error', requiresManualAction: false, coverLetterFlow: false };
+        }
       }
 
       // 2. Apply
@@ -607,6 +670,8 @@ export class BackendAutoApplyEngine {
         vacancyId,
         success: applyResult.success,
         outcome: applyResult.outcome,
+        coverLetterFlow: attemptedCoverLetterHTTPPath,
+        diagnostics: applyResult.diagnostics,
       });
 
       // 3. Record attempt
@@ -616,12 +681,43 @@ export class BackendAutoApplyEngine {
         resumeHash: state.selectedResumeHash,
         outcome: applyResult.outcome,
         message: applyResult.message || '',
+        metadata: applyResult.diagnostics ? { diagnostics: applyResult.diagnostics } : undefined,
       });
+
+      if (applyResult.outcome === 'cover_letter_required') {
+        await this.createCoverLetterManualAction(
+          state,
+          vacancyId,
+          'cover_letter_required_after_http_apply'
+        );
+      }
+
+      if (
+        attemptedCoverLetterHTTPPath &&
+        (applyResult.outcome === 'error' || applyResult.outcome === 'unknown')
+      ) {
+        await this.createCoverLetterManualAction(
+          state,
+          vacancyId,
+          'cover_letter_http_protocol_gap',
+          {
+            applyOutcome: applyResult.outcome,
+            applyMessage: applyResult.message,
+            applyError: applyResult.error,
+            diagnostics: applyResult.diagnostics,
+          }
+        );
+      }
 
       return {
         outcome: applyResult.outcome,
         requiresManualAction:
-          applyResult.outcome === 'test_required' || applyResult.outcome === 'questionnaire_required',
+          applyResult.outcome === 'test_required' ||
+          applyResult.outcome === 'questionnaire_required' ||
+          applyResult.outcome === 'cover_letter_required' ||
+          (attemptedCoverLetterHTTPPath &&
+            (applyResult.outcome === 'error' || applyResult.outcome === 'unknown')),
+        coverLetterFlow: attemptedCoverLetterHTTPPath,
       };
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Apply error', {
@@ -632,11 +728,40 @@ export class BackendAutoApplyEngine {
       return {
         outcome: 'error',
         requiresManualAction: false,
+        coverLetterFlow: false,
       };
     }
   }
 
   private randomInRange(min: number, max: number): number {
     return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  private async createCoverLetterManualAction(
+    state: ReturnType<StateStore['getState']>,
+    vacancyId: string,
+    reasonCode: string,
+    details?: Record<string, any>
+  ): Promise<void> {
+    const nextVacancy = state.vacancyQueue.find((v) => v.vacancyId === vacancyId);
+
+    FileLogger.log('service_worker', 'warn', 'Manual action required', {
+      type: 'cover_letter_missing',
+      vacancyId,
+      reasonCode,
+      details,
+    });
+
+    await this.deps.store.createManualAction({
+      type: 'cover_letter_missing',
+      vacancyId,
+      vacancyTitle: nextVacancy?.title || `Vacancy ${vacancyId}`,
+      company: nextVacancy?.company,
+      url: nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
+      profileId: state.activeProfileId || undefined,
+      status: 'pending',
+      reasonCode,
+      details,
+    });
   }
 }

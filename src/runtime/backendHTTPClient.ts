@@ -5,7 +5,7 @@
  * Uses browser cookies for authentication.
  */
 
-import { Profile } from '../state/types';
+import type { Profile } from '../state/types';
 
 export interface APIVacancy {
   id: string;
@@ -28,9 +28,88 @@ export interface HHApplyContext {
 
 export interface ApplyResponse {
   success: boolean;
-  outcome: 'success' | 'already_applied' | 'test_required' | 'questionnaire_required' | 'auth_required' | 'server_error' | 'error' | 'unknown';
+  outcome: 'success' | 'already_applied' | 'test_required' | 'questionnaire_required' | 'cover_letter_required' | 'auth_required' | 'server_error' | 'error' | 'unknown';
   message?: string;
   error?: string;
+  diagnostics?: {
+    responseKind: 'json' | 'text';
+    status?: number;
+    keys?: string[];
+    type?: string;
+    errorSignal?: string | null;
+    preview?: string;
+  };
+}
+
+function getStructuredPreview(data: unknown): string {
+  return JSON.stringify(data).substring(0, 200);
+}
+
+function previewText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().substring(0, 200);
+}
+
+function hasQuickResponseQuestionnaireBlocker(data: any): boolean {
+  return (
+    data.responseStatus?.questionnaireRequired === true ||
+    data.responseStatus?.questionnaire?.hasQuestions === true ||
+    data.responseStatus?.questionnaire?.required === true ||
+    data.questionnaireRequired === true
+  );
+}
+
+function hasCoverLetterBlockerInText(text: string): boolean {
+  return (
+    text.includes('vacancy-response-letter-input') ||
+    text.includes('textarea name="letter"') ||
+    text.includes('Сопроводительное письмо') ||
+    text.includes('cover_letter') ||
+    text.includes('responseLetterRequired')
+  );
+}
+
+function hasApplySuccessInText(text: string): boolean {
+  return (
+    text.includes('Отклик отправлен') ||
+    text.includes('vacancy-response-success') ||
+    text.includes('vacancy-response-submit-popup') ||
+    text.includes('popup_success') ||
+    text.includes('отклик отправлен')
+  );
+}
+
+function hasQuestionnaireBlockerInText(text: string): boolean {
+  return (
+    text.includes('vacancy-response-questionnaire') ||
+    text.includes('Работодатель просит ответить на вопросы') ||
+    text.includes('ответить на вопросы работодателя')
+  );
+}
+
+function hasAlreadyAppliedInText(text: string): boolean {
+  return text.includes('Вы уже откликались') || text.includes('alreadyApplied');
+}
+
+function extractApplyErrorSignal(data: any): string | null {
+  const candidates = [
+    data?.error,
+    data?.error_code,
+    data?.reason,
+    data?.responseStatus?.error,
+    data?.responseStatus?.error_code,
+    data?.responseStatus?.reason,
+    data?.validation?.error,
+    data?.validation?.error_code,
+    data?.validation?.reason,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
 }
 
 export class BackendHTTPClient {
@@ -55,8 +134,6 @@ export class BackendHTTPClient {
       page: String(page),
     });
 
-    // Global search: only resume binding if available
-    // No profile filters in URL - filtering happens in-app
     const state = await chrome.storage.local.get('state');
     const resumeHash = state.state?.selectedResumeHash;
 
@@ -106,7 +183,6 @@ export class BackendHTTPClient {
         hasVacancyCards: html.includes('data-qa="vacancy-serp__vacancy"'),
       });
 
-      // Парсинг HTML
       const vacancies = this.parseVacanciesFromHTML(html);
 
       this.log('[BackendHTTP] fetchVacancies parsed', {
@@ -138,7 +214,6 @@ export class BackendHTTPClient {
   private parseVacanciesFromHTML(html: string): APIVacancy[] {
     const vacancies: APIVacancy[] = [];
 
-    // Split по карточкам вакансий
     const parts = html.split(/<div[^>]*data-qa="vacancy-serp__vacancy"[^>]*>/);
     const cards = parts.slice(1); // Первая часть — до карточек
 
@@ -146,21 +221,17 @@ export class BackendHTTPClient {
 
     for (const cardHtml of cards) {
       try {
-        // Extract ID
         const idMatch = cardHtml.match(/vacancy\/(\d+)/);
         if (!idMatch) continue;
 
         const id = idMatch[1];
 
-        // Extract title
         const titleMatch = cardHtml.match(/data-qa="serp-item__title"[^>]*>([\s\S]*?)<\/a>/);
         const name = titleMatch ? this.stripHtml(titleMatch[1]) : `Vacancy ${id}`;
 
-        // Extract company
         const companyMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-employer"[^>]*>([\s\S]*?)<\/a>/);
         const employerName = companyMatch ? this.stripHtml(companyMatch[1]) : 'Unknown';
 
-        // Extract URL
         const urlMatch = cardHtml.match(/href="([^"]*\/vacancy\/\d+[^"]*)"/);
         let alternate_url: string;
         if (urlMatch) {
@@ -170,7 +241,6 @@ export class BackendHTTPClient {
           alternate_url = `https://hh.ru/vacancy/${id}`;
         }
 
-        // Extract salary (optional)
         let salary: { from?: number; to?: number; currency: string } | undefined;
         const salaryMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-compensation"[^>]*>([\s\S]*?)<\/span>/);
         if (salaryMatch) {
@@ -178,7 +248,6 @@ export class BackendHTTPClient {
           salary = this.parseSalary(salaryText);
         }
 
-        // Extract area (optional)
         const areaMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-address"[^>]*>([\s\S]*?)<\/div>/);
         const areaName = areaMatch ? this.stripHtml(areaMatch[1]) : 'Unknown';
 
@@ -247,7 +316,9 @@ export class BackendHTTPClient {
     reason?: string;
     requiresTest?: boolean;
     requiresQuestionnaire?: boolean;
+    requiresCoverLetter?: boolean;
     alreadyApplied?: boolean;
+    letterMaxLength?: number;
   }> {
     const url = `${this.popupURL}?vacancyId=${vacancyId}&resumeHash=${resumeHash}&lux=true&alreadyApplied=false&isTest=no&withoutTest=no`;
 
@@ -266,11 +337,10 @@ export class BackendHTTPClient {
 
       this.log('[BackendHTTP] preflightApply response', { status: response.status, ok: response.ok });
 
-      // Извлечь XSRF token из cookies через chrome.cookies API
       const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
       if (xsrfCookie?.value) {
         this.xsrfToken = xsrfCookie.value;
-        this.log('[BackendHTTP] XSRF token extracted', { token: this.xsrfToken.substring(0, 8) + '...' });
+        this.log('[BackendHTTP] XSRF token extracted', { hasXsrfToken: true });
       } else {
         this.log('[BackendHTTP] WARNING: No XSRF token found in cookies');
       }
@@ -288,7 +358,6 @@ export class BackendHTTPClient {
       this.log('[BackendHTTP] preflightApply data', { type: data.type });
       this.log('[BackendHTTP] preflightApply FULL RESPONSE', { data: JSON.stringify(data) });
 
-      // Проверить preflight response
       if (data.type === 'alreadyApplied') {
         return { canProceed: false, alreadyApplied: true, reason: 'already_applied' };
       }
@@ -301,15 +370,45 @@ export class BackendHTTPClient {
         return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
       }
 
+      if (data.type === 'quickResponse') {
+        if (data.responseStatus?.test?.hasTests === true) {
+          return { canProceed: false, requiresTest: true, reason: 'test_required' };
+        }
+
+        if (hasQuickResponseQuestionnaireBlocker(data)) {
+          return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
+        }
+
+        if (data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true) {
+          return {
+            canProceed: false,
+            requiresCoverLetter: true,
+            reason: 'cover_letter_required',
+            letterMaxLength: data.responseStatus?.letterMaxLength,
+          };
+        }
+
+        this.log('[BackendHTTP] preflightApply: quickResponse type, proceeding');
+        return { canProceed: true };
+      }
+
       if (data.type === 'modal') {
-        // Modal popup — может быть cover letter или другое
-        // Попробовать POST anyway
+        if (data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true) {
+          this.log('[BackendHTTP] preflightApply: modal cover letter required, blocking backend apply');
+          return {
+            canProceed: false,
+            requiresCoverLetter: true,
+            reason: 'cover_letter_required',
+            letterMaxLength: data.responseStatus?.letterMaxLength,
+          };
+        }
+
         this.log('[BackendHTTP] preflightApply: modal type, proceeding with POST');
         return { canProceed: true };
       }
 
-      // quickResponse или unknown — можно продолжать
-      return { canProceed: true };
+      this.log('[BackendHTTP] preflightApply: unknown type, blocking', { type: data.type });
+      return { canProceed: false, reason: `unknown_preflight_type:${String(data.type)}` };
     } catch (error) {
       this.log('[BackendHTTP] preflightApply error', error);
       return { canProceed: false, reason: 'network_error' };
@@ -324,32 +423,26 @@ export class BackendHTTPClient {
     context: HHApplyContext,
     coverLetter?: string
   ): Promise<ApplyResponse> {
+    await this.ensureXsrfToken();
     this.log('[BackendHTTP] applyToVacancy', { vacancyId, hasXsrf: !!this.xsrfToken });
+    const hasCoverLetter = !!coverLetter?.trim();
+    const { body, bodyKeys, contentTypeMode } = this.buildApplyRequestBody(
+      vacancyId,
+      context,
+      coverLetter
+    );
 
-    // Построить body (form-data)
-    const body = new URLSearchParams({
-      resume_hash: context.resumeHash,
-      vacancy_id: vacancyId,
-      lux: String(context.lux ?? true),
-      ignore_postponed: String(context.ignorePostponed ?? true),
-      letterRequired: String(!!coverLetter),
-      mark_applicant_visible_in_vacancy_country: 'false',
-      country_ids: '[]',
-    });
-
-    if (coverLetter) {
-      body.append('cover_letter', coverLetter);
-    }
-
-    // Headers
     const headers: Record<string, string> = {
-      'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
       'Referer': context.referer || 'https://hh.ru/',
       'x-hhtmfrom': context.hhtmFrom || 'negotiation_list',
       'x-hhtmsource': context.hhtmSource || 'main',
     };
+
+    if (!hasCoverLetter) {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    }
 
     // КРИТИЧНО: добавить XSRF token
     if (this.xsrfToken) {
@@ -358,19 +451,26 @@ export class BackendHTTPClient {
       this.log('[BackendHTTP] WARNING: No XSRF token available');
     }
 
-    this.log('[BackendHTTP] applyToVacancy request', { url: this.popupURL, headers, bodyKeys: Array.from(body.keys()) });
+    this.log('[BackendHTTP] applyToVacancy request', {
+      url: this.popupURL,
+      headerKeys: Object.keys(headers),
+      hasXsrfToken: Boolean(this.xsrfToken),
+      bodyKeys,
+      contentTypeMode,
+    });
 
     try {
       const response = await fetch(this.popupURL, {
         method: 'POST',
         credentials: 'include',
         headers,
-        body: body.toString(),
+        body,
       });
 
       this.log('[BackendHTTP] applyToVacancy response', {
         status: response.status,
         ok: response.ok,
+        contentType: response.headers?.get?.('content-type') ?? null,
       });
 
       if (!response.ok) {
@@ -390,6 +490,11 @@ export class BackendHTTPClient {
           };
         }
 
+        const normalizedErrorResponse = await this.tryNormalizeErrorResponse(response);
+        if (normalizedErrorResponse) {
+          return normalizedErrorResponse;
+        }
+
         return {
           success: false,
           outcome: 'error',
@@ -397,12 +502,7 @@ export class BackendHTTPClient {
         };
       }
 
-      const data = await response.json();
-
-      this.log('[BackendHTTP] applyToVacancy response body', { data: JSON.stringify(data).substring(0, 200) });
-
-      // Нормализовать response
-      return this.normalizeApplyResponse(data);
+      return await this.normalizeApplyHTTPResponse(response);
     } catch (error) {
       this.log('[BackendHTTP] applyToVacancy error', error);
       return {
@@ -413,13 +513,210 @@ export class BackendHTTPClient {
     }
   }
 
-  private normalizeApplyResponse(data: any): ApplyResponse {
+  private buildApplyRequestBody(
+    vacancyId: string,
+    context: HHApplyContext,
+    coverLetter?: string
+  ): {
+    body: FormData | string;
+    bodyKeys: string[];
+    contentTypeMode: 'multipart/form-data' | 'application/x-www-form-urlencoded';
+  } {
+    const hasCoverLetter = !!coverLetter?.trim();
+
+    if (hasCoverLetter) {
+      const body = new FormData();
+
+      if (this.xsrfToken) {
+        body.append('_xsrf', this.xsrfToken);
+      }
+
+      body.append('vacancy_id', vacancyId);
+      body.append('resume_hash', context.resumeHash);
+      body.append('ignore_postponed', String(context.ignorePostponed ?? true));
+      body.append('incomplete', 'false');
+      body.append('mark_applicant_visible_in_vacancy_country', 'false');
+      body.append('country_ids', '[]');
+      body.append('letter', coverLetter!.trim());
+      body.append('lux', String(context.lux ?? true));
+      body.append('withoutTest', 'no');
+      body.append('hhtmFromLabel', context.hhtmFrom || '');
+      body.append('hhtmSourceLabel', context.hhtmSource || '');
+
+      return {
+        body,
+        bodyKeys: Array.from(body.keys()),
+        contentTypeMode: 'multipart/form-data',
+      };
+    }
+
+    const body = new URLSearchParams({
+      resume_hash: context.resumeHash,
+      vacancy_id: vacancyId,
+      lux: String(context.lux ?? true),
+      ignore_postponed: String(context.ignorePostponed ?? true),
+      mark_applicant_visible_in_vacancy_country: 'false',
+      country_ids: '[]',
+    });
+
+    return {
+      body: body.toString(),
+      bodyKeys: Array.from(body.keys()),
+      contentTypeMode: 'application/x-www-form-urlencoded',
+    };
+  }
+
+  private async tryNormalizeErrorResponse(response: Response): Promise<ApplyResponse | null> {
+    try {
+      const data = await response.json();
+      const preview = getStructuredPreview(data);
+      const summary = this.summarizeJSONResponse(data, response.status);
+      this.log('[BackendHTTP] applyToVacancy error body', {
+        status: response.status,
+        data: preview,
+        summary,
+      });
+
+      const normalized = this.normalizeApplyResponse(data, response.status);
+      if (normalized.outcome !== 'unknown') {
+        this.logCoverLetterAttemptSummary(normalized, summary);
+        return normalized;
+      }
+
+      const typeSuffix = typeof data?.type === 'string' ? ` type=${data.type}` : '';
+      return {
+        success: false,
+        outcome: 'error',
+        message: `HTTP ${response.status} (unrecognized apply response${typeSuffix})`,
+        error: preview,
+        diagnostics: summary,
+      };
+    } catch (error) {
+      this.log('[BackendHTTP] applyToVacancy error body parse failed', {
+        status: response.status,
+        error: (error as Error).message,
+      });
+    }
+
+    return null;
+  }
+
+  private async ensureXsrfToken(): Promise<void> {
+    if (this.xsrfToken) {
+      return;
+    }
+
+    try {
+      const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
+      if (xsrfCookie?.value) {
+        this.xsrfToken = xsrfCookie.value;
+        this.log('[BackendHTTP] XSRF token extracted', {
+          hasXsrfToken: true,
+        });
+      }
+    } catch (error) {
+      this.log('[BackendHTTP] Failed to get XSRF token', {
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  private async normalizeApplyHTTPResponse(response: Response): Promise<ApplyResponse> {
+    try {
+      const data = await response.json();
+      const summary = this.summarizeJSONResponse(data, response.status);
+
+      this.log('[BackendHTTP] applyToVacancy response body', {
+        data: JSON.stringify(data).substring(0, 200),
+        summary,
+      });
+
+      const normalized = this.normalizeApplyResponse(data, response.status);
+      this.logCoverLetterAttemptSummary(normalized, summary);
+      return normalized;
+    } catch (error) {
+      this.log('[BackendHTTP] applyToVacancy JSON parse failed, trying text fallback', {
+        status: response.status,
+        error: (error as Error).message,
+      });
+    }
+
+    const text = await response.text();
+    const preview = text.substring(0, 500);
+
+    this.log('[BackendHTTP] applyToVacancy text fallback', {
+      status: response.status,
+      preview,
+    });
+
+    const normalized = this.normalizeApplyTextResponse(text, response.status);
+    this.logCoverLetterAttemptSummary(normalized, normalized.diagnostics);
+    return normalized;
+  }
+
+  private normalizeApplyTextResponse(text: string, status: number): ApplyResponse {
+    const diagnostics = {
+      responseKind: 'text' as const,
+      status,
+      preview: previewText(text),
+    };
+
+    if (hasAlreadyAppliedInText(text)) {
+      return {
+        success: false,
+        outcome: 'already_applied',
+        message: 'Already applied to this vacancy',
+        diagnostics,
+      };
+    }
+
+    if (hasQuestionnaireBlockerInText(text)) {
+      return {
+        success: false,
+        outcome: 'questionnaire_required',
+        message: 'Questionnaire required',
+        diagnostics,
+      };
+    }
+
+    if (hasApplySuccessInText(text)) {
+      return {
+        success: true,
+        outcome: 'success',
+        message: 'Application sent successfully (text fallback)',
+        diagnostics,
+      };
+    }
+
+    if (hasCoverLetterBlockerInText(text)) {
+      return {
+        success: false,
+        outcome: 'cover_letter_required',
+        message: 'Cover letter required',
+        diagnostics,
+      };
+    }
+
+    return {
+      success: false,
+      outcome: 'error',
+      message: `HTTP ${status} (unrecognized text apply response)`,
+      error: previewText(text),
+      diagnostics,
+    };
+  }
+
+  private normalizeApplyResponse(data: any, status?: number): ApplyResponse {
+    const applyErrorSignal = extractApplyErrorSignal(data)?.toLowerCase();
+    const diagnostics = this.summarizeJSONResponse(data, status);
+
     // Success signals - ВАЖНО: success это СТРОКА "true", не boolean!
     if (data.success === 'true' || data.topic_id || data.chat_id) {
       return {
         success: true,
         outcome: 'success',
         message: 'Application sent successfully',
+        diagnostics,
       };
     }
 
@@ -428,24 +725,25 @@ export class BackendHTTPClient {
         success: true,
         outcome: 'success',
         message: 'Application sent (negotiation started)',
+        diagnostics,
       };
     }
 
-    // Already applied
     if (data.alreadyApplied === true || data.type === 'alreadyApplied') {
       return {
         success: false,
         outcome: 'already_applied',
         message: 'Already applied to this vacancy',
+        diagnostics,
       };
     }
 
-    // Test/questionnaire required
     if (data.responseStatus?.test?.hasTests === true) {
       return {
         success: false,
         outcome: 'test_required',
         message: 'Test completion required',
+        diagnostics,
       };
     }
 
@@ -454,6 +752,16 @@ export class BackendHTTPClient {
         success: false,
         outcome: 'test_required',
         message: 'Test required',
+        diagnostics,
+      };
+    }
+
+    if (hasQuickResponseQuestionnaireBlocker(data)) {
+      return {
+        success: false,
+        outcome: 'questionnaire_required',
+        message: 'Questionnaire required',
+        diagnostics,
       };
     }
 
@@ -462,17 +770,69 @@ export class BackendHTTPClient {
         success: false,
         outcome: 'questionnaire_required',
         message: 'Questionnaire required',
+        diagnostics,
       };
     }
 
-    // Unknown
+    if (
+      applyErrorSignal === 'letter-required' ||
+      applyErrorSignal === 'letter_required'
+    ) {
+      return {
+        success: false,
+        outcome: 'cover_letter_required',
+        message: 'Cover letter required (server validation)',
+        diagnostics,
+      };
+    }
+
+    if (data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true) {
+      return {
+        success: false,
+        outcome: 'cover_letter_required',
+        message: 'Cover letter required',
+        diagnostics,
+      };
+    }
+
     this.log('[BackendHTTP] Unknown response', data);
     return {
       success: false,
       outcome: 'unknown',
       message: 'Unknown response',
-      error: JSON.stringify(data).substring(0, 200),
+      error: getStructuredPreview(data),
+      diagnostics,
     };
+  }
+
+  private summarizeJSONResponse(data: any, status?: number): ApplyResponse['diagnostics'] {
+    return {
+      responseKind: 'json',
+      status,
+      keys: data && typeof data === 'object' ? Object.keys(data).sort().slice(0, 12) : [],
+      type: typeof data?.type === 'string' ? data.type : undefined,
+      errorSignal: extractApplyErrorSignal(data),
+      preview: getStructuredPreview(data),
+    };
+  }
+
+  private logCoverLetterAttemptSummary(
+    applyResult: ApplyResponse,
+    diagnostics?: ApplyResponse['diagnostics']
+  ): void {
+    if (!diagnostics) {
+      return;
+    }
+
+    if (applyResult.outcome !== 'success' && applyResult.outcome !== 'cover_letter_required') {
+      return;
+    }
+
+    this.log('[BackendHTTP] coverLetter apply summary', {
+      outcome: applyResult.outcome,
+      message: applyResult.message,
+      diagnostics,
+    });
   }
 
   /**
@@ -485,13 +845,11 @@ export class BackendHTTPClient {
     this.log('[BackendHTTP] checkAuth');
 
     try {
-      // Проверить наличие cookies через chrome.cookies API
       const hhtoken = await chrome.cookies.get({ url: 'https://hh.ru', name: 'hhtoken' });
       const xsrf = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
 
       this.log('[BackendHTTP] checkAuth cookies', { hasHhtoken: !!hhtoken, hasXsrf: !!xsrf });
 
-      // Если есть хотя бы один cookie — считаем авторизованным
       const authorized = !!(hhtoken || xsrf);
 
       this.log('[BackendHTTP] checkAuth result', { authorized });
@@ -541,13 +899,11 @@ export class BackendHTTPClient {
     }
   }
 
-  // Legacy methods for compatibility
   async searchVacancies(profile: Profile): Promise<any[]> {
     return this.fetchVacancies(profile);
   }
 
   async getVacancyDetail(_vacancyId: string): Promise<any | null> {
-    // Not needed for pure HTTP flow - preflight handles this
     return null;
   }
 

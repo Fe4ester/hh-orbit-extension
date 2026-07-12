@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ResumeCandidate } from '../state/types';
+import type { ResumeCandidate } from '../state/types';
+import { formatResumeLabel } from './resumeLabel';
 
 interface ResumeSelectorProps {
   candidates: ResumeCandidate[];
@@ -49,7 +50,6 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
   const demoCount = candidates.filter((c) => c.source === 'demo').length;
   const hhCount = candidates.filter((c) => c.source === 'hh_detected').length;
 
-  // Filter: prefer hh_detected in production view
   const productionCandidates = candidates.filter((c) => c.source === 'hh_detected');
   const displayCandidates = productionCandidates.length > 0 ? productionCandidates : candidates;
 
@@ -92,9 +92,7 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
         <option value="">Резюме не выбрано</option>
         {displayCandidates.map((resume) => (
           <option key={resume.hash} value={resume.hash}>
-            {resume.title}
-            {resume.isActive === false && ' (неактивно)'}
-            {resume.source === 'demo' && ' [DEMO]'}
+            {formatResumeLabel(resume)}
           </option>
         ))}
       </select>

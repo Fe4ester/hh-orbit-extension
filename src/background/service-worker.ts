@@ -1,6 +1,6 @@
 import { StateStore } from '../state/store';
 import { ExtensionStorageAdapter } from '../state/storage';
-import { RuntimeEvent } from '../state/types';
+import type { HHPageType, RuntimeEvent } from '../state/types';
 import { createDemoResumes } from '../state/actions';
 import {
   parseVacancyDetail,
@@ -11,22 +11,47 @@ import {
   executeApplyPrechecked,
   classifyPostClickResult,
 } from '../live/applyExecutor';
-import { HHPageType } from '../state/types';
 import { BackendAutoApplyEngine } from '../runtime/backendAutoApplyEngine';
 import { LiveAutoApplyEngineV2 as LiveAutoApplyEngine } from '../runtime/liveAutoApplyEngineV2';
 import { AcquisitionService } from '../runtime/acquisitionService';
 import { BackendHTTPClient } from '../runtime/backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
+import { createStoreReadyGate } from './storeReadiness';
 
 const store = new StateStore(new ExtensionStorageAdapter());
+
+function logRuntimeDiagnostic(...args: unknown[]): void {
+  const [message, context] = args;
+  const logContext = context !== null && typeof context === 'object' && !Array.isArray(context)
+    ? context as Record<string, unknown>
+    : context === undefined
+    ? undefined
+    : { context };
+  FileLogger.log('service_worker', 'debug', String(message), logContext);
+}
+
 const acquisitionService = new AcquisitionService({
   store,
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
-// ============================================================================
-// INTERNAL BACKGROUND OPERATIONS (direct functions, no messaging)
-// ============================================================================
+async function onStoreReady(): Promise<void> {
+  FileLogger.log('service_worker', 'info', 'Store initialized');
+
+  store.setOnStateChange(() => {
+    FileLogger.log('service_worker', 'info', 'STATE_CHANGED → broadcasting');
+    void broadcastState();
+  });
+
+  broadcastStateSnapshot(store.getState());
+  await setPanelBehavior();
+  await enableSidePanelForHHTabs();
+}
+
+const ensureStoreReady = createStoreReadyGate(
+  () => store.init(),
+  onStoreReady
+);
 
 interface CheckRuntimeBlockersResult {
   success: boolean;
@@ -279,16 +304,26 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
       function detectResumeCandidates(doc: Document, url: string): ResumeCandidate[] {
         const candidates: ResumeCandidate[] = [];
 
+        function getNormalizedElementText(element: Element | null): string {
+          if (!element) {
+            return '';
+          }
+
+          const renderedText = 'innerText' in element ? (element as HTMLElement).innerText : '';
+          const text = renderedText || element.textContent || '';
+          return text.replace(/\s+/g, ' ').trim();
+        }
+
         const resumeCards = doc.querySelectorAll('[data-qa="resume-card"]');
         if (resumeCards.length > 0) {
           resumeCards.forEach((card) => {
             const link = card.querySelector('a[href*="/resume/"]');
             if (link) {
               const href = link.getAttribute('href');
-              const match = href?.match(/\/resume\/([a-f0-9]+)/);
+              const match = href?.match(/\/resume\/([a-z0-9]+)/i);
               if (match) {
                 const hash = match[1];
-                const title = link.textContent?.trim() || 'Резюме';
+                const title = getNormalizedElementText(link) || 'Резюме';
                 candidates.push({
                   hash,
                   title,
@@ -301,11 +336,11 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
         }
 
         if (candidates.length === 0 && url.includes('/resume/')) {
-          const match = url.match(/\/resume\/([a-f0-9]+)/);
+          const match = url.match(/\/resume\/([a-z0-9]+)/i);
           if (match) {
             const hash = match[1];
             const titleEl = doc.querySelector('[data-qa="resume-title"]') || doc.querySelector('h1');
-            const title = titleEl?.textContent?.trim() || 'Резюме';
+            const title = getNormalizedElementText(titleEl) || 'Резюме';
             candidates.push({
               hash,
               title,
@@ -320,11 +355,11 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
           const seen = new Set<string>();
           links.forEach((link) => {
             const href = link.getAttribute('href');
-            const match = href?.match(/\/resume\/([a-f0-9]+)/);
+            const match = href?.match(/\/resume\/([a-z0-9]+)/i);
             if (match && !seen.has(match[1])) {
               seen.add(match[1]);
               const hash = match[1];
-              const title = link.textContent?.trim() || 'Резюме';
+              const title = getNormalizedElementText(link) || 'Резюме';
               candidates.push({
                 hash,
                 title,
@@ -408,7 +443,6 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
     // Fallback to DOM detection via temporary tab
     FileLogger.log('service_worker', 'info', 'Resume refresh: API returned empty, trying DOM fallback via resumes tab');
 
-    // Create temporary tab with resumes page
     const tab = await chrome.tabs.create({
       url: 'https://hh.ru/applicant/resumes',
       active: false,  // Don't steal focus
@@ -454,6 +488,16 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
 
         const candidates: ResumeCandidate[] = [];
 
+        function getNormalizedElementText(element: Element | null): string {
+          if (!element) {
+            return '';
+          }
+
+          const renderedText = 'innerText' in element ? (element as HTMLElement).innerText : '';
+          const text = renderedText || element.textContent || '';
+          return text.replace(/\s+/g, ' ').trim();
+        }
+
         // Try resume cards first
         const resumeCards = document.querySelectorAll('[data-qa="resume-card"]');
         if (resumeCards.length > 0) {
@@ -461,10 +505,10 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
             const link = card.querySelector('a[href*="/resume/"]');
             if (link) {
               const href = link.getAttribute('href');
-              const match = href?.match(/\/resume\/([a-f0-9]+)/);
+              const match = href?.match(/\/resume\/([a-z0-9]+)/i);
               if (match) {
                 const hash = match[1];
-                const title = link.textContent?.trim() || 'Резюме';
+                const title = getNormalizedElementText(link) || 'Резюме';
                 candidates.push({
                   hash,
                   title,
@@ -481,11 +525,11 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
           const seen = new Set<string>();
           links.forEach((link) => {
             const href = link.getAttribute('href');
-            const match = href?.match(/\/resume\/([a-f0-9]+)/);
+            const match = href?.match(/\/resume\/([a-z0-9]+)/i);
             if (match && !seen.has(match[1])) {
               seen.add(match[1]);
               const hash = match[1];
-              const title = link.textContent?.trim() || 'Резюме';
+              const title = getNormalizedElementText(link) || 'Резюме';
               candidates.push({
                 hash,
                 title,
@@ -871,13 +915,9 @@ async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
   return { success: true, result: finalResult };
 }
 
-// ============================================================================
-// END INTERNAL OPERATIONS
-// ============================================================================
-
 // Backend HTTP client
 const backendHTTPClient = new BackendHTTPClient({
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 // Backend engine
@@ -885,7 +925,7 @@ const backendEngine = new BackendAutoApplyEngine({
   store,
   httpClient: backendHTTPClient,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 // Live engine V2
@@ -893,7 +933,7 @@ const liveEngine = new LiveAutoApplyEngine({
   store,
   acquisitionService,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 // Helper: log controlled tab state changes
@@ -904,7 +944,6 @@ function logControlledTabStateChange(
 ) {
   // Controlled tab state changed (logged via FileLogger in callers)
 }
-
 
 // Self-healing controlled tab helper
 async function ensureControlledTabForCurrentHHTab(options?: {
@@ -927,7 +966,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     purpose: stateBefore.liveMode.controlledTabPurpose,
   };
 
-  // Get active tab
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!activeTab || !activeTab.id || !activeTab.url) {
@@ -961,7 +999,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB REFRESH ok');
   }
 
-  // Get updated state
   const updatedState = store.getState();
   const pageType = updatedState.liveMode.pageType;
 
@@ -977,7 +1014,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     purpose = 'vacancy';
   }
 
-  // Check page type requirement
   if (options?.requirePageTypes && options.requirePageTypes.length > 0) {
     if (!pageType || !options.requirePageTypes.includes(pageType)) {
       // Page type mismatch (logged via FileLogger in caller)
@@ -1051,7 +1087,6 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
     return { ok: false, reason };
   }
 
-  // Step 1: setOptions
   if (!chrome.sidePanel.setOptions) {
     const reason = 'sidePanel.setOptions not available';
     FileLogger.log('service_worker', 'error', 'sidePanel.setOptions not available', { tabId });
@@ -1071,7 +1106,6 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
     return { ok: false, reason };
   }
 
-  // Step 2: open
   if (!chrome.sidePanel.open) {
     const reason = 'sidePanel.open not available';
     FileLogger.log('service_worker', 'error', 'sidePanel.open not available', { tabId });
@@ -1135,25 +1169,6 @@ async function enableSidePanelForHHTabs() {
     FileLogger.log('service_worker', 'error', 'Failed to query tabs', { error: (err as Error).message });
   }
 }
-
-// Initialize store on startup
-store.init().then(async () => {
-  FileLogger.log('service_worker', 'info', 'Store initialized');
-
-  // Subscribe to state changes for real-time UI updates
-  store.setOnStateChange(() => {
-    FileLogger.log('service_worker', 'info', 'STATE_CHANGED → broadcasting');
-    broadcastState();
-  });
-
-  broadcastState();
-
-  // Set panel behavior on startup
-  await setPanelBehavior();
-
-  // Enable side panel for existing HH tabs
-  await enableSidePanelForHHTabs();
-});
 
 // Enable side panel behavior on install
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1234,6 +1249,8 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {
+      await ensureStoreReady();
+
       if (message.type === 'GET_STATE') {
         const state = store.getState();
         sendResponse({ state });
@@ -1357,7 +1374,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         await store.dispatch(event);
 
-        // Handle state transitions
         const state = store.getState();
 
         if (state.runtimeState === 'STARTING') {
@@ -1574,7 +1590,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
         }
 
-        // Check active tab in current window
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         if (activeTab && activeTab.url && activeTab.url.includes('hh.ru')) {
@@ -1862,7 +1877,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ success: true });
 
     // Do async work
-    doCheckRuntimeBlockers().catch((error) => {
+    ensureStoreReady().then(() => doCheckRuntimeBlockers()).catch((error) => {
       FileLogger.log('service_worker', 'error', 'CHECK_RUNTIME_BLOCKERS: Async work failed', error);
     });
 
@@ -1871,6 +1886,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'CLEAR_RUNTIME_BLOCKER') {
     (async () => {
+      await ensureStoreReady();
       await store.clearRuntimeBlocker();
       await store.setSessionStatus('unknown');
       broadcastState();
@@ -1886,6 +1902,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {
+      await ensureStoreReady();
+
       if (message.type === 'LIVE_MODE_NEXT_SEARCH_PAGE') {
         const state = store.getState();
         const controlledTabId = state.liveMode.controlledTabId;
@@ -1901,7 +1919,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Get HTML to check hasNextPage
         const [htmlResult] = await chrome.scripting.executeScript({
           target: { tabId: controlledTabId },
           func: () => document.documentElement.outerHTML,
@@ -1971,7 +1988,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Build next URL
         const nextUrl = new URL(tab.url);
         nextUrl.searchParams.set('page', String(currentPage + 1));
 
@@ -2000,13 +2016,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Check runtime blocker
         if (state.runtimeBlocker) {
           sendResponse({ error: `Runtime blocked: ${state.runtimeBlocker}` });
           return;
         }
 
-        // Start loop
         await store.startSearchLoop();
 
         // Scan current page
@@ -2020,10 +2034,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Increment iteration
         await store.incrementSearchLoopIteration();
 
-        // Check exhaustion after scan
         const updatedState = store.getState();
 
         if (updatedState.vacancyScan.exhausted) {
@@ -2151,45 +2163,57 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // Broadcast state to all sidepanels
-function broadcastState() {
-  const state = store.getState();
+function broadcastStateSnapshot(state: ReturnType<StateStore['getState']>): void {
   // State broadcast (verbose, removed)
   chrome.runtime.sendMessage({ type: 'STATE_UPDATE', state }).catch(() => {
     // Ignore - sidepanel may not be open
   });
 }
 
+async function broadcastState() {
+  await ensureStoreReady();
+  broadcastStateSnapshot(store.getState());
+}
+
 // Broadcast notifications
-function broadcastNotifications() {
+function broadcastNotificationsUnsafe() {
   const notifications = store.getNotificationManager().getAll();
   chrome.runtime.sendMessage({ type: 'NOTIFICATIONS_UPDATE', notifications }).catch(() => {
     // Ignore if no listeners
   });
 }
 
+async function broadcastNotifications() {
+  await ensureStoreReady();
+  broadcastNotificationsUnsafe();
+}
+
 // Clear expired notifications periodically
 setInterval(() => {
-  store.getNotificationManager().clearExpired();
-  broadcastNotifications();
+  void (async () => {
+    await ensureStoreReady();
+    store.getNotificationManager().clearExpired();
+    await broadcastNotifications();
+  })();
 }, 5000);
 
 // Live mode tab listeners
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  const state = store.getState();
+  void (async () => {
+    await ensureStoreReady();
+    const state = store.getState();
 
-  // Only track controlled tab
-  if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
-    if (changeInfo.url && tab.url) {
-      store.updateLiveContextFromUrl(tab.url).then(async () => {
-        const state = store.getState();
+    // Only track controlled tab
+    if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
+      if (changeInfo.url && tab.url) {
+        store.updateLiveContextFromUrl(tab.url).then(async () => {
+          const state = store.getState();
 
-        // Check search sync with DOM context
         if (state.liveMode.pageType === 'search' && state.activeProfileId && tab.url) {
           const profile = state.profiles[state.activeProfileId];
 
           if (profile) {
             try {
-              // Get HTML and detect applied context
               const [htmlResult] = await chrome.scripting.executeScript({
                 target: { tabId },
                 func: () => document.documentElement.outerHTML,
@@ -2253,7 +2277,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
               if (!syncDiff) return;
 
-              // Update sync status based on DOM context
               if (syncDiff.synced) {
                 await store.markSearchSynced(tab.url, state.activeProfileId);
               } else {
@@ -2352,7 +2375,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           }
         }
 
-        // Check bound resume
         if (state.activeProfileId) {
           const profile = state.profiles[state.activeProfileId];
           if (profile?.selectedResumeHash) {
@@ -2372,20 +2394,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           }
         }
 
-        broadcastState();
-      });
+          await broadcastState();
+        });
+      }
     }
-  }
+  })();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  const state = store.getState();
+  void (async () => {
+    await ensureStoreReady();
+    const state = store.getState();
 
-  // If controlled tab was closed
-  if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
-    store.clearControlledTab().then(async () => {
-      // Set runtime blocker
-      await store.setRuntimeBlocker('controlled_tab_lost', 'Controlled tab was closed');
+    // If controlled tab was closed
+    if (state.liveMode.active && state.liveMode.controlledTabId === tabId) {
+      store.clearControlledTab().then(async () => {
+        // Set runtime blocker
+        await store.setRuntimeBlocker('controlled_tab_lost', 'Controlled tab was closed');
 
       store
         .getNotificationManager()
@@ -2401,10 +2426,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         await store.stopSearchLoop();
       }
 
-      broadcastState();
-      broadcastNotifications();
-    });
-  }
+        await broadcastState();
+        await broadcastNotifications();
+      });
+    }
+  })();
 });
 
 FileLogger.log('service_worker', 'info', 'Service worker loaded');

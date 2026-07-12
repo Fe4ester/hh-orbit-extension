@@ -1,5 +1,3 @@
-// Real DOM click executor for HH respond button
-
 export interface ClickExecutionObservation {
   found: boolean;
   clicked: boolean;
@@ -21,17 +19,15 @@ export interface PostClickObservation {
  * Find respond button in vacancy page DOM
  */
 export function findRespondButton(doc: Document): HTMLElement | null {
-  // Try primary selector
   const button = doc.querySelector('[data-qa="vacancy-response-button"]') as HTMLElement;
   if (button) {
     return button;
   }
 
-  // Fallback: search by class/text
   const buttons = Array.from(doc.querySelectorAll('button, a.bloko-button'));
   for (const btn of buttons) {
     const text = btn.textContent?.trim().toLowerCase() || '';
-    if (text.includes('откликнуться') || text.includes('откликнуться')) {
+    if (text.includes('откликнуться')) {
       return btn as HTMLElement;
     }
   }
@@ -56,7 +52,6 @@ export function clickRespondButton(doc: Document): ClickExecutionObservation {
   const buttonText = button.textContent?.trim();
 
   try {
-    // Check if button is disabled
     if (button.hasAttribute('disabled') || button.classList.contains('disabled')) {
       return {
         found: true,
@@ -66,7 +61,6 @@ export function clickRespondButton(doc: Document): ClickExecutionObservation {
       };
     }
 
-    // Perform click
     button.click();
 
     return {
@@ -88,19 +82,16 @@ export function clickRespondButton(doc: Document): ClickExecutionObservation {
  * Observe post-click state (after short delay)
  */
 export function observePostClickState(doc: Document): PostClickObservation {
-  // Check for modal
   const modalOpened =
     !!doc.querySelector('[data-qa="vacancy-response-modal"]') ||
     !!doc.querySelector('.vacancy-response-popup') ||
     !!doc.querySelector('[role="dialog"]');
 
-  // Check for login redirect
   const loginRedirectVisible =
     !!doc.querySelector('[data-qa="vacancy-response-login-required"]') ||
     doc.body.textContent?.includes('Войдите, чтобы откликнуться') ||
     false;
 
-  // Check for already applied
   const alreadyAppliedVisible =
     !!doc.querySelector('[data-qa="vacancy-response-already-applied"]') ||
     doc.body.textContent?.includes('Вы уже откликались') ||

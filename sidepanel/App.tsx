@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AppState, AutoApplyMode } from '../src/state/types';
+import type { AppState, AutoApplyMode } from '../src/state/types';
 import {
   getPrimaryControlsState,
   getPrimaryProfileViewModel,
@@ -10,53 +10,37 @@ import {
 import { RuntimeSettingsPanel } from '../src/components/RuntimeSettingsPanel';
 import { ManualActionsPanel } from '../src/components/ManualActionsPanel';
 import { ProfileEditor } from '../src/components/ProfileEditor';
+import { formatResumeLabel } from '../src/components/resumeLabel';
 import { LogsViewer } from './LogsViewer';
 import './styles.css';
+
+const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
+const HINT_DISMISS_ANIMATION_MS = 200;
 
 export const App: React.FC = () => {
   const [state, setState] = useState<AppState | null>(null);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [logsViewerOpen, setLogsViewerOpen] = useState(false);
+  const [isResumeHintHighlighted, setIsResumeHintHighlighted] = useState(true);
+  const [isResumeHintDismissing, setIsResumeHintDismissing] = useState(false);
 
   useEffect(() => {
-    console.log('[Sidepanel] Component mounted, setting up listeners');
-
-    // Initial fetch
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
-      console.log('[Sidepanel] GET_STATE response', {
-        hasState: !!response?.state,
-        processed: response?.state?.runtime?.processed,
-        success: response?.state?.runtime?.success,
-      });
       if (response?.state) {
         setState(response.state);
       }
     });
 
-    // Polling every 500ms for real-time updates
     const pollInterval = setInterval(() => {
       chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
         if (response?.state) {
-          console.log('[Sidepanel] Poll update', {
-            processed: response.state.runtime.processed,
-            success: response.state.runtime.success,
-            manualActions: response.state.runtime.manualActions,
-          });
           setState(response.state);
         }
       });
     }, 500);
 
-    // Message listener (for instant updates when available)
     const listener = (message: any) => {
-      console.log('[Sidepanel] Message received', { type: message.type });
-
       if (message.type === 'STATE_UPDATE') {
-        console.log('[Sidepanel] STATE_UPDATE', {
-          processed: message.state.runtime.processed,
-          success: message.state.runtime.success,
-          manualActions: message.state.runtime.manualActions,
-        });
         setState(message.state);
       }
     };
@@ -64,22 +48,25 @@ export const App: React.FC = () => {
     chrome.runtime.onMessage.addListener(listener);
 
     return () => {
-      console.log('[Sidepanel] Component unmounting');
       clearInterval(pollInterval);
       chrome.runtime.onMessage.removeListener(listener);
     };
   }, []);
 
+  useEffect(() => {
+    const restoreResumeHint = async () => {
+      const storedHints = await chrome.storage.local.get(RESUME_HINT_DISMISSED_KEY);
+      if (storedHints[RESUME_HINT_DISMISSED_KEY] === true) {
+        setIsResumeHintHighlighted(false);
+      }
+    };
+
+    void restoreResumeHint();
+  }, []);
+
   if (!state) {
     return <div className="app loading"><div className="spinner">Загрузка...</div></div>;
   }
-
-  console.log('[Sidepanel] Rendering with state', {
-    processed: state?.runtime?.processed,
-    success: state?.runtime?.success,
-    manualActions: state?.runtime?.manualActions,
-    runtimeState: state?.runtimeState,
-  });
 
   const runtimeVm = getPrimaryRuntimeStatusViewModel(state);
   const resumeVm = getPrimaryResumeViewModel(state);
@@ -91,6 +78,14 @@ export const App: React.FC = () => {
   const handleStart = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_START' });
   const handleStop = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_STOP' });
   const handleModeChange = (mode: AutoApplyMode) => chrome.runtime.sendMessage({ type: 'SET_MODE', mode });
+  const dismissResumeHint = () => {
+    setIsResumeHintDismissing(true);
+    void chrome.storage.local.set({ [RESUME_HINT_DISMISSED_KEY]: true });
+    window.setTimeout(() => {
+      setIsResumeHintHighlighted(false);
+      setIsResumeHintDismissing(false);
+    }, HINT_DISMISS_ANIMATION_MS);
+  };
 
   return (
     <div className="app">
@@ -103,8 +98,14 @@ export const App: React.FC = () => {
         <section className="section">
           <h2>Режим работы</h2>
           <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <label
+              htmlFor="mode-backend"
+              aria-label="Backend"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
               <input
+                id="mode-backend"
+                aria-label="Backend"
                 type="radio"
                 name="mode"
                 value="backend"
@@ -117,8 +118,14 @@ export const App: React.FC = () => {
                 <div style={{ fontSize: 12, color: '#666' }}>Скрытые вкладки, только счётчики</div>
               </div>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <label
+              htmlFor="mode-live"
+              aria-label="Live"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
               <input
+                id="mode-live"
+                aria-label="Live"
                 type="radio"
                 name="mode"
                 value="live"
@@ -142,9 +149,25 @@ export const App: React.FC = () => {
           >
             <option value="">Резюме не выбрано</option>
             {resumeVm.candidates.map((resume) => (
-              <option key={resume.hash} value={resume.hash}>{resume.title}</option>
+              <option key={resume.hash} value={resume.hash}>{formatResumeLabel(resume)}</option>
             ))}
           </select>
+          <div className={isResumeHintHighlighted
+            ? `form-hint highlight-hint dismissible-hint${isResumeHintDismissing ? ' is-dismissing' : ''}`
+            : 'form-hint'}>
+            Если выбрать резюме, HH будет учитывать его как фильтр при поиске вакансий.
+            {isResumeHintHighlighted && (
+              <button
+                type="button"
+                className="hint-dismiss-button"
+                aria-label="Снять выделение подсказки"
+                onClick={dismissResumeHint}
+                disabled={isResumeHintDismissing}
+              >
+                ×
+              </button>
+            )}
+          </div>
           <div style={{ marginTop: 10 }}>
             <button className="btn btn-secondary" onClick={() => chrome.runtime.sendMessage({ type: 'REFRESH_RESUMES_API' })}>
               Обновить резюме из HH
@@ -242,7 +265,7 @@ export const App: React.FC = () => {
             <div className="status-indicator" data-state={runtimeVm.runtimeState}>{runtimeVm.phaseLabel}</div>
             <div className="stat-row"><span>Обработано</span><strong>{runtimeVm.processed}</strong></div>
             <div className="stat-row"><span>Успех</span><strong>{runtimeVm.success}</strong></div>
-            <div className="stat-row"><span>manual actions</span><strong>{runtimeVm.manualActions}</strong></div>
+            <div className="stat-row"><span>Ручные действия</span><strong>{runtimeVm.manualActions}</strong></div>
           </div>
         </section>
 
@@ -257,9 +280,9 @@ export const App: React.FC = () => {
         </section>
 
         <div style={{ textAlign: 'center', paddingTop: 8 }}>
-          <a className="logs-link" onClick={() => setLogsViewerOpen(true)}>
-            Logs
-          </a>
+          <button type="button" className="logs-link" onClick={() => setLogsViewerOpen(true)}>
+            Логи
+          </button>
         </div>
       </main>
 

@@ -42,6 +42,23 @@ describe('finalSubmitExecutor', () => {
 
       expect(button).toBeNull();
     });
+
+    it('does not use unrelated submit buttons as final response submit', () => {
+      doc.body.innerHTML = '<form><button type="submit">Найти</button></form>';
+
+      const button = findFinalSubmitButton(doc);
+
+      expect(button).toBeNull();
+    });
+
+    it('uses submit fallback only for send-like buttons', () => {
+      doc.body.innerHTML = '<form><button type="submit">Отправить отклик</button></form>';
+
+      const button = findFinalSubmitButton(doc);
+
+      expect(button).not.toBeNull();
+      expect(button?.textContent).toBe('Отправить отклик');
+    });
   });
 
   describe('clickFinalSubmitButton', () => {
@@ -119,6 +136,7 @@ describe('finalSubmitExecutor', () => {
       const observation = observePostSubmitState(doc);
 
       expect(observation.coverLetterStillVisible).toBe(true);
+      expect(observation.unknownState).toBe(false);
     });
 
     it('detects error state', () => {

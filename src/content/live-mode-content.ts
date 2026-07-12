@@ -5,11 +5,11 @@
  * Получает команды от service worker через chrome.runtime.sendMessage
  */
 
-// Import DOM executors
 import { clickRespondButton, observePostClickState } from '../live/respondButtonExecutor';
 import { detectCoverLetterUI } from '../live/coverLetterExecutor';
 import { observePostSubmitState } from '../live/finalSubmitExecutor';
 import { parseSearchResults } from '../live/searchResultsParser';
+import { detectTestRequirement } from '../live/testRequirementDetector';
 import { FileLogger } from '../utils/fileLogger';
 
 console.log('[LiveContent] Content script loaded');
@@ -48,7 +48,6 @@ window.addEventListener('load', () => {
   }, 1000);
 });
 
-// Message listener
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   console.log('[LiveContent] Message received', { type: message.type });
   FileLogger.log('content_script', 'debug', 'Message received', { type: message.type });
@@ -218,14 +217,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'CHECK_TEST_REQUIRED': {
-        const testRequired =
-          !!document.querySelector('[data-qa="vacancy-response-questionnaire"]') ||
-          !!document.querySelector('[data-qa="vacancy-response-letter-toggle"]') ||
-          document.body.textContent?.includes('Работодатель просит ответить на вопросы') ||
-          document.body.textContent?.includes('тестовое задание') ||
-          document.body.textContent?.includes('Пройти тест') ||
-          window.location.href.includes('startedWithQuestion=true') ||
-          false;
+        const testRequired = detectTestRequirement(document, window.location.href);
 
         console.log('[LiveContent] Test required check', {
           testRequired,
@@ -1203,8 +1195,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
 
-      // FILL_ADVANCED_SEARCH_FORM: removed - dead code, message never sent
-
       default:
         // Not for us - let it pass to background
         return false;
@@ -1214,11 +1204,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ error: (error as Error).message });
   }
 
-  // Return true to indicate async response
   return true;
 });
 
-// Auto-close ONLY non-apply HH.ru modals (avoid closing apply modals)
 setInterval(() => {
   try {
     // Check both old bloko modals and new Magritte modals
@@ -1240,7 +1228,7 @@ setInterval(() => {
         modal.querySelector('textarea') ||
         modal.querySelector('[data-qa*="vacancy-response"]')
       ) {
-        return; // Don't close apply modals
+        return;
       }
 
       // Close non-apply modals (surveys, etc)
@@ -1252,7 +1240,7 @@ setInterval(() => {
         (closeBtn as HTMLElement).click();
       }
     });
-  } catch (error) {
+  } catch {
     // Ignore errors
   }
 }, 3000);

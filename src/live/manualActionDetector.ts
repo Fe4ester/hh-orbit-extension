@@ -1,12 +1,6 @@
 // Manual action detection module
 
-export type ManualActionType =
-  | 'questionnaire'
-  | 'test'
-  | 'cover_letter_missing'
-  | 'login_required'
-  | 'captcha'
-  | 'manual_review';
+import type { ManualActionType } from '../state/types';
 
 export interface ManualActionDetectionResult {
   requiresManualAction: boolean;
@@ -16,145 +10,179 @@ export interface ManualActionDetectionResult {
   details?: Record<string, any>;
 }
 
-/**
- * Detect if manual action is required based on DOM state
- */
-export function detectManualActionNeed(doc: Document): ManualActionDetectionResult {
-  // Questionnaire detection
-  const questionnaireMarkers = [
-    '[data-qa="vacancy-response-questionnaire"]',
-    '[data-qa="task-body"]',
-    '.vacancy-response-questionnaire',
-    '[data-qa="vacancy-test"]',
-  ];
+type DetectedManualActionType = Exclude<ManualActionType, 'manual_review'>;
 
+interface DetectionConfig {
+  type: DetectedManualActionType;
+  reasonCode: string;
+  title: string;
+}
+
+const questionnaireMarkers = [
+  '[data-qa="vacancy-response-questionnaire"]',
+  '[data-qa="task-body"]',
+  '.vacancy-response-questionnaire',
+  '[data-qa="vacancy-test"]',
+];
+
+const testPatterns = [
+  /выполните\s+тест/i,
+  /пройдите\s+тест/i,
+  /тестовое\s+задание/i,
+  /выполнить\s+задание/i,
+  /ответьте\s+на\s+вопросы/i,
+];
+
+const questionnairePatterns = [
+  /заполните\s+анкету/i,
+  /ответьте\s+на\s+вопросы\s+работодателя/i,
+  /дополнительные\s+вопросы/i,
+];
+
+const loginMarkers = [
+  '[data-qa="login-form"]',
+  '[data-qa="account-signup"]',
+  '.account-login-form',
+];
+
+const captchaMarkers = [
+  '[data-qa="captcha"]',
+  '.captcha',
+  '#captcha',
+  'iframe[src*="captcha"]',
+  'iframe[src*="recaptcha"]',
+];
+
+function createManualActionResult(
+  config: DetectionConfig,
+  details: Record<string, any>
+): ManualActionDetectionResult {
+  return {
+    requiresManualAction: true,
+    ...config,
+    details,
+  };
+}
+
+function findManualActionByPattern(
+  bodyText: string,
+  patterns: RegExp[],
+  config: DetectionConfig
+): ManualActionDetectionResult | null {
+  for (const pattern of patterns) {
+    if (pattern.test(bodyText)) {
+      return createManualActionResult(config, { detectedPattern: pattern.source });
+    }
+  }
+
+  return null;
+}
+
+function findManualActionBySelector(
+  doc: Document,
+  markers: string[],
+  config: DetectionConfig
+): ManualActionDetectionResult | null {
+  for (const selector of markers) {
+    if (doc.querySelector(selector)) {
+      return createManualActionResult(config, { detectedSelector: selector });
+    }
+  }
+
+  return null;
+}
+
+function detectQuestionnaireOrTestBySelector(doc: Document): ManualActionDetectionResult | null {
   for (const selector of questionnaireMarkers) {
     const element = doc.querySelector(selector);
     if (element) {
       const text = element.textContent || '';
       const isTest = text.includes('тест') || text.includes('задание') || text.includes('задача');
+      const config: DetectionConfig = isTest
+        ? {
+            type: 'test',
+            reasonCode: 'test_required',
+            title: 'Требуется выполнение теста',
+          }
+        : {
+            type: 'questionnaire',
+            reasonCode: 'questionnaire_required',
+            title: 'Требуется заполнение анкеты',
+          };
 
-      return {
-        requiresManualAction: true,
-        type: isTest ? 'test' : 'questionnaire',
-        reasonCode: isTest ? 'test_required' : 'questionnaire_required',
-        title: isTest ? 'Требуется выполнение теста' : 'Требуется заполнение анкеты',
-        details: {
-          detectedSelector: selector,
-          textPreview: text.substring(0, 200),
-        },
-      };
+      return createManualActionResult(config, {
+        detectedSelector: selector,
+        textPreview: text.substring(0, 200),
+      });
     }
   }
 
-  // Test/assessment text patterns
-  const bodyText = doc.body.textContent || '';
-  const testPatterns = [
-    /выполните\s+тест/i,
-    /пройдите\s+тест/i,
-    /тестовое\s+задание/i,
-    /выполнить\s+задание/i,
-    /ответьте\s+на\s+вопросы/i,
-  ];
+  return null;
+}
 
-  for (const pattern of testPatterns) {
-    if (pattern.test(bodyText)) {
-      return {
-        requiresManualAction: true,
-        type: 'test',
-        reasonCode: 'test_required',
-        title: 'Требуется выполнение теста',
-        details: {
-          detectedPattern: pattern.source,
-        },
-      };
-    }
-  }
+function detectMissingCoverLetter(doc: Document): ManualActionDetectionResult | null {
+  const coverLetterTextarea = doc.querySelector(
+    '[data-qa="vacancy-response-letter-input"]'
+  ) as HTMLTextAreaElement;
 
-  // Questionnaire text patterns
-  const questionnairePatterns = [
-    /заполните\s+анкету/i,
-    /ответьте\s+на\s+вопросы\s+работодателя/i,
-    /дополнительные\s+вопросы/i,
-  ];
-
-  for (const pattern of questionnairePatterns) {
-    if (pattern.test(bodyText)) {
-      return {
-        requiresManualAction: true,
-        type: 'questionnaire',
-        reasonCode: 'questionnaire_required',
-        title: 'Требуется заполнение анкеты',
-        details: {
-          detectedPattern: pattern.source,
-        },
-      };
-    }
-  }
-
-  // Login required
-  const loginMarkers = [
-    '[data-qa="login-form"]',
-    '[data-qa="account-signup"]',
-    '.account-login-form',
-  ];
-
-  for (const selector of loginMarkers) {
-    if (doc.querySelector(selector)) {
-      return {
-        requiresManualAction: true,
-        type: 'login_required',
-        reasonCode: 'login_required',
-        title: 'Требуется авторизация',
-        details: {
-          detectedSelector: selector,
-        },
-      };
-    }
-  }
-
-  // Captcha detection
-  const captchaMarkers = [
-    '[data-qa="captcha"]',
-    '.captcha',
-    '#captcha',
-    'iframe[src*="captcha"]',
-    'iframe[src*="recaptcha"]',
-  ];
-
-  for (const selector of captchaMarkers) {
-    if (doc.querySelector(selector)) {
-      return {
-        requiresManualAction: true,
-        type: 'captcha',
-        reasonCode: 'captcha_required',
-        title: 'Требуется прохождение капчи',
-        details: {
-          detectedSelector: selector,
-        },
-      };
-    }
-  }
-
-  // Cover letter missing (textarea visible but empty)
-  const coverLetterTextarea = doc.querySelector('[data-qa="vacancy-response-letter-input"]') as HTMLTextAreaElement;
   if (coverLetterTextarea && coverLetterTextarea.value.trim().length === 0) {
     const submitButton = doc.querySelector('[data-qa="vacancy-response-submit-button"]');
-    if (submitButton && submitButton.hasAttribute('disabled')) {
-      return {
-        requiresManualAction: true,
+    if (!submitButton?.hasAttribute('disabled')) {
+      return null;
+    }
+
+    return createManualActionResult(
+      {
         type: 'cover_letter_missing',
         reasonCode: 'cover_letter_required',
         title: 'Требуется сопроводительное письмо',
-        details: {
-          textareaEmpty: true,
-          submitDisabled: true,
-        },
-      };
-    }
+      },
+      { textareaEmpty: true, submitDisabled: true }
+    );
   }
 
-  // No manual action required
+  return null;
+}
+
+/**
+ * Detect if manual action is required based on DOM state
+ */
+export function detectManualActionNeed(doc: Document): ManualActionDetectionResult {
+  const selectorResult = detectQuestionnaireOrTestBySelector(doc);
+  if (selectorResult) return selectorResult;
+
+  const bodyText = doc.body.textContent || '';
+  const testResult = findManualActionByPattern(bodyText, testPatterns, {
+    type: 'test',
+    reasonCode: 'test_required',
+    title: 'Требуется выполнение теста',
+  });
+  if (testResult) return testResult;
+
+  const questionnaireResult = findManualActionByPattern(bodyText, questionnairePatterns, {
+    type: 'questionnaire',
+    reasonCode: 'questionnaire_required',
+    title: 'Требуется заполнение анкеты',
+  });
+  if (questionnaireResult) return questionnaireResult;
+
+  const loginResult = findManualActionBySelector(doc, loginMarkers, {
+    type: 'login_required',
+    reasonCode: 'login_required',
+    title: 'Требуется авторизация',
+  });
+  if (loginResult) return loginResult;
+
+  const captchaResult = findManualActionBySelector(doc, captchaMarkers, {
+    type: 'captcha',
+    reasonCode: 'captcha_required',
+    title: 'Требуется прохождение капчи',
+  });
+  if (captchaResult) return captchaResult;
+
+  const coverLetterResult = detectMissingCoverLetter(doc);
+  if (coverLetterResult) return coverLetterResult;
+
   return {
     requiresManualAction: false,
     type: null,

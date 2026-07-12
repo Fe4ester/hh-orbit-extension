@@ -1,8 +1,14 @@
-// Profile selectors - single source of truth
-
-import { AppState, Profile, RunStatus, RunStage } from './types';
-
-// Run selectors
+import type {
+  AppState,
+  AttemptRecord,
+  HHPageType,
+  LiveModeState,
+  Profile,
+  ResumeCandidate,
+  RunStage,
+  RunStatus,
+  VacancyScanState,
+} from './types';
 
 export interface RunViewModel {
   isRunning: boolean;
@@ -134,10 +140,6 @@ export function getActiveProfileSummary(state: AppState): ProfileSummary | null 
   return formatProfileSummary(profile);
 }
 
-// Resume selectors - single source of truth
-
-import { ResumeCandidate } from './types';
-
 export function getResumeCandidates(state: AppState): ResumeCandidate[] {
   return state.resumeCandidates;
 }
@@ -167,10 +169,6 @@ export function isSelectedResumeAvailable(state: AppState): boolean {
   }
   return state.resumeCandidates.some((r) => r.hash === state.selectedResumeHash);
 }
-
-// Analytics selectors - single source of truth
-
-import { AttemptRecord } from './types';
 
 export interface AnalyticsStats {
   attemptsTotal: number;
@@ -255,10 +253,6 @@ export function getRecentAttempts(state: AppState, limit: number = 10): AttemptR
     .slice(0, limit);
 }
 
-// Vacancy scan selectors
-
-import { VacancyScanState } from './types';
-
 export function getVacancyScanState(state: AppState): VacancyScanState {
   return state.vacancyScan;
 }
@@ -280,10 +274,6 @@ export function getExhaustionReason(state: AppState): string | null {
 
   return reasons[state.vacancyScan.exhaustedReason] || state.vacancyScan.exhaustedReason;
 }
-
-// Live mode selectors
-
-import { LiveModeState, HHPageType } from './types';
 
 export function getLiveModeState(state: AppState): LiveModeState {
   return state.liveMode;
@@ -354,8 +344,6 @@ export function getSearchLoopState(state: AppState) {
     iterations: state.liveMode.searchLoopIterations,
   };
 }
-
-// Session and runtime blocker selectors
 
 export function getSessionStatus(state: AppState): import('./types').SessionStatus {
   return state.sessionStatus;

@@ -1,6 +1,5 @@
-// Storage abstraction layer
-
-import { AppState, INITIAL_STATE } from './types';
+import { INITIAL_STATE } from './types';
+import type { AppState } from './types';
 
 export interface StorageAdapter {
   get(): Promise<AppState>;
@@ -8,7 +7,6 @@ export interface StorageAdapter {
   clear(): Promise<void>;
 }
 
-// Chrome extension storage adapter
 export class ExtensionStorageAdapter implements StorageAdapter {
   private readonly key = 'app_state';
 
@@ -42,12 +40,10 @@ export class ExtensionStorageAdapter implements StorageAdapter {
   }
 
   private migrate(state: any): AppState {
-    // Schema migration logic
     if (!state.schemaVersion || state.schemaVersion < 1) {
       return { ...INITIAL_STATE, ...state, schemaVersion: 1 };
     }
 
-    // Add manualActions if missing
     if (!state.manualActions) {
       state.manualActions = [];
     }
@@ -74,7 +70,6 @@ export class ExtensionStorageAdapter implements StorageAdapter {
   }
 }
 
-// In-memory storage for tests
 export class InMemoryStorageAdapter implements StorageAdapter {
   private state: AppState = { ...INITIAL_STATE };
 

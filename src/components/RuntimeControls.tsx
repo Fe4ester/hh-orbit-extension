@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppState } from '../state/types';
+import type { AppState } from '../state/types';
 
 interface RuntimeControlsProps {
   state: AppState;
@@ -37,6 +37,7 @@ export const RuntimeControls: React.FC<RuntimeControlsProps> = ({ state }) => {
   return (
     <div className="controls">
       <button
+        type="button"
         className="btn btn-primary"
         onClick={handleStart}
         disabled={!canStart}
@@ -45,6 +46,7 @@ export const RuntimeControls: React.FC<RuntimeControlsProps> = ({ state }) => {
       </button>
 
       <button
+        type="button"
         className="btn btn-secondary"
         onClick={handlePause}
         disabled={!canPause}
@@ -53,6 +55,7 @@ export const RuntimeControls: React.FC<RuntimeControlsProps> = ({ state }) => {
       </button>
 
       <button
+        type="button"
         className="btn btn-primary"
         onClick={handleResume}
         disabled={!canResume}
@@ -61,6 +64,7 @@ export const RuntimeControls: React.FC<RuntimeControlsProps> = ({ state }) => {
       </button>
 
       <button
+        type="button"
         className="btn btn-danger"
         onClick={handleStop}
         disabled={!canStop}
@@ -69,6 +73,7 @@ export const RuntimeControls: React.FC<RuntimeControlsProps> = ({ state }) => {
       </button>
 
       <button
+        type="button"
         className="btn btn-secondary"
         onClick={handleReset}
         disabled={!canReset}

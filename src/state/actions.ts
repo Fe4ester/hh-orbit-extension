@@ -1,6 +1,12 @@
-// Profile actions
-
-import { Profile } from './types';
+import type {
+  AnalyticsEvent,
+  AttemptOutcome,
+  AttemptRecord,
+  LocalApplyAttempt,
+  Profile,
+  ResumeCandidate,
+  VacancyQueueItem,
+} from './types';
 import { FileLogger } from '../utils/fileLogger';
 
 export const DEFAULT_PROFILE_PRESETS: Array<Omit<CreateProfilePayload, 'selectedResumeHash'> & { name: string }> = [
@@ -100,10 +106,6 @@ export function createDefaultProfiles(now: number = Date.now()): Profile[] {
   });
 }
 
-// Resume actions
-
-import { ResumeCandidate, AttemptRecord, AnalyticsEvent, AttemptOutcome } from './types';
-
 export function createDemoResumes(): ResumeCandidate[] {
   const now = Date.now();
   return [
@@ -125,8 +127,6 @@ export function createDemoResumes(): ResumeCandidate[] {
     },
   ];
 }
-
-// Analytics actions
 
 export function recordAttemptOutcome(
   outcome: AttemptOutcome,
@@ -214,7 +214,6 @@ export function seedDemoAnalytics(): {
     });
   }
 
-  // Current run attempts (last 30 min)
   for (let i = 0; i < 5; i++) {
     const createdAt = now - (30 - i * 5) * 60 * 1000;
     const outcomes: AttemptOutcome[] = [
@@ -240,8 +239,6 @@ export function seedDemoAnalytics(): {
   return { attempts, events };
 }
 
-// Vacancy scan actions
-
 export const NO_MORE_VACANCIES_THRESHOLD = 3;
 
 export interface VacancyScanRecord {
@@ -257,7 +254,6 @@ export function recordVacancyScan(
   const now = scan.timestamp;
 
   if (scan.newCount > 0) {
-    // Found new vacancies - reset exhaustion
     return {
       consecutiveEmptyScans: 0,
       lastScanAt: now,
@@ -267,7 +263,6 @@ export function recordVacancyScan(
     };
   }
 
-  // No new vacancies
   const consecutiveEmptyScans = currentState.consecutiveEmptyScans + 1;
   const exhausted = consecutiveEmptyScans >= NO_MORE_VACANCIES_THRESHOLD;
 
@@ -301,8 +296,6 @@ export function resetVacancyExhaustion(): import('./types').VacancyScanState {
     exhaustedReason: undefined,
   };
 }
-
-// Live mode actions
 
 import { parseHHUrl } from '../live/urlDetection';
 
@@ -373,7 +366,6 @@ export function bindControlledTab(
 ): import('./types').LiveModeState {
   const context = parseHHUrl(payload.url);
 
-  // Determine purpose based on page type
   let purpose: import('./types').ControlledTabPurpose = 'generic_hh';
   if (context.pageType === 'applicant_resumes' || context.pageType === 'resume' || context.pageType === 'applicant') {
     purpose = 'resume_detection';
@@ -495,9 +487,7 @@ export function markSearchError(
   };
 }
 
-// Vacancy detail preflight actions
-
-import {
+import type {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';
@@ -532,10 +522,7 @@ export function clearPreflightState(
   };
 }
 
-// Vacancy queue actions
-
-import { ParsedVacancyCard } from '../live/searchResultsParser';
-import { VacancyQueueItem } from './types';
+import type { ParsedVacancyCard } from '../live/searchResultsParser';
 
 export function materializeVacanciesFromSearch(
   currentQueue: VacancyQueueItem[],
@@ -545,18 +532,15 @@ export function materializeVacanciesFromSearch(
 ): VacancyQueueItem[] {
   const now = Date.now();
 
-  // Build set of existing keys for dedupe
   const existingKeys = new Set(
     currentQueue.map((item) => item.vacancyId || item.url)
   );
 
-  // Filter out duplicates
   const newCards = cards.filter((card) => {
     const key = card.vacancyId || card.url;
     return !existingKeys.has(key);
   });
 
-  // Early keyword prefilter
   let prefilteredCards = newCards;
   let skippedByInclude = 0;
   let skippedByExclude = 0;
@@ -565,7 +549,6 @@ export function materializeVacanciesFromSearch(
     prefilteredCards = newCards.filter((card) => {
       const searchText = `${card.title} ${card.snippet || ''}`.toLowerCase();
 
-      // Check keywordsInclude (ANY must match)
       if (profile.keywordsInclude.length > 0) {
         const hasMatch = profile.keywordsInclude.some((kw) =>
           searchText.includes(kw.toLowerCase())
@@ -576,7 +559,6 @@ export function materializeVacanciesFromSearch(
         }
       }
 
-      // Check keywordsExclude (NONE must match)
       if (profile.keywordsExclude.length > 0) {
         const hasExcluded = profile.keywordsExclude.some((kw) =>
           searchText.includes(kw.toLowerCase())
@@ -599,7 +581,6 @@ export function materializeVacanciesFromSearch(
     });
   }
 
-  // Create queue items
   const newItems: VacancyQueueItem[] = prefilteredCards.map((card) => ({
     vacancyId: card.vacancyId,
     url: card.url,
@@ -645,10 +626,6 @@ export function markVacancySkipped(
     item.vacancyId === vacancyId ? { ...item, status: 'skipped' as const } : item
   );
 }
-
-// Apply attempt actions
-
-import { LocalApplyAttempt } from './types';
 
 export function recordLocalApplyAttempt(
   currentAttempts: LocalApplyAttempt[],

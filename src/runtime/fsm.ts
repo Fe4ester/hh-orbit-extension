@@ -1,6 +1,4 @@
-// Runtime FSM
-
-import { RuntimeState, RuntimeEvent } from '../state/types';
+import type { RuntimeState, RuntimeEvent } from '../state/types';
 
 type Transition = {
   from: RuntimeState[];

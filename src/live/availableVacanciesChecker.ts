@@ -33,7 +33,6 @@ export function checkAvailableVacanciesOnPage(): AvailableVacanciesCheck {
     const buttonText = button.textContent?.trim() || '';
     const isDisabled = button.hasAttribute('disabled');
 
-    // Проверка: уже откликнулись
     if (
       buttonText.includes('Отклик отправлен') ||
       buttonText.includes('Вы откликнулись') ||
@@ -45,8 +44,6 @@ export function checkAvailableVacanciesOnPage(): AvailableVacanciesCheck {
       continue;
     }
 
-    // Проверка: требует ручного действия (тест, анкета)
-    // Эти кнопки остаются кликабельными, но мы их уже добавили в manual actions
     const vacancyLink = card.querySelector('a[href*="/vacancy/"]');
     const href = vacancyLink?.getAttribute('href') || '';
     const vacancyIdMatch = href.match(/\/vacancy\/(\d+)/);
@@ -54,7 +51,6 @@ export function checkAvailableVacanciesOnPage(): AvailableVacanciesCheck {
     if (vacancyIdMatch) {
       const vacancyId = vacancyIdMatch[1];
 
-      // Проверяем localStorage на наличие в skip list (manual actions)
       try {
         const skipListStr = localStorage.getItem('hh_orbit_skip_list');
         if (skipListStr) {
@@ -64,12 +60,11 @@ export function checkAvailableVacanciesOnPage(): AvailableVacanciesCheck {
             continue;
           }
         }
-      } catch (e) {
+      } catch {
         // Ignore localStorage errors
       }
     }
 
-    // Если дошли сюда - кнопка доступна для автоотклика
     availableCount++;
   }
 

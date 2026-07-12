@@ -1,569 +1,228 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { FileLogger, LogEntry } from '../src/utils/fileLogger';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { FileLogger, type LogEntry } from '../src/utils/fileLogger';
+import {
+  classifyLogProblem,
+  detectReason,
+  detectVacancyStatus,
+  getProblemBadgeLevel,
+  type ErrorReason,
+  type LogProblemKind,
+} from './logClassification';
+import {
+  buildLogStats,
+  formatLogsAsText,
+  getLogVacancyId,
+  getSearchHaystack,
+  groupLogsByVacancy,
+  safeFormatDate,
+  safeStringify,
+} from './logViewModel';
 
-type LogsTab = 'overview' | 'errors' | 'vacancies' | 'raw';
-type ErrorReason =
-  | 'all'
-  | 'cover_letter'
-  | 'questionnaire'
-  | 'test'
-  | 'captcha'
-  | 'login'
-  | 'external_apply'
-  | 'timeout'
-  | 'manual_action'
-  | 'error'
-  | 'other';
+type LogsTab = 'overview' | 'problems' | 'vacancies' | 'raw';
+type RawViewMode = 'parsed' | 'stream';
+
+const PARSED_LOG_LIMIT = 80;
+const VACANCY_LIMIT = 30;
 
 const REASON_LABELS: Record<Exclude<ErrorReason, 'all'>, string> = {
-  cover_letter: 'Нужно сопроводительное',
-  questionnaire: 'Нужна анкета',
-  test: 'Нужен тест',
-  captcha: 'Капча / верификация',
-  login: 'Нужна авторизация',
-  external_apply: 'Внешний отклик',
-  timeout: 'Таймаут / зависание',
-  manual_action: 'Нужно ручное действие',
-  error: 'Ошибка выполнения',
-  other: 'Другое',
+  cover_letter: 'Сопроводительное письмо', questionnaire: 'Анкета', test: 'Тест',
+  captcha: 'Капча', login: 'Авторизация', external_apply: 'Внешний отклик',
+  timeout: 'Таймаут / блокировка', manual_action: 'Ручное действие',
+  error: 'Ошибка выполнения', other: 'Другое',
 };
 
-const detectVacancyStage = (log: LogEntry): string => {
-  const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
+const KIND_LABELS: Record<Exclude<LogProblemKind, 'none'>, string> = {
+  execution_error: 'Execution error', warning: 'Warning', manual_case: 'Manual case',
+};
 
-  if (haystack.includes('acquisition')) return 'Поиск';
-  if (haystack.includes('preflight')) return 'Preflight';
-  if (haystack.includes('validating vacancy') || haystack.includes('validate vacancy')) return 'Проверка';
-  if (haystack.includes('click') || haystack.includes('respond button')) return 'Клик';
-  if (haystack.includes('modal')) return 'Modal';
-  if (haystack.includes('cover letter')) return 'Cover letter';
-  if (haystack.includes('redirect')) return 'Redirect';
-  if (haystack.includes('success')) return 'Успех';
-  if (haystack.includes('manual action')) return 'Manual action';
-  if (haystack.includes('skip') || haystack.includes('skipped')) return 'Скип';
-  if (haystack.includes('fail') || haystack.includes('error')) return 'Ошибка';
+const EXPLANATIONS: Record<Exclude<ErrorReason, 'all'>, string> = {
+  cover_letter: 'Требуется сопроводительное письмо.', questionnaire: 'Требуется анкета работодателя.',
+  test: 'Требуется тестовое задание.', captcha: 'Требуется пройти проверку безопасности.',
+  login: 'Требуется восстановить авторизацию.', external_apply: 'Отклик продолжится на внешнем сайте.',
+  timeout: 'Операция завершилась таймаутом или блокировкой.', manual_action: 'Сценарий передан пользователю.',
+  error: 'Технический сбой выполнения.', other: 'Причина не распознана; проверьте контекст.',
+};
 
+function contextText(log: LogEntry, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = log.context?.[key];
+    if (value !== undefined && value !== null && value !== '') return String(value);
+  }
+  return null;
+}
+
+function detectVacancyStage(log: LogEntry): string {
+  const text = `${log.message} ${safeStringify(log.context)}`.toLowerCase();
+  if (text.includes('acquisition')) return 'Поиск';
+  if (text.includes('preflight')) return 'Предпроверка';
+  if (text.includes('validat')) return 'Проверка';
+  if (text.includes('modal')) return 'Модальное окно';
+  if (text.includes('cover letter') || text.includes('cover_letter')) return 'Сопроводительное письмо';
+  if (text.includes('redirect')) return 'Редирект';
+  if (contextText(log, 'outcome') === 'success') return 'Успех';
+  if (classifyLogProblem(log) === 'manual_case') return 'Ручное действие';
+  if (classifyLogProblem(log) === 'execution_error') return 'Ошибка';
   return 'Событие';
-};
+}
 
-const detectVacancyStatus = (log: LogEntry): 'success' | 'warn' | 'error' | 'info' => {
-  const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-
-  if (log.level === 'error' || haystack.includes('failed') || haystack.includes('error')) return 'error';
-  if (log.level === 'warn' || haystack.includes('manual action') || haystack.includes('test') || haystack.includes('questionnaire')) return 'warn';
-  if (haystack.includes('success') || haystack.includes('processed: success') || haystack.includes('application sent')) return 'success';
-
-  return 'info';
+const EventMeta: React.FC<{ log: LogEntry }> = ({ log }) => {
+  const fields = [
+    ['vacancyId', getLogVacancyId(log)], ['profileId', contextText(log, 'profileId', 'profile_id')],
+    ['outcome', contextText(log, 'outcome')], ['reasonCode', contextText(log, 'reasonCode', 'reason_code')],
+  ].filter((field): field is [string, string] => Boolean(field[1]));
+  return fields.length ? <div className="logs-event-meta">{fields.map(([key, value]) => <span key={key}>{key}: {value}</span>)}</div> : null;
 };
 
 export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [levelFilter, setLevelFilter] = useState<string>('all');
+  const [levelFilter, setLevelFilter] = useState('all');
   const [activeTab, setActiveTab] = useState<LogsTab>('overview');
-  const [errorReasonFilter, setErrorReasonFilter] = useState<ErrorReason>('all');
-  const [rawViewMode, setRawViewMode] = useState<'parsed' | 'stream'>('parsed');
-  const [compactMode, setCompactMode] = useState(false);
+  const [reasonFilter, setReasonFilter] = useState<ErrorReason>('all');
+  const [rawViewMode, setRawViewMode] = useState<RawViewMode>('parsed');
+  const [copyState, setCopyState] = useState<'idle' | 'done' | 'error'>('idle');
 
-  useEffect(() => {
-    loadLogs();
-  }, []);
-
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const allLogs = await FileLogger.readLogs();
-      setLogs(allLogs);
-    } catch (error) {
-      console.error('Failed to load logs:', error);
+      setLogs(await FileLogger.readLogs());
+    } catch {
+      setLoadError('Не удалось загрузить логи. Попробуйте обновить.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const filteredLogs = logs.filter((log) => {
-    // Level filter
-    if (levelFilter !== 'all' && log.level !== levelFilter) {
-      return false;
-    }
+  useEffect(() => { void loadLogs(); }, [loadLogs]);
 
-    // Search filter
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      const matchesMessage = log.message.toLowerCase().includes(query);
-      const matchesSource = log.source.toLowerCase().includes(query);
-      const matchesContext = log.context ? JSON.stringify(log.context).toLowerCase().includes(query) : false;
-      return matchesMessage || matchesSource || matchesContext;
-    }
+  const filteredLogs = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return logs.filter((log) =>
+      (levelFilter === 'all' || log.level === levelFilter) && (!query || getSearchHaystack(log).includes(query))
+    );
+  }, [levelFilter, logs, searchQuery]);
 
-    return true;
-  });
-
-  const errorKeywords = [
-    'error',
-    'failed',
-    'timeout',
-    'login',
-    'captcha',
-    'auth',
-    'questionnaire',
-    'test required',
-    'test_required',
-    'manual action',
-    'cover letter',
-    'external apply',
-  ];
-
-  const isErrorLike = (log: LogEntry): boolean => {
-    if (log.level === 'error' || log.level === 'warn') {
-      return true;
-    }
-
-    const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-    return errorKeywords.some((keyword) => haystack.includes(keyword));
-  };
-
-  const detectReason = (log: LogEntry): Exclude<ErrorReason, 'all'> => {
-    const haystack = `${log.message} ${JSON.stringify(log.context || {})}`.toLowerCase();
-
-    if (haystack.includes('cover letter') || haystack.includes('сопровод')) return 'cover_letter';
-    if (haystack.includes('questionnaire') || haystack.includes('анкет')) return 'questionnaire';
-    if (haystack.includes('test required') || haystack.includes('test_required') || haystack.includes('тест')) return 'test';
-    if (haystack.includes('captcha') || haystack.includes('капч')) return 'captcha';
-    if (haystack.includes('login') || haystack.includes('auth') || haystack.includes('авториза')) return 'login';
-    if (haystack.includes('external apply')) return 'external_apply';
-    if (haystack.includes('timeout')) return 'timeout';
-    if (haystack.includes('manual action')) return 'manual_action';
-
-    return log.level === 'error' ? 'error' : 'other';
-  };
-
-  const errorLogs = useMemo(() => filteredLogs.filter(isErrorLike), [filteredLogs]);
-
-  const errorReasonCounts = useMemo(() => {
+  const problems = useMemo(() => filteredLogs.filter((log) => classifyLogProblem(log) !== 'none'), [filteredLogs]);
+  const displayedProblems = useMemo(() => reasonFilter === 'all'
+    ? problems
+    : problems.filter((log) => detectReason(log) === reasonFilter), [problems, reasonFilter]);
+  const vacancyGroups = useMemo(() => groupLogsByVacancy(filteredLogs), [filteredLogs]);
+  const stats = useMemo(() => buildLogStats(filteredLogs), [filteredLogs]);
+  const reasonCounts = useMemo(() => {
     const counts = new Map<Exclude<ErrorReason, 'all'>, number>();
-    errorLogs.forEach((log) => {
+    problems.forEach((log) => {
       const reason = detectReason(log);
-      counts.set(reason, (counts.get(reason) || 0) + 1);
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
     });
-    return counts;
-  }, [errorLogs]);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [problems]);
 
-  const filteredErrorLogs = useMemo(() => {
-    if (errorReasonFilter === 'all') return errorLogs;
-    return errorLogs.filter((log) => detectReason(log) === errorReasonFilter);
-  }, [errorLogs, errorReasonFilter]);
-
-  const vacancyLogs = useMemo(() => {
-    const groups = new Map<string, LogEntry[]>();
-
-    filteredLogs.forEach((log) => {
-      const vacancyId = log.context?.vacancyId || log.context?.vacancy_id || log.context?.id;
-      if (!vacancyId) return;
-
-      const key = String(vacancyId);
-      const current = groups.get(key) || [];
-      current.push(log);
-      groups.set(key, current);
-    });
-
-    return Array.from(groups.entries())
-      .map(([vacancyId, entries]) => ({ vacancyId, entries }))
-      .sort((a, b) => b.entries.length - a.entries.length);
-  }, [filteredLogs]);
-
-  const stats = useMemo(() => {
-    const sourceSet = new Set(filteredLogs.map((log) => log.source));
-    const reasonCounts = new Map<Exclude<ErrorReason, 'all'>, number>();
-
-    errorLogs.forEach((log) => {
-      const reason = detectReason(log);
-      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
-    });
-
-    const topReasons = Array.from(reasonCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
-
-    return {
-      total: filteredLogs.length,
-      errors: errorLogs.length,
-      uniqueSources: sourceSet.size,
-      vacancies: vacancyLogs.length,
-      topReasons,
-      recent: [...filteredLogs].slice(-8).reverse(),
-    };
-  }, [errorLogs, filteredLogs, vacancyLogs]);
-
-  const tabs: Array<{ id: LogsTab; label: string; count?: number }> = [
-    { id: 'overview', label: 'Сводка' },
-    { id: 'errors', label: 'Ошибки', count: errorLogs.length },
-    { id: 'vacancies', label: 'Вакансии', count: vacancyLogs.length },
-    { id: 'raw', label: 'Raw', count: filteredLogs.length },
-  ];
-
-  const renderOverview = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
-      <div className="logs-summary-grid">
-        <div className="logs-summary-card">
-          <div className="logs-summary-label">Всего событий</div>
-          <div className="logs-summary-value">{stats.total}</div>
-        </div>
-        <div className="logs-summary-card logs-summary-card-danger">
-          <div className="logs-summary-label">Проблемные</div>
-          <div className="logs-summary-value">{stats.errors}</div>
-        </div>
-        <div className="logs-summary-card">
-          <div className="logs-summary-label">Вакансий в логах</div>
-          <div className="logs-summary-value">{stats.vacancies}</div>
-        </div>
-        <div className="logs-summary-card">
-          <div className="logs-summary-label">Источники</div>
-          <div className="logs-summary-value">{stats.uniqueSources}</div>
-        </div>
-      </div>
-
-      <div className="logs-info-grid">
-        <div className="logs-info-card">
-          <h3>Топ причин</h3>
-          {stats.topReasons.length === 0 ? (
-            <div className="logs-empty-inline">Пока нет проблемных событий</div>
-          ) : (
-            <div className="logs-reason-list">
-              {stats.topReasons.map(([reason, count]) => (
-                <div key={reason} className="logs-reason-item">
-                  <span className="logs-reason-badge">{REASON_LABELS[reason]}</span>
-                  <strong>{count}</strong>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="logs-info-card">
-          <h3>Последние события</h3>
-          {stats.recent.length === 0 ? (
-            <div className="logs-empty-inline">Логи пустые</div>
-          ) : (
-            <div className="logs-event-list">
-              {stats.recent.map((log, index) => (
-                <div key={`${log.timestamp}-${index}`} className="logs-event-item">
-                  <div className="logs-event-topline">
-                    <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
-                    <span className="logs-event-source">{log.source}</span>
-                    <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
-                  </div>
-                  <div className="logs-event-message">{log.message}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderErrors = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
-      <div className="logs-errors-toolbar">
-        <div className="logs-errors-summary">
-          <div className="logs-errors-title">Проблемы откликов и остановок</div>
-          <div className="logs-errors-subtitle">
-            Показывает, почему отклик не дошёл до успеха или потребовал ручного разбора.
-          </div>
-        </div>
-        <div className="logs-reason-filters">
-          <button
-            className={`logs-filter-chip ${errorReasonFilter === 'all' ? 'logs-filter-chip-active' : ''}`}
-            onClick={() => setErrorReasonFilter('all')}
-          >
-            Все
-            <span className="logs-filter-chip-count">{errorLogs.length}</span>
-          </button>
-          {Array.from(errorReasonCounts.entries())
-            .sort((a, b) => b[1] - a[1])
-            .map(([reason, count]) => (
-              <button
-                key={reason}
-                className={`logs-filter-chip ${errorReasonFilter === reason ? 'logs-filter-chip-active' : ''}`}
-                onClick={() => setErrorReasonFilter(reason)}
-              >
-                {REASON_LABELS[reason]}
-                <span className="logs-filter-chip-count">{count}</span>
-              </button>
-            ))}
-        </div>
-      </div>
-      {filteredErrorLogs.length === 0 ? (
-        <div className="logs-empty">Проблемные события не найдены</div>
-      ) : (
-        <div className="logs-event-list">
-          {filteredErrorLogs.slice().reverse().map((log, index) => {
-            const reason = detectReason(log);
-            const reasonLabel = REASON_LABELS[reason];
-            const vacancyId = log.context?.vacancyId;
-            const profileId = log.context?.profileId;
-            const reasonCode = log.context?.reasonCode;
-
-            return (
-              <div key={`${log.timestamp}-${index}`} className="logs-event-item logs-event-item-danger">
-                <div className="logs-error-priority-line">
-                  <span className="logs-error-priority">Разобрать</span>
-                  <span className="logs-error-hint">{reasonLabel}</span>
-                </div>
-                <div className="logs-event-topline">
-                  <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
-                  <span className="logs-reason-badge">{reasonLabel}</span>
-                  <span className="logs-event-source">{log.source}</span>
-                  <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
-                </div>
-                <div className="logs-event-message">{log.message}</div>
-                <div className="logs-error-explanation">
-                  {reason === 'cover_letter' && 'Вакансия просит сопроводительное письмо или логика упёрлась в cover letter flow.'}
-                  {reason === 'questionnaire' && 'Отклик остановился на анкете работодателя. Нужен ручной проход.'}
-                  {reason === 'test' && 'Отклик требует тест. Автоматически не закрывается.'}
-                  {reason === 'captcha' && 'Появилась капча или проверка безопасности. Нужен ручной разбор.'}
-                  {reason === 'login' && 'Сессия протухла или произошёл редирект на авторизацию.'}
-                  {reason === 'external_apply' && 'Отклик ведёт на внешнюю форму, не на стандартный HH flow.'}
-                  {reason === 'timeout' && 'Ожидание ответа/страницы превысило лимит. Проверить сеть, HH или селекторы.'}
-                  {reason === 'manual_action' && 'Сценарий передан пользователю как manual action.'}
-                  {reason === 'error' && 'Техническая ошибка в шаге отклика. Нужен разбор контекста ниже.'}
-                  {reason === 'other' && 'Нестандартный проблемный кейс. Смотри сообщение и raw logs.'}
-                </div>
-                {log.context && (
-                  <div className="logs-event-meta">
-                    {vacancyId && <span>vacancy: {String(vacancyId)}</span>}
-                    {profileId && <span>profile: {String(profileId)}</span>}
-                    {reasonCode && <span>reasonCode: {String(reasonCode)}</span>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-
-  const renderVacancies = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
-      {vacancyLogs.length === 0 ? (
-        <div className="logs-empty">Нет событий, привязанных к vacancyId</div>
-      ) : (
-        <div className="logs-vacancy-list">
-          {vacancyLogs.slice(0, 30).map(({ vacancyId, entries }) => {
-            const sortedEntries = [...entries].sort(
-              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-            );
-            const latestEntry = sortedEntries[sortedEntries.length - 1];
-            const latestStatus = detectVacancyStatus(latestEntry);
-            const latestStage = detectVacancyStage(latestEntry);
-            const latestProfileId = latestEntry.context?.profileId;
-
-            return (
-              <div key={vacancyId} className="logs-vacancy-card">
-                <div className="logs-vacancy-header">
-                  <div className="logs-vacancy-title-block">
-                    <strong>Vacancy {vacancyId}</strong>
-                    <span>{entries.length} events</span>
-                    {latestProfileId && <span>profile: {String(latestProfileId)}</span>}
-                  </div>
-                  <div className="logs-vacancy-status-block">
-                    <span className={`logs-vacancy-status logs-vacancy-status-${latestStatus}`}>{latestStage}</span>
-                    <span className="logs-vacancy-last-time">
-                      {new Date(latestEntry.timestamp).toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="logs-vacancy-summary">
-                  <div className="logs-vacancy-summary-title">Последний итог</div>
-                  <div className="logs-vacancy-summary-message">{latestEntry.message}</div>
-                </div>
-
-                <div className="logs-vacancy-timeline">
-                  {sortedEntries.slice(-(compactMode ? 4 : 6)).map((log, index) => {
-                    const stage = detectVacancyStage(log);
-                    const status = detectVacancyStatus(log);
-
-                    return (
-                      <div key={`${log.timestamp}-${index}`} className="logs-vacancy-timeline-item">
-                        <div className={`logs-vacancy-timeline-dot logs-vacancy-timeline-dot-${status}`} />
-                        <div className="logs-vacancy-timeline-content">
-                          <div className="logs-vacancy-timeline-top">
-                            <span className={`logs-vacancy-status logs-vacancy-status-${status}`}>{stage}</span>
-                            <span className="logs-vacancy-last-time">{new Date(log.timestamp).toLocaleString()}</span>
-                          </div>
-                          <div className="logs-vacancy-message">{log.message}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-
-  const renderRaw = () => (
-    <div className={`logs-tab-panel ${compactMode ? 'logs-tab-panel-compact' : ''}`}>
-      <div className="logs-errors-toolbar">
-        <div className="logs-errors-summary">
-          <div className="logs-errors-title">Raw / Debug</div>
-          <div className="logs-errors-subtitle">
-            Есть два режима: удобный просмотр по событиям и сырой поток логов без потерь.
-          </div>
-        </div>
-        <div className="logs-reason-filters">
-          <button
-            className={`logs-filter-chip ${rawViewMode === 'parsed' ? 'logs-filter-chip-active' : ''}`}
-            onClick={() => setRawViewMode('parsed')}
-          >
-            Удобный вид
-          </button>
-          <button
-            className={`logs-filter-chip ${rawViewMode === 'stream' ? 'logs-filter-chip-active' : ''}`}
-            onClick={() => setRawViewMode('stream')}
-          >
-            Сырой поток
-          </button>
-        </div>
-      </div>
-      {filteredLogs.length === 0 ? (
-        <div className="logs-empty">No logs found</div>
-      ) : rawViewMode === 'stream' ? (
-        <pre className="logs-stream">{formatLogsAsText()}</pre>
-      ) : (
-        <div className="logs-raw-list">
-          {filteredLogs.slice().reverse().slice(0, compactMode ? 40 : 80).map((log, index) => (
-            <details key={`${log.timestamp}-${index}`} className="logs-raw-item">
-              <summary className="logs-raw-summary">
-                <div className="logs-raw-summary-main">
-                  <span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span>
-                  <span className="logs-event-source">{log.source}</span>
-                  <span className="logs-event-message">{log.message}</span>
-                </div>
-                <span className="logs-event-time">{new Date(log.timestamp).toLocaleString()}</span>
-              </summary>
-              <div className="logs-raw-body">
-                <div className="logs-raw-section">
-                  <div className="logs-raw-section-title">Message</div>
-                  <pre className="logs-raw-json">{log.message}</pre>
-                </div>
-                <div className="logs-raw-section">
-                  <div className="logs-raw-section-title">Context JSON</div>
-                  <pre className="logs-raw-json">{JSON.stringify(log.context || {}, null, 2)}</pre>
-                </div>
-              </div>
-            </details>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-
-  const formatLogsAsText = (): string => {
-    return filteredLogs.map((log) => {
-      const timestamp = new Date(log.timestamp).toLocaleString();
-      const level = log.level.toUpperCase().padEnd(5);
-      const source = log.source.padEnd(16);
-      let line = `[${timestamp}] [${level}] [${source}] ${log.message}`;
-
-      if (log.context) {
-        line += '\n' + JSON.stringify(log.context, null, 2);
-      }
-
-      return line;
-    }).join('\n\n');
-  };
-
-  const handleCopyAll = async () => {
-    const text = formatLogsAsText();
+  const copyFiltered = async () => {
+    const text = formatLogsAsText(filteredLogs);
     try {
       await navigator.clipboard.writeText(text);
-    } catch (err) {
-      // Fallback for older browsers
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
+      setCopyState('done');
+    } catch {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.className = 'logs-copy-fallback';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        setCopyState(copied ? 'done' : 'error');
+      } catch {
+        setCopyState('error');
+      }
     }
   };
 
-  return (
-    <div className="logs-viewer-overlay">
-      <div className="logs-viewer-container">
-        <div className="logs-viewer-header">
-          <h2>Логи системы</h2>
-          <button className="btn btn-secondary btn-sm" onClick={onClose}>Закрыть</button>
-        </div>
-
-        <div className="logs-viewer-controls">
-          <input
-            type="text"
-            className="logs-search-input"
-            placeholder="Поиск по логам..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          <select
-            className="logs-level-filter"
-            value={levelFilter}
-            onChange={(e) => setLevelFilter(e.target.value)}
-          >
-            <option value="all">Все уровни</option>
-            <option value="debug">Debug</option>
-            <option value="info">Info</option>
-            <option value="warn">Warn</option>
-            <option value="error">Error</option>
-          </select>
-          <button className="btn btn-secondary btn-sm" onClick={loadLogs}>Обновить</button>
-          <button className="btn btn-primary btn-sm" onClick={handleCopyAll} disabled={filteredLogs.length === 0}>
-            Скопировать всё
-          </button>
-          <button
-            className={`btn btn-sm ${compactMode ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setCompactMode((value) => !value)}
-          >
-            {compactMode ? 'Компактный вид: вкл' : 'Компактный вид: выкл'}
-          </button>
-          <div className="logs-count">{filteredLogs.length} / {logs.length} entries</div>
-        </div>
-
-        <div className="logs-tabs">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              className={`logs-tab ${activeTab === tab.id ? 'logs-tab-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <span>{tab.label}</span>
-              {typeof tab.count === 'number' && <span className="logs-tab-count">{tab.count}</span>}
-            </button>
-          ))}
-        </div>
-
-        <div className="logs-viewer-content">
-          {loading ? (
-            <div className="logs-loading">Loading logs...</div>
-          ) : (
-            <>
-              {activeTab === 'overview' && renderOverview()}
-              {activeTab === 'errors' && renderErrors()}
-              {activeTab === 'vacancies' && renderVacancies()}
-              {activeTab === 'raw' && renderRaw()}
-            </>
-          )}
-        </div>
+  const renderEvent = (log: LogEntry, index: number, detailed = false) => {
+    const kind = classifyLogProblem(log);
+    const reason = detectReason(log);
+    const badge = getProblemBadgeLevel(log);
+    return <article key={`${log.timestamp}-${index}`} className={`logs-event-item logs-event-item-${kind}`}>
+      {detailed && kind !== 'none' && <div className="logs-error-priority-line">
+        <span className={`logs-error-priority logs-error-priority-${kind}`}>{KIND_LABELS[kind]}</span>
+        <span className="logs-error-hint">{REASON_LABELS[reason]}</span>
+      </div>}
+      <div className="logs-event-topline">
+        <span className={`logs-level-badge logs-level-${detailed ? badge : log.level}`}>{detailed ? badge : log.level}</span>
+        <span className="logs-event-source">{log.source}</span>
+        <span className="logs-event-time">{safeFormatDate(log.timestamp)}</span>
       </div>
+      <div className="logs-event-message">{log.message}</div>
+      {detailed && <><div className={`logs-error-explanation logs-error-explanation-${kind}`}>{EXPLANATIONS[reason]}</div><EventMeta log={log} /></>}
+    </article>;
+  };
+
+  const renderOverview = () => {
+    const cards = [
+      ['Показано', stats.total], ['Проблемы', stats.problems], ['Execution errors', stats.executionErrors],
+      ['Manual cases', stats.manualCases], ['Warnings', stats.warnings], ['Вакансии', stats.vacancies], ['Источники', stats.sources],
+    ];
+    return <div className="logs-tab-panel">
+      <div className="logs-summary-grid">{cards.map(([label, value]) => <div className="logs-summary-card" key={label}>
+        <div className="logs-summary-label">{label}</div><div className="logs-summary-value">{value}</div>
+      </div>)}</div>
+      <div className="logs-info-grid">
+        <section className="logs-info-card"><h3>Топ причин</h3>{stats.topReasons.length
+          ? <div className="logs-reason-list">{stats.topReasons.map(([reason, count]) => <div className="logs-reason-item" key={reason}><span>{REASON_LABELS[reason]}</span><strong>{count}</strong></div>)}</div>
+          : <div className="logs-empty-inline">Проблемных событий нет</div>}</section>
+        <section className="logs-info-card"><h3>Последние события</h3>{stats.recent.length
+          ? <div className="logs-event-list">{stats.recent.map((log, index) => renderEvent(log, index))}</div>
+          : <div className="logs-empty-inline">По текущим фильтрам событий нет</div>}</section>
+      </div>
+    </div>;
+  };
+
+  const renderProblems = () => <div className="logs-tab-panel">
+    <div className="logs-errors-toolbar"><div><div className="logs-errors-title">Проблемные события</div>
+      <div className="logs-errors-subtitle">Технические сбои, предупреждения и управляемые ручные кейсы показаны раздельно.</div></div>
+      <div className="logs-reason-filters"><button className={`logs-filter-chip ${reasonFilter === 'all' ? 'logs-filter-chip-active' : ''}`} onClick={() => setReasonFilter('all')}>Все <span>{problems.length}</span></button>
+        {reasonCounts.map(([reason, count]) => <button key={reason} className={`logs-filter-chip ${reasonFilter === reason ? 'logs-filter-chip-active' : ''}`} onClick={() => setReasonFilter(reason)}>{REASON_LABELS[reason]} <span>{count}</span></button>)}</div>
     </div>
-  );
+    {displayedProblems.length ? <div className="logs-event-list">{[...displayedProblems].reverse().map((log, index) => renderEvent(log, index, true))}</div> : <div className="logs-empty">Проблемные события не найдены</div>}
+  </div>;
+
+  const renderVacancies = () => <div className="logs-tab-panel">
+    {vacancyGroups.length > VACANCY_LIMIT && <div className="logs-limit-note">Показано {VACANCY_LIMIT} из {vacancyGroups.length} вакансий.</div>}
+    {vacancyGroups.length ? <div className="logs-vacancy-list">{vacancyGroups.slice(0, VACANCY_LIMIT).map(({ vacancyId, entries }) => {
+      const latest = entries[entries.length - 1];
+      const profileId = [...entries].reverse().map((log) => contextText(log, 'profileId', 'profile_id')).find(Boolean);
+      return <article className="logs-vacancy-card" key={vacancyId}>
+        <header className="logs-vacancy-header"><div className="logs-vacancy-title-block"><strong>Vacancy {vacancyId}</strong><span>{entries.length} событий</span>{profileId && <span>profileId: {profileId}</span>}</div>
+          <div className="logs-vacancy-status-block"><span className={`logs-vacancy-status logs-vacancy-status-${detectVacancyStatus(latest)}`}>{detectVacancyStage(latest)}</span><span>{safeFormatDate(latest.timestamp)}</span></div></header>
+        <div className="logs-vacancy-summary"><div className="logs-vacancy-summary-title">Последний итог</div><div>{latest.message}</div></div>
+        <div className="logs-vacancy-timeline">{entries.slice(-6).reverse().map((log, index) => <div className="logs-vacancy-timeline-item" key={`${log.timestamp}-${index}`}><div className={`logs-vacancy-timeline-dot logs-vacancy-timeline-dot-${detectVacancyStatus(log)}`} /><div className="logs-vacancy-timeline-content"><div className="logs-vacancy-timeline-top"><span className={`logs-vacancy-status logs-vacancy-status-${detectVacancyStatus(log)}`}>{detectVacancyStage(log)}</span><span>{safeFormatDate(log.timestamp)}</span></div><div className="logs-vacancy-message">{log.message}</div></div></div>)}</div>
+      </article>;
+    })}</div> : <div className="logs-empty">Нет событий с достоверным vacancyId</div>}
+  </div>;
+
+  const renderRaw = () => {
+    const shown = filteredLogs.slice().reverse().slice(0, PARSED_LOG_LIMIT);
+    return <div className="logs-tab-panel"><div className="logs-errors-toolbar"><div><div className="logs-errors-title">Raw / отладка</div><div className="logs-errors-subtitle">Сырой поток и экспорт содержат ровно отфильтрованные записи.</div></div>
+      <div className="logs-reason-filters"><button className={`logs-filter-chip ${rawViewMode === 'parsed' ? 'logs-filter-chip-active' : ''}`} onClick={() => setRawViewMode('parsed')}>Parsed</button><button className={`logs-filter-chip ${rawViewMode === 'stream' ? 'logs-filter-chip-active' : ''}`} onClick={() => setRawViewMode('stream')}>Raw stream</button></div></div>
+      {!filteredLogs.length ? <div className="logs-empty">Логи не найдены</div> : rawViewMode === 'stream' ? <pre className="logs-stream">{formatLogsAsText(filteredLogs)}</pre> : <>
+        {filteredLogs.length > PARSED_LOG_LIMIT && <div className="logs-limit-note">Удобный вид: последние {PARSED_LOG_LIMIT} из {filteredLogs.length}. Raw stream и копирование включают все {filteredLogs.length}.</div>}
+        <div className="logs-raw-list">{shown.map((log, index) => <details className="logs-raw-item" key={`${log.timestamp}-${index}`}><summary className="logs-raw-summary"><div className="logs-raw-summary-main"><span className={`logs-level-badge logs-level-${log.level}`}>{log.level}</span><span>{log.source}</span><span className="logs-event-message">{log.message}</span></div><span>{safeFormatDate(log.timestamp)}</span></summary><div className="logs-raw-body"><pre className="logs-raw-json">{safeStringify(log.context ?? {}, 2)}</pre></div></details>)}</div>
+      </>}</div>;
+  };
+
+  const tabs: Array<{ id: LogsTab; label: string; count?: number }> = [
+    { id: 'overview', label: 'Сводка' }, { id: 'problems', label: 'Проблемы', count: stats.problems },
+    { id: 'vacancies', label: 'Вакансии', count: stats.vacancies }, { id: 'raw', label: 'Raw', count: stats.total },
+  ];
+
+  return <div className="logs-viewer-overlay"><div className="logs-viewer-container">
+    <header className="logs-viewer-header"><h2>Диагностика логов</h2><button className="btn btn-secondary btn-sm" onClick={onClose}>Закрыть</button></header>
+    <div className="logs-viewer-controls"><input className="logs-search-input" aria-label="Поиск по логам" placeholder="message, source, context, vacancy, profile, outcome…" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /><select className="logs-level-filter" aria-label="Уровень логов" value={levelFilter} onChange={(event) => setLevelFilter(event.target.value)}><option value="all">Все уровни</option><option value="debug">Debug</option><option value="info">Info</option><option value="warn">Warn</option><option value="error">Error</option></select><button className="btn btn-secondary btn-sm" onClick={() => void loadLogs()} disabled={loading}>Обновить</button><button className="btn btn-primary btn-sm" onClick={() => void copyFiltered()} disabled={!filteredLogs.length}>Копировать отфильтрованные</button>
+      <div className="logs-count"><span>Показано {stats.total} / {logs.length}</span><span>Проблемы {stats.problems}</span><span>Вакансии {stats.vacancies}</span>{copyState === 'done' && <span className="logs-copy-success">Скопировано</span>}{copyState === 'error' && <span className="logs-copy-error">Не удалось скопировать</span>}</div></div>
+    <nav className="logs-tabs">{tabs.map((tab) => <button key={tab.id} className={`logs-tab ${activeTab === tab.id ? 'logs-tab-active' : ''}`} onClick={() => setActiveTab(tab.id)}>{tab.label}{tab.count !== undefined && <span className="logs-tab-count">{tab.count}</span>}</button>)}</nav>
+    <main className="logs-viewer-content">{loading ? <div className="logs-loading">Загрузка логов…</div> : loadError ? <div className="logs-empty"><p>{loadError}</p><button className="btn btn-secondary btn-sm" onClick={() => void loadLogs()}>Повторить</button></div> : activeTab === 'overview' ? renderOverview() : activeTab === 'problems' ? renderProblems() : activeTab === 'vacancies' ? renderVacancies() : renderRaw()}</main>
+  </div></div>;
 };
