@@ -24,6 +24,8 @@ export type AcquisitionOutcome =
   | { success: false; reason: 'exhausted'; consecutiveEmptyPages: number }
   | { success: false; reason: 'error'; error: string };
 
+type CycleOutcome = 'applied' | 'skipped' | 'manual' | 'blocked' | 'no_vacancies' | 'retry';
+
 export class BackendAutoApplyEngine {
   private running = false;
   private stopRequested = false;
@@ -71,24 +73,25 @@ export class BackendAutoApplyEngine {
 
         const cycleResult = await this.runCycle();
 
-        if (cycleResult === 'blocked' || cycleResult === 'manual') {
+        if (cycleResult === 'blocked' || cycleResult === 'manual' || cycleResult === 'no_vacancies') {
           FileLogger.log('service_worker', 'info', 'Cycle stopped due to blocker', { reason: cycleResult });
           break;
         }
 
-        if (cycleResult === 'retry') {
-          FileLogger.log('service_worker', 'info', 'Cycle returned retry, continuing to next iteration');
-          // Continue to delay and next cycle
+        if (cycleResult === 'applied' || cycleResult === 'retry') {
+          const delaySeconds = this.randomInRange(
+            state.settings.delayMinSeconds,
+            state.settings.delayMaxSeconds
+          );
+          await this.deps.store.setRuntimePhase('waiting');
+          FileLogger.log(
+            'service_worker',
+            'info',
+            cycleResult === 'applied' ? 'Waiting after successful apply' : 'Waiting before acquisition retry',
+            { delaySeconds }
+          );
+          await this.deps.sleep(delaySeconds * 1000);
         }
-
-        const delaySeconds = this.randomInRange(
-          state.settings.delayMinSeconds,
-          state.settings.delayMaxSeconds
-        );
-
-        await this.deps.store.setRuntimePhase('waiting');
-        FileLogger.log('service_worker', 'info', 'Waiting between cycles', { delaySeconds });
-        await this.deps.sleep(delaySeconds * 1000);
       }
 
       FileLogger.log('service_worker', 'info', 'Pipeline finished');
@@ -154,7 +157,7 @@ export class BackendAutoApplyEngine {
     FileLogger.log('service_worker', 'info', 'BackendEngine stopped');
   }
 
-  private async runCycle(): Promise<'ok' | 'blocked' | 'manual' | 'no_vacancies' | 'retry'> {
+  private async runCycle(): Promise<CycleOutcome> {
     FileLogger.log('service_worker', 'info', 'Cycle start');
 
     await this.deps.store.setRuntimePhase('session_check');
@@ -299,6 +302,10 @@ export class BackendAutoApplyEngine {
     // Mark vacancy as processed
     await this.deps.store.markVacancyProcessed(nextVacancy.vacancyId);
 
+    if (applyResult.outcome === 'success') {
+      return 'applied';
+    }
+
     if (applyResult.requiresManualAction && this.deps.store.getState().settings.stopOnManualAction) {
       FileLogger.log('service_worker', 'info', 'Manual action detected, stopOnManualAction enabled - pausing', {
         vacancyId: nextVacancy.vacancyId
@@ -307,7 +314,12 @@ export class BackendAutoApplyEngine {
       return 'manual';
     }
 
-    return 'ok';
+    FileLogger.log('service_worker', 'info', 'Continuing without delay after non-success apply outcome', {
+      vacancyId: nextVacancy.vacancyId,
+      outcome: applyResult.outcome,
+      requiresManualAction: applyResult.requiresManualAction,
+    });
+    return 'skipped';
   }
 
   private async checkSession(): Promise<boolean> {
@@ -358,7 +370,6 @@ export class BackendAutoApplyEngine {
       return true;
     }
 
-    // Fetch resumes via API
     FileLogger.log('service_worker', 'info', 'Resume auto-refresh started');
     try {
       const resumes = await this.deps.httpClient.getMyResumes();
@@ -440,7 +451,6 @@ export class BackendAutoApplyEngine {
           consecutiveEmptyPages: newConsecutiveEmpty,
         });
 
-        // Check exhaustion threshold
         if (newConsecutiveEmpty >= EXHAUSTION_THRESHOLD) {
           FileLogger.log('service_worker', 'warn', 'Search space exhausted - no more vacancies available', {
             consecutiveEmptyPages: newConsecutiveEmpty,

@@ -798,7 +798,7 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
   });
 
   describe('apply decision counters and stop semantics', () => {
-    const configureQueuedVacancy = async (stopOnManualAction = false) => {
+    const configureQueuedVacancy = async (stopOnManualAction = false, vacancyIds = ['vac-1']) => {
       await store.updateState({
         selectedResumeHash: 'resume123',
         resumeCandidates: [{ hash: 'resume123', title: 'Resume', isActive: true, source: 'hh_detected', lastSeenAt: Date.now() }],
@@ -809,10 +809,10 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
             locations: [], experience: [], schedule: [], employment: [],
           },
         },
-        vacancyQueue: [{
-          vacancyId: 'vac-1', title: 'Backend Engineer', company: 'HH', url: 'https://hh.ru/vacancy/vac-1',
+        vacancyQueue: vacancyIds.map((vacancyId) => ({
+          vacancyId, title: 'Backend Engineer', company: 'HH', url: `https://hh.ru/vacancy/${vacancyId}`,
           source: 'search_dom', discoveredAt: Date.now(), profileId: 'prof1', status: 'discovered',
-        }],
+        })),
         settings: { maxAutoAppliesPerRun: 0, delayMinSeconds: 1, delayMaxSeconds: 1, stopOnManualAction },
       });
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
@@ -828,6 +828,7 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
 
       expect(store.getState().runtime).toMatchObject({ processed: 1, success: 1, manualActions: 0 });
       expect(store.getState().manualActions).toHaveLength(0);
+      expect(mockSleep).toHaveBeenCalledTimes(1);
       await engine.stop();
       releaseAllSleeps();
       await startPromise;
@@ -836,16 +837,56 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
     it.each([
       ['test_required', { requiresTest: true }],
       ['questionnaire_required', { requiresQuestionnaire: true }],
-    ])('counts preflight %s as a manual action', async (outcome, blocker) => {
-      await configureQueuedVacancy();
-      mockHttpClient.preflightApply.mockResolvedValue({ canProceed: false, reason: outcome, ...blocker });
+      ['cover_letter_required', { requiresCoverLetter: true }],
+    ])('continues immediately after preflight %s when manual actions do not stop the run', async (outcome, blocker) => {
+      await configureQueuedVacancy(false, ['vac-1', 'vac-2']);
+      mockHttpClient.preflightApply
+        .mockResolvedValueOnce({ canProceed: false, reason: outcome, ...blocker })
+        .mockResolvedValueOnce({ canProceed: true });
+      mockHttpClient.applyToVacancy.mockResolvedValue({ success: true, outcome: 'success' });
 
       startPromise = engine.start();
-      await waitFor(() => sleepResolvers.length === 1);
+      await waitFor(() => mockHttpClient.preflightApply.mock.calls.length === 2 && sleepResolvers.length === 1);
 
-      expect(store.getState().runtime).toMatchObject({ processed: 1, success: 0, manualActions: 1 });
-      expect(store.getState().manualActions[0]).toMatchObject({ reasonCode: outcome });
-      expect(mockHttpClient.applyToVacancy).not.toHaveBeenCalled();
+      expect(store.getState().runtime).toMatchObject({ processed: 2, success: 1, manualActions: 1 });
+      expect(store.getState().manualActions).toHaveLength(1);
+      expect(mockHttpClient.applyToVacancy).toHaveBeenCalledTimes(1);
+      expect(mockSleep).toHaveBeenCalledTimes(1);
+      await engine.stop();
+      releaseAllSleeps();
+      await startPromise;
+    });
+
+    it.each(['error', 'unknown', 'failed'])('continues immediately after apply outcome %s', async (outcome) => {
+      await configureQueuedVacancy(false, ['vac-1', 'vac-2']);
+      mockHttpClient.preflightApply.mockResolvedValue({ canProceed: true });
+      mockHttpClient.applyToVacancy
+        .mockResolvedValueOnce({ success: false, outcome })
+        .mockResolvedValueOnce({ success: true, outcome: 'success' });
+
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.applyToVacancy.mock.calls.length === 2 && sleepResolvers.length === 1);
+
+      expect(store.getState().runtime).toMatchObject({ processed: 2, success: 1 });
+      expect(mockSleep).toHaveBeenCalledTimes(1);
+      await engine.stop();
+      releaseAllSleeps();
+      await startPromise;
+    });
+
+    it('continues immediately after already_applied', async () => {
+      await configureQueuedVacancy(false, ['vac-1', 'vac-2']);
+      mockHttpClient.preflightApply
+        .mockResolvedValueOnce({ canProceed: false, alreadyApplied: true })
+        .mockResolvedValueOnce({ canProceed: true });
+      mockHttpClient.applyToVacancy.mockResolvedValue({ success: true, outcome: 'success' });
+
+      startPromise = engine.start();
+      await waitFor(() => mockHttpClient.preflightApply.mock.calls.length === 2 && sleepResolvers.length === 1);
+
+      expect(store.getState().runtime).toMatchObject({ processed: 2, success: 1, manualActions: 0 });
+      expect(mockHttpClient.applyToVacancy).toHaveBeenCalledTimes(1);
+      expect(mockSleep).toHaveBeenCalledTimes(1);
       await engine.stop();
       releaseAllSleeps();
       await startPromise;
