@@ -519,6 +519,82 @@
   color: #666;
 }
 
+.highlight-hint {
+  padding: 8px 10px;
+  background: #fff8dc;
+  border: 1px solid #f3d891;
+  border-left: 3px solid #d9a400;
+  border-radius: 6px;
+  color: #6b5100;
+  line-height: 1.35;
+  animation: highlight-hint-appear 180ms ease-out;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    border-width 200ms ease,
+    color 200ms ease,
+    padding 200ms ease;
+}
+
+@keyframes highlight-hint-appear {
+  from {
+    opacity: 0.75;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .highlight-hint {
+    animation: none;
+  }
+}
+
+.dismissible-hint {
+  position: relative;
+  padding-right: 28px;
+}
+
+.highlight-hint.is-dismissing {
+  padding: 0;
+  background-color: transparent;
+  border-color: transparent;
+  border-width: 0;
+  color: #666;
+}
+
+.hint-dismiss-button {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.hint-dismiss-button:hover {
+  opacity: 1;
+}
+
+.hint-dismiss-button:disabled {
+  pointer-events: none;
+}
+
 /* Resume components */
 .resume-selector {
   display: flex;

@@ -14,10 +14,15 @@ import { formatResumeLabel } from '../src/components/resumeLabel';
 import { LogsViewer } from './LogsViewer';
 import './styles.css';
 
+const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
+const HINT_DISMISS_ANIMATION_MS = 200;
+
 export const App: React.FC = () => {
   const [state, setState] = useState<AppState | null>(null);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [logsViewerOpen, setLogsViewerOpen] = useState(false);
+  const [isResumeHintHighlighted, setIsResumeHintHighlighted] = useState(true);
+  const [isResumeHintDismissing, setIsResumeHintDismissing] = useState(false);
 
   useEffect(() => {
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
@@ -48,6 +53,17 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const restoreResumeHint = async () => {
+      const storedHints = await chrome.storage.local.get(RESUME_HINT_DISMISSED_KEY);
+      if (storedHints[RESUME_HINT_DISMISSED_KEY] === true) {
+        setIsResumeHintHighlighted(false);
+      }
+    };
+
+    void restoreResumeHint();
+  }, []);
+
   if (!state) {
     return <div className="app loading"><div className="spinner">Загрузка...</div></div>;
   }
@@ -62,6 +78,14 @@ export const App: React.FC = () => {
   const handleStart = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_START' });
   const handleStop = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_STOP' });
   const handleModeChange = (mode: AutoApplyMode) => chrome.runtime.sendMessage({ type: 'SET_MODE', mode });
+  const dismissResumeHint = () => {
+    setIsResumeHintDismissing(true);
+    void chrome.storage.local.set({ [RESUME_HINT_DISMISSED_KEY]: true });
+    window.setTimeout(() => {
+      setIsResumeHintHighlighted(false);
+      setIsResumeHintDismissing(false);
+    }, HINT_DISMISS_ANIMATION_MS);
+  };
 
   return (
     <div className="app">
@@ -128,6 +152,22 @@ export const App: React.FC = () => {
               <option key={resume.hash} value={resume.hash}>{formatResumeLabel(resume)}</option>
             ))}
           </select>
+          <div className={isResumeHintHighlighted
+            ? `form-hint highlight-hint dismissible-hint${isResumeHintDismissing ? ' is-dismissing' : ''}`
+            : 'form-hint'}>
+            Если выбрать резюме, HH будет учитывать его как фильтр при поиске вакансий.
+            {isResumeHintHighlighted && (
+              <button
+                type="button"
+                className="hint-dismiss-button"
+                aria-label="Снять выделение подсказки"
+                onClick={dismissResumeHint}
+                disabled={isResumeHintDismissing}
+              >
+                ×
+              </button>
+            )}
+          </div>
           <div style={{ marginTop: 10 }}>
             <button className="btn btn-secondary" onClick={() => chrome.runtime.sendMessage({ type: 'REFRESH_RESUMES_API' })}>
               Обновить резюме из HH

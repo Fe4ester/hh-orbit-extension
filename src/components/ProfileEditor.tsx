@@ -1,7 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Profile, ResumeCandidate } from '../state/types';
 import type { CreateProfilePayload, UpdateProfilePayload } from '../state/actions';
 import { formatResumeLabel } from './resumeLabel';
+
+const COVER_LETTER_HINT_DISMISSED_KEY = 'dismissed_cover_letter_hint';
+const DEFAULT_RESUME_HINT_DISMISSED_KEY = 'dismissed_default_resume_hint';
+const HINT_DISMISS_ANIMATION_MS = 200;
 
 interface ProfileEditorProps {
   profile?: Profile;
@@ -10,6 +14,18 @@ interface ProfileEditorProps {
   onUpdate: (payload: UpdateProfilePayload) => void;
   onCancel: () => void;
 }
+
+const HintDismissButton: React.FC<{ onDismiss: () => void; disabled: boolean }> = ({ onDismiss, disabled }) => (
+  <button
+    type="button"
+    className="hint-dismiss-button"
+    aria-label="Снять выделение подсказки"
+    onClick={onDismiss}
+    disabled={disabled}
+  >
+    ×
+  </button>
+);
 
 export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   profile,
@@ -29,6 +45,41 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   const [selectedResumeHash, setSelectedResumeHash] = useState(
     profile?.selectedResumeHash || ''
   );
+  const [isCoverLetterHintHighlighted, setIsCoverLetterHintHighlighted] = useState(true);
+  const [isDefaultResumeHintHighlighted, setIsDefaultResumeHintHighlighted] = useState(true);
+  const [isCoverLetterHintDismissing, setIsCoverLetterHintDismissing] = useState(false);
+  const [isDefaultResumeHintDismissing, setIsDefaultResumeHintDismissing] = useState(false);
+
+  useEffect(() => {
+    const restoreHintHighlights = async () => {
+      const storedHints = await chrome.storage.local.get([
+        COVER_LETTER_HINT_DISMISSED_KEY,
+        DEFAULT_RESUME_HINT_DISMISSED_KEY,
+      ]);
+
+      if (storedHints[COVER_LETTER_HINT_DISMISSED_KEY] === true) {
+        setIsCoverLetterHintHighlighted(false);
+      }
+      if (storedHints[DEFAULT_RESUME_HINT_DISMISSED_KEY] === true) {
+        setIsDefaultResumeHintHighlighted(false);
+      }
+    };
+
+    void restoreHintHighlights();
+  }, []);
+
+  const dismissHint = (
+    storageKey: string,
+    setHighlighted: (highlighted: boolean) => void,
+    setDismissing: (dismissing: boolean) => void
+  ) => {
+    setDismissing(true);
+    void chrome.storage.local.set({ [storageKey]: true });
+    window.setTimeout(() => {
+      setHighlighted(false);
+      setDismissing(false);
+    }, HINT_DISMISS_ANIMATION_MS);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,8 +164,20 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
             rows={4}
             placeholder="Шаблон сопроводительного письма..."
           />
-          <small className="form-hint" style={{ color: '#dc3545', fontWeight: 600 }}>
+          <small className={isCoverLetterHintHighlighted
+            ? `form-hint highlight-hint dismissible-hint${isCoverLetterHintDismissing ? ' is-dismissing' : ''}`
+            : 'form-hint'}>
             Отправляется только если вакансия сама запрашивает сопроводительное письмо.
+            {isCoverLetterHintHighlighted && (
+              <HintDismissButton
+                onDismiss={() => dismissHint(
+                  COVER_LETTER_HINT_DISMISSED_KEY,
+                  setIsCoverLetterHintHighlighted,
+                  setIsCoverLetterHintDismissing
+                )}
+                disabled={isCoverLetterHintDismissing}
+              />
+            )}
           </small>
         </div>
 
@@ -133,8 +196,20 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
               </option>
             ))}
           </select>
-          <small className="form-hint">
+          <small className={isDefaultResumeHintHighlighted
+            ? `form-hint highlight-hint dismissible-hint${isDefaultResumeHintDismissing ? ' is-dismissing' : ''}`
+            : 'form-hint'}>
             При выборе этого профиля будет автоматически выбрано это резюме
+            {isDefaultResumeHintHighlighted && (
+              <HintDismissButton
+                onDismiss={() => dismissHint(
+                  DEFAULT_RESUME_HINT_DISMISSED_KEY,
+                  setIsDefaultResumeHintHighlighted,
+                  setIsDefaultResumeHintDismissing
+                )}
+                disabled={isDefaultResumeHintDismissing}
+              />
+            )}
           </small>
         </div>
 
