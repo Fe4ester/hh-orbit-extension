@@ -4,14 +4,42 @@ import { BackendHTTPClient } from '../src/runtime/backendHTTPClient';
 describe('BackendHTTPClient', () => {
   let client: BackendHTTPClient;
   let fetchMock: any;
+  let logMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    client = new BackendHTTPClient({ log: vi.fn() });
+    logMock = vi.fn();
+    client = new BackendHTTPClient({ log: logMock });
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     (chrome as any).cookies = {
       get: vi.fn().mockResolvedValue({ value: 'token123456' }),
     };
+  });
+
+  it('does not leak XSRF tokens into runtime logger payloads', async () => {
+    const xsrfToken = 'secret-xsrf-token-1234567890';
+    (chrome as any).cookies.get = vi.fn().mockResolvedValue({ value: xsrfToken });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: vi.fn().mockReturnValue('application/json') },
+      json: vi.fn().mockResolvedValue({ success: 'true' }),
+    });
+
+    await client.applyToVacancy('123', { resumeHash: 'resume123' });
+
+    const serializedPayload = JSON.stringify(logMock.mock.calls);
+    expect(serializedPayload).not.toContain(xsrfToken);
+    expect(serializedPayload).not.toContain('secret-xsrf');
+    expect(serializedPayload).not.toContain(xsrfToken.substring(0, 8));
+    expect(serializedPayload).toContain('hasXsrfToken');
+    expect(logMock).toHaveBeenCalledWith(
+      '[BackendHTTP] applyToVacancy request',
+      expect.objectContaining({
+        hasXsrfToken: true,
+        headerKeys: expect.arrayContaining(['X-Xsrftoken']),
+      })
+    );
   });
 
   it('proceeds on quickResponse preflight responses', async () => {

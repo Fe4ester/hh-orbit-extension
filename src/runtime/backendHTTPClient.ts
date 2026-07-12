@@ -340,7 +340,7 @@ export class BackendHTTPClient {
       const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
       if (xsrfCookie?.value) {
         this.xsrfToken = xsrfCookie.value;
-        this.log('[BackendHTTP] XSRF token extracted', { token: this.xsrfToken.substring(0, 8) + '...' });
+        this.log('[BackendHTTP] XSRF token extracted', { hasXsrfToken: true });
       } else {
         this.log('[BackendHTTP] WARNING: No XSRF token found in cookies');
       }
@@ -453,7 +453,8 @@ export class BackendHTTPClient {
 
     this.log('[BackendHTTP] applyToVacancy request', {
       url: this.popupURL,
-      headers,
+      headerKeys: Object.keys(headers),
+      hasXsrfToken: Boolean(this.xsrfToken),
       bodyKeys,
       contentTypeMode,
     });
@@ -610,7 +611,7 @@ export class BackendHTTPClient {
       if (xsrfCookie?.value) {
         this.xsrfToken = xsrfCookie.value;
         this.log('[BackendHTTP] XSRF token extracted', {
-          token: this.xsrfToken.substring(0, 8) + '...',
+          hasXsrfToken: true,
         });
       }
     } catch (error) {

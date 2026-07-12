@@ -233,7 +233,8 @@ export class PreflightService {
       if (xsrfCookie?.value) {
         this.xsrfToken = xsrfCookie.value;
         FileLogger.log('service_worker', 'info', 'XSRF token obtained', {
-          tokenPreview: this.xsrfToken.substring(0, 8) + '...'
+          source: 'cookie',
+          hasXsrfToken: true,
         });
       } else {
         FileLogger.log('service_worker', 'warn', 'XSRF token not found in cookies');
