@@ -19,9 +19,20 @@ import { FileLogger } from '../utils/fileLogger';
 import { createStoreReadyGate } from './storeReadiness';
 
 const store = new StateStore(new ExtensionStorageAdapter());
+
+function logRuntimeDiagnostic(...args: unknown[]): void {
+  const [message, context] = args;
+  const logContext = context !== null && typeof context === 'object' && !Array.isArray(context)
+    ? context as Record<string, unknown>
+    : context === undefined
+    ? undefined
+    : { context };
+  FileLogger.log('service_worker', 'debug', String(message), logContext);
+}
+
 const acquisitionService = new AcquisitionService({
   store,
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 async function onStoreReady(): Promise<void> {
@@ -32,7 +43,7 @@ async function onStoreReady(): Promise<void> {
     void broadcastState();
   });
 
-  broadcastStateUnsafe();
+  broadcastStateSnapshot(store.getState());
   await setPanelBehavior();
   await enableSidePanelForHHTabs();
 }
@@ -41,10 +52,6 @@ const ensureStoreReady = createStoreReadyGate(
   () => store.init(),
   onStoreReady
 );
-
-// ============================================================================
-// INTERNAL BACKGROUND OPERATIONS (direct functions, no messaging)
-// ============================================================================
 
 interface CheckRuntimeBlockersResult {
   success: boolean;
@@ -436,7 +443,6 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
     // Fallback to DOM detection via temporary tab
     FileLogger.log('service_worker', 'info', 'Resume refresh: API returned empty, trying DOM fallback via resumes tab');
 
-    // Create temporary tab with resumes page
     const tab = await chrome.tabs.create({
       url: 'https://hh.ru/applicant/resumes',
       active: false,  // Don't steal focus
@@ -909,13 +915,9 @@ async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
   return { success: true, result: finalResult };
 }
 
-// ============================================================================
-// END INTERNAL OPERATIONS
-// ============================================================================
-
 // Backend HTTP client
 const backendHTTPClient = new BackendHTTPClient({
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 // Backend engine
@@ -923,7 +925,7 @@ const backendEngine = new BackendAutoApplyEngine({
   store,
   httpClient: backendHTTPClient,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 // Live engine V2
@@ -931,7 +933,7 @@ const liveEngine = new LiveAutoApplyEngine({
   store,
   acquisitionService,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  log: (...args) => console.log(...args),
+  log: logRuntimeDiagnostic,
 });
 
 // Helper: log controlled tab state changes
@@ -942,7 +944,6 @@ function logControlledTabStateChange(
 ) {
   // Controlled tab state changed (logged via FileLogger in callers)
 }
-
 
 // Self-healing controlled tab helper
 async function ensureControlledTabForCurrentHHTab(options?: {
@@ -965,7 +966,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     purpose: stateBefore.liveMode.controlledTabPurpose,
   };
 
-  // Get active tab
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!activeTab || !activeTab.id || !activeTab.url) {
@@ -999,7 +999,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB REFRESH ok');
   }
 
-  // Get updated state
   const updatedState = store.getState();
   const pageType = updatedState.liveMode.pageType;
 
@@ -1015,7 +1014,6 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     purpose = 'vacancy';
   }
 
-  // Check page type requirement
   if (options?.requirePageTypes && options.requirePageTypes.length > 0) {
     if (!pageType || !options.requirePageTypes.includes(pageType)) {
       // Page type mismatch (logged via FileLogger in caller)
@@ -1089,7 +1087,6 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
     return { ok: false, reason };
   }
 
-  // Step 1: setOptions
   if (!chrome.sidePanel.setOptions) {
     const reason = 'sidePanel.setOptions not available';
     FileLogger.log('service_worker', 'error', 'sidePanel.setOptions not available', { tabId });
@@ -1109,7 +1106,6 @@ async function openSidePanelForTab(tabId: number): Promise<{ ok: boolean; reason
     return { ok: false, reason };
   }
 
-  // Step 2: open
   if (!chrome.sidePanel.open) {
     const reason = 'sidePanel.open not available';
     FileLogger.log('service_worker', 'error', 'sidePanel.open not available', { tabId });
@@ -1173,8 +1169,6 @@ async function enableSidePanelForHHTabs() {
     FileLogger.log('service_worker', 'error', 'Failed to query tabs', { error: (err as Error).message });
   }
 }
-
-void ensureStoreReady();
 
 // Enable side panel behavior on install
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1380,7 +1374,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         await store.dispatch(event);
 
-        // Handle state transitions
         const state = store.getState();
 
         if (state.runtimeState === 'STARTING') {
@@ -1597,7 +1590,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
         }
 
-        // Check active tab in current window
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         if (activeTab && activeTab.url && activeTab.url.includes('hh.ru')) {
@@ -1927,7 +1919,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Get HTML to check hasNextPage
         const [htmlResult] = await chrome.scripting.executeScript({
           target: { tabId: controlledTabId },
           func: () => document.documentElement.outerHTML,
@@ -1997,7 +1988,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Build next URL
         const nextUrl = new URL(tab.url);
         nextUrl.searchParams.set('page', String(currentPage + 1));
 
@@ -2026,13 +2016,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Check runtime blocker
         if (state.runtimeBlocker) {
           sendResponse({ error: `Runtime blocked: ${state.runtimeBlocker}` });
           return;
         }
 
-        // Start loop
         await store.startSearchLoop();
 
         // Scan current page
@@ -2046,10 +2034,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
 
-        // Increment iteration
         await store.incrementSearchLoopIteration();
 
-        // Check exhaustion after scan
         const updatedState = store.getState();
 
         if (updatedState.vacancyScan.exhausted) {
@@ -2177,8 +2163,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // Broadcast state to all sidepanels
-function broadcastStateUnsafe() {
-  const state = store.getState();
+function broadcastStateSnapshot(state: ReturnType<StateStore['getState']>): void {
   // State broadcast (verbose, removed)
   chrome.runtime.sendMessage({ type: 'STATE_UPDATE', state }).catch(() => {
     // Ignore - sidepanel may not be open
@@ -2187,7 +2172,7 @@ function broadcastStateUnsafe() {
 
 async function broadcastState() {
   await ensureStoreReady();
-  broadcastStateUnsafe();
+  broadcastStateSnapshot(store.getState());
 }
 
 // Broadcast notifications
@@ -2224,13 +2209,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         store.updateLiveContextFromUrl(tab.url).then(async () => {
           const state = store.getState();
 
-        // Check search sync with DOM context
         if (state.liveMode.pageType === 'search' && state.activeProfileId && tab.url) {
           const profile = state.profiles[state.activeProfileId];
 
           if (profile) {
             try {
-              // Get HTML and detect applied context
               const [htmlResult] = await chrome.scripting.executeScript({
                 target: { tabId },
                 func: () => document.documentElement.outerHTML,
@@ -2294,7 +2277,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
               if (!syncDiff) return;
 
-              // Update sync status based on DOM context
               if (syncDiff.synced) {
                 await store.markSearchSynced(tab.url, state.activeProfileId);
               } else {
@@ -2393,7 +2375,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           }
         }
 
-        // Check bound resume
         if (state.activeProfileId) {
           const profile = state.profiles[state.activeProfileId];
           if (profile?.selectedResumeHash) {
