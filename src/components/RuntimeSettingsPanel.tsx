@@ -45,7 +45,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
             value={settings.delayMinSeconds}
             onChange={(e) => onPatch({ delayMinSeconds: Number(e.target.value) })}
           />
-          <small style={{ fontSize: '11px', color: '#666' }}>Мин. пауза между откликами.</small>
+          <small>Мин. пауза между откликами.</small>
         </label>
         <label htmlFor="runtime-delay-max">
           Макс. задержка (сек)
@@ -56,7 +56,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
             value={settings.delayMaxSeconds}
             onChange={(e) => onPatch({ delayMaxSeconds: Number(e.target.value) })}
           />
-          <small style={{ fontSize: '11px', color: '#666' }}>Макс. пауза между откликами.</small>
+          <small>Макс. пауза между откликами.</small>
         </label>
         <label htmlFor="runtime-limit-run">
           Лимит за запуск
@@ -68,7 +68,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
             onChange={(e) => onPatch({ maxAutoAppliesPerRun: Number(e.target.value) })}
             placeholder="0 = без лимита"
           />
-          <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
+          <small>0 = без лимита</small>
         </label>
         <label htmlFor="runtime-limit-day">
           Лимит за день
@@ -80,7 +80,7 @@ export const RuntimeSettingsPanel: React.FC<RuntimeSettingsPanelProps> = ({ sett
             onChange={(e) => onPatch({ maxAutoAppliesPerDay: Number(e.target.value) })}
             placeholder="0 = без лимита"
           />
-          <small style={{ fontSize: '11px', color: '#666' }}>0 = без лимита</small>
+          <small>0 = без лимита</small>
         </label>
         <label htmlFor="runtime-stop-manual" className="checkbox-row">
           <input

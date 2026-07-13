@@ -231,6 +231,35 @@ export function getTodayStats(state: AppState): AnalyticsStats {
   return computeStats(todayAttempts);
 }
 
+export interface TodayLocalApplyStats {
+  total: number;
+  succeeded: number;
+  manual: number;
+}
+
+const MANUAL_LOCAL_APPLY_OUTCOMES = new Set([
+  'test_required',
+  'questionnaire_required',
+  'cover_letter_required',
+]);
+
+export function getTodayLocalApplyStats(state: AppState): TodayLocalApplyStats {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startOfNextDay = new Date(startOfDay);
+  startOfNextDay.setDate(startOfNextDay.getDate() + 1);
+
+  const todayAttempts = state.applyAttempts.filter(
+    (attempt) => attempt.createdAt >= startOfDay.getTime() && attempt.createdAt < startOfNextDay.getTime()
+  );
+
+  return {
+    total: todayAttempts.length,
+    succeeded: todayAttempts.filter((attempt) => attempt.outcome === 'success').length,
+    manual: todayAttempts.filter((attempt) => MANUAL_LOCAL_APPLY_OUTCOMES.has(attempt.outcome)).length,
+  };
+}
+
 export interface AnalyticsSummary {
   allTime: AnalyticsStats;
   currentRun: AnalyticsStats;
@@ -389,6 +418,7 @@ export function getUserFacingManualActions(state: AppState) {
       type: action.type,
       title: action.vacancyTitle || 'Без названия',
       company: action.company || 'Не указана',
+      vacancyId: action.vacancyId,
       url: action.url || '',
       reasonCode: action.reasonCode,
       createdAt: action.createdAt,

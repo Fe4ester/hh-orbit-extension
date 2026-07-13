@@ -1,277 +1,268 @@
-# HH Orbit Standalone
+# HH Orbit
 
-Расширение Chrome для автоматизации откликов на HH.ru.
+HH Orbit — Chromium MV3 расширение для автоматизации откликов на HH.ru.
+
+Текущая версия: `1.0.1`.
+
+## Поддержка браузеров
+
+Поддерживается:
+
+- Chrome;
+- Chromium-based браузеры с Manifest V3 и Chrome Side Panel API.
+
+Требуют отдельной smoke-проверки перед публикацией:
+
+- Edge;
+- Brave;
+- Arc;
+- Opera.
+
+Не поддерживаются в `1.0.1`:
+
+- Firefox;
+- Safari.
+
+Причина: нужны отдельные manifest variants и UI fallback вместо Chrome Side Panel.
 
 ## Лицензия
 
 Проект распространяется по лицензии `PolyForm Noncommercial 1.0.0`.
 
-- публичное использование разрешено;
-- личное, учебное и исследовательское использование разрешено;
-- коммерческое использование запрещено без отдельного письменного разрешения правообладателя.
+Разрешено:
+
+- публичное использование;
+- личное использование;
+- учебное использование;
+- исследовательское использование.
+
+Запрещено без отдельного письменного разрешения правообладателя:
+
+- коммерческое использование;
+- продажа;
+- включение в коммерческие продукты/сервисы.
 
 Полный текст: [LICENSE](./LICENSE)
 
-Поддерживаются два режима работы:
+## Что умеет
 
-- `Backend mode` — HTTP-first исполнение без управления страницей на каждом шаге.
-- `Live mode` — browser-owned исполнение в реальной вкладке HH.
+- хранит профили поиска с include/exclude keywords;
+- выбирает и привязывает резюме к профилю;
+- запускает автоотклики в двух режимах: `Backend` и `Live`;
+- проверяет сессию HH;
+- получает вакансии;
+- фильтрует вакансии по профилю;
+- выполняет preflight перед откликом;
+- отправляет отклики, когда flow безопасен;
+- создает manual actions для анкет, тестов, cover letter и других блокеров;
+- ведет runtime state в `chrome.storage.local`;
+- показывает счетчики запуска: обработано, успех, сегодня, вручную;
+- показывает диагностические логи в side panel;
+- поддерживает dark/light theme.
 
-Текущая кодовая база собрана вокруг стабильного runtime, контролируемых retry, manual actions и нормального логирования.
+## Что изменилось в 1.0.1
 
-## Версия
+`1.0.1` — patch-релиз после цикла стабилизации и UI cleanup.
 
-`1.0.0`
+Главное:
 
-## Что умеет расширение
+- продукт переименован в `HH Orbit`;
+- версия обновлена в `manifest.json`, `package.json`, `package-lock.json`, UI и build output;
+- переработан side panel control center;
+- исправлен счетчик `сегодня`;
+- улучшены manual actions;
+- улучшены logs diagnostics;
+- закрыта утечка xsrf token в диагностике;
+- стабилизированы backend/live runtime ветки;
+- расширены тесты.
 
-- управляет профилями с include/exclude ключевыми словами;
-- выбирает резюме для откликов;
-- запускает циклы автооткликов;
-- работает в backend и live режимах;
-- создаёт manual actions, если вакансия требует участия пользователя;
-- хранит runtime state в local storage;
-- показывает статус runtime и системные логи в side panel.
+Подробности релиза: `artifacts/releases/v1.0.1-notes.md`.
 
-## Основные возможности
+## Режимы работы
 
-### 1. Профили
+### Backend mode
 
-Профиль определяет, что система ищет и на что откликается.
-
-Профиль содержит:
-
-- имя профиля;
-- include keywords;
-- exclude keywords;
-- опциональный шаблон cover letter;
-- опционально привязанное резюме.
-
-### 2. Управление резюме
-
-Расширение умеет:
-
-- обнаруживать резюме на HH;
-- хранить список доступных резюме;
-- привязывать резюме к профилю;
-- восстанавливать выбранное резюме для runtime.
-
-### 3. Backend mode
-
-Backend mode использует HTTP requests как основной путь исполнения.
+HTTP-first режим. Основной runtime работает через HH API/HTTP без постоянного управления видимой вкладкой.
 
 Используется для:
 
-- проверки сессии;
-- получения вакансий;
-- preflight проверок;
-- отправки откликов;
-- повторного поиска, когда текущий batch не подходит.
+- проверки авторизации;
+- восстановления/выбора резюме;
+- получения страниц вакансий;
+- preflight проверки;
+- отправки отклика;
+- retry по страницам поиска;
+- определения exhausted search space.
 
 Поведение:
 
-- не зависит от видимой активной вкладки для основного response cycle;
-- продолжает retry, пока не наступит реальный stop condition;
-- останавливается на blockers, например auth issues или manual actions, если это включено;
-- умеет помечать search space как exhausted после серии пустых страниц.
+- не зависит от активной вкладки для основного цикла;
+- продолжает поиск, если текущая страница пустая или отфильтрована;
+- не тратит apply limit на manual actions;
+- останавливается или ставится на паузу при auth/manual blockers;
+- создает manual action, если требуется анкета, тест или cover letter intervention.
 
-### 4. Live mode
+### Live mode
 
-Live mode работает через реальную вкладку HH.
+Browser-owned режим. Действия выполняются в реальной вкладке HH через DOM.
 
 Используется для:
 
-- DOM-взаимодействия со страницей;
-- preflight inspection страницы вакансии;
-- browser-owned response flow;
-- навигации по страницам поиска;
-- обнаружения manual action в реальном page context.
+- работы с реальной страницей вакансии;
+- DOM inspection;
+- browser-owned apply flow;
+- обнаружения тестов/анкет/ручных кейсов;
+- навигации по страницам поиска.
 
-### 5. Manual actions
+Ограничение: Live mode чувствителен к изменениям DOM HH и требует ручной smoke-проверки после релиза.
 
-Расширение создаёт manual actions, когда вакансию нельзя завершить автоматически.
+## Side panel
 
-Примеры:
+Side panel — основной control center.
+
+Содержит:
+
+- статус runtime;
+- текущую phase;
+- счетчики `обработано`, `успех`, `сегодня`, `вручную`;
+- кнопки `Старт` / `Стоп`;
+- выбор профиля;
+- выбор резюме;
+- переключатель Backend/Live;
+- настройки задержек и лимитов;
+- manual actions;
+- logs viewer;
+- переключатель темы.
+
+В `1.0.1`:
+
+- header больше не sticky;
+- dark overscroll не должен показывать белый фон;
+- версия `v1.0.1` закреплена рядом с названием `HH Orbit`;
+- обновлены иконки и orbit visuals;
+- добавлен reusable `SelectMenu`.
+
+## Счетчики
+
+### `обработано`
+
+Количество обработанных вакансий в текущем runtime запуске.
+
+### `успех`
+
+Количество успешных откликов в текущем runtime запуске.
+
+### `сегодня`
+
+Количество успешных локальных apply attempts за текущий локальный календарный день.
+
+Источник: `state.applyAttempts`.
+
+Success считается строго по:
+
+```ts
+outcome === 'success'
+```
+
+Важно: legacy `analytics.attempts` больше не используется для этого UI-счетчика.
+
+### `вручную`
+
+Количество кейсов, где автоматике потребовалось действие пользователя.
+
+## Manual actions
+
+Manual action создается, если отклик нельзя безопасно завершить автоматически.
+
+Типовые причины:
 
 - требуется анкета;
 - требуется тест;
-- другие случаи, где нужен пользователь.
-
-Manual actions показываются в side panel.
+- требуется cover letter;
+- нужен login;
+- нужна captcha;
+- нужен ручной review.
 
 Доступные действия:
 
-- открыть;
-- отметить как done;
-- dismiss.
+- открыть вакансию/страницу;
+- отметить как готово;
+- скрыть.
 
-### 6. Просмотр логов
+Если `Остановить при ручном действии` включено, runtime ставится на паузу при manual action.
 
-В side panel есть встроенный viewer логов.
+## Logs viewer
 
-Он поддерживает:
+Logs viewer — основной инструмент диагностики.
 
-- непрерывный поток логов;
-- поиск по тексту;
+Возможности:
+
+- поток runtime logs;
+- поиск;
 - фильтр по уровню;
-- refresh;
-- copy all.
+- разделение execution errors, warnings и manual cases;
+- copy/export для разбора проблем.
 
-Логи читаются из storage расширения и предназначены для разбора runtime поведения.
+В `1.0.1`:
 
-## Модель исполнения
+- меньше ложных auth warnings;
+- xsrf token редактируется из диагностических сообщений;
+- compact logs mode удален.
 
-### Runtime states
+## Runtime settings
 
-Основные runtime states:
-
-- `IDLE`
-- `STARTING`
-- `RUNNING`
-- `PAUSED_BY_USER`
-- `PAUSED_MANUAL_ACTION`
-- `PAUSED_NO_VACANCIES`
-- `STOPPING`
-- `STOPPED`
-- `ERROR`
-
-### Важные runtime phases
-
-Типовые фазы во время исполнения:
-
-- `session_check`
-- `resume_check`
-- `search`
-- `apply`
-- `waiting`
-- `exhausted`
-
-### Stop conditions
-
-Система может остановиться или встать на паузу из-за:
-
-- ручной остановки из UI;
-- проблем с авторизацией;
-- required manual action;
-- настроенного run limit;
-- подтверждённого exhaustion search space в backend mode.
-
-## Архитектура
-
-### Структура директорий
-
-- `src/background/` — service worker и message handling;
-- `src/runtime/` — backend и live engines, acquisition, preflight, FSM;
-- `src/live/` — DOM-oriented helpers и live execution logic;
-- `src/state/` — app state, storage, actions, selectors;
-- `src/notifications/` — toast и sticky notification manager;
-- `src/components/` — переиспользуемые UI components;
-- `sidepanel/` — основной UI расширения;
-- `src/utils/` — общие utilities, включая file logging и timeout helpers;
-- `tests/` — unit и behavior tests.
-
-### Service worker
-
-Файл:
-
-- `src/background/service-worker.ts`
-
-Отвечает за:
-
-- orchestration runtime расширения;
-- обработку Chrome extension messages;
-- broadcast state и notifications;
-- координацию backend и live engines;
-- связь с content script.
-
-### Backend engine
-
-Файл:
-
-- `src/runtime/backendAutoApplyEngine.ts`
-
-Отвечает за:
-
-- session check;
-- validation и recovery резюме;
-- acquisition вакансий;
-- apply loop;
-- retry и exhaustion behavior;
-- stop-on-manual-action policy.
-
-### Live engine
-
-Файл:
-
-- `src/runtime/liveAutoApplyEngineV2.ts`
-
-Отвечает за:
-
-- runtime-owned live execution;
-- работу с реальной вкладкой;
-- DOM-based apply cycle;
-- page availability checks;
-- search progression.
-
-### State store
-
-Файлы:
-
-- `src/state/store.ts`
-- `src/state/types.ts`
-- `src/state/actions.ts`
-- `src/state/selectors.ts`
-- `src/state/storage.ts`
-
-Отвечает за:
-
-- единый local source of truth для runtime state;
-- persistence в `chrome.storage.local`;
-- state transitions и mutations;
-- хранение profiles, resumes, queue, manual actions и settings.
-
-## Source of truth
-
-Текущий source of truth находится в корне проекта.
-
-Ключевые файлы:
-
-- `manifest.json`
-- `package.json`
-- `src/...`
-- `sidepanel/...`
-- `tests/...`
-
-Сгенерированный output:
-
-- `dist/`
-
-`dist/` — это build output, не source of truth.
-
-## Настройки
-
-Текущие runtime defaults:
+Настройки по умолчанию:
 
 - min delay: `5` секунд;
 - max delay: `10` секунд;
 - limit per run: `30`;
 - limit per day: `100`;
-- stop on manual action: включён по умолчанию.
+- stop on manual action: включено.
 
-Поведение cover letter:
+`0` для лимитов означает отсутствие лимита.
 
-- отправка cover letter считается всегда включённой, если cover letter доступен и нужен по flow;
-- отдельного пользовательского toggle для этого больше нет.
+## Архитектура
 
-## Установка
+Ключевые директории:
 
-### Что нужно
+- `src/background/` — service worker и extension message handling;
+- `src/runtime/` — backend/live engines, FSM, preflight, acquisition;
+- `src/live/` — DOM helpers и live execution;
+- `src/state/` — state types, store, actions, selectors, storage;
+- `src/components/` — reusable UI components;
+- `sidepanel/` — side panel app;
+- `src/notifications/` — toast/sticky notifications;
+- `src/utils/` — shared utilities;
+- `tests/` — unit/behavior tests.
 
-- Node.js
-- npm
-- Chrome или другой Chromium-based browser с поддержкой Manifest V3
+Source of truth:
 
-### Установка зависимостей
+- `manifest.json`;
+- `package.json`;
+- `package-lock.json`;
+- `src/`;
+- `sidepanel/`;
+- `tests/`.
+
+Build output:
+
+- `dist/`.
+
+Release-only local artifacts:
+
+- `artifacts/releases/`.
+
+`dist/` и `artifacts/` не являются source of truth.
+
+## Установка для разработки
+
+Требования:
+
+- Node.js;
+- npm;
+- Chrome или Chromium-based browser.
+
+Установка зависимостей:
 
 ```bash
 npm install
@@ -283,112 +274,130 @@ npm install
 npm run dev
 ```
 
-## Сборка
+## Проверки
 
-```bash
-npm run build
-```
-
-Build output пишется в `dist/`.
-
-## Тесты
-
-Запуск всех тестов:
-
-```bash
-npm test
-```
-
-Только type check:
+Type check:
 
 ```bash
 npm run type-check
 ```
 
-## Загрузка в Chrome
+Тесты:
 
-1. Выполнить `npm run build`
-2. Открыть `chrome://extensions/`
-3. Включить Developer mode
-4. Нажать `Load unpacked`
-5. Выбрать директорию `dist/`
+```bash
+npm test
+```
 
-## Как использовать
+Production build:
 
-### Базовый flow
+```bash
+npm run build
+```
 
-1. Установить и загрузить расширение.
-2. Открыть side panel.
-3. Обновить список резюме из HH.
-4. Создать или отредактировать профиль.
-5. Выбрать режим:
-   - Backend
-   - Live
-6. Настроить delays и limits.
-7. Запустить runtime.
+## Локальная загрузка в Chrome
 
-### Практические рекомендации
+1. Собрать проект:
 
-- держать profile keywords достаточно строгими, чтобы уменьшить поток мусорных вакансий;
-- проверять выбранное резюме перед долгими прогонами;
-- использовать logs viewer, когда поведение непонятно;
-- использовать manual actions panel для анкет и тестов;
-- воспринимать backend и live modes как разные operational paths, а не как одинаковые режимы.
+```bash
+npm run build
+```
 
-## Важные особенности поведения
+2. Открыть:
 
-### Backend mode
+```text
+chrome://extensions/
+```
 
-- может проходить несколько страниц перед тем, как признать search space exhausted;
-- может останавливаться со sticky notification, когда search space исчерпан;
-- может вставать на паузу на manual action, если это включено.
+3. Включить `Developer mode`.
+4. Нажать `Load unpacked`.
+5. Выбрать директорию `dist/`.
 
-### Live mode
+## Release flow
 
-- зависит от валидного HH tab context;
-- может взаимодействовать с DOM и browser-owned UI flows;
-- чувствительнее к page changes и timing.
+1. Обновить версии в:
+
+- `manifest.json`;
+- `package.json`;
+- `package-lock.json`;
+- UI version label.
+
+2. Запустить проверки:
+
+```bash
+git diff --check
+npm run type-check
+npm test
+npm run build
+```
+
+3. Собрать zip из `dist/`:
+
+```bash
+(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.0.1-chromium.zip .)
+```
+
+4. Проверить zip:
+
+```bash
+unzip -l artifacts/releases/hh-orbit-v1.0.1-chromium.zip
+shasum -a 256 artifacts/releases/hh-orbit-v1.0.1-chromium.zip
+```
+
+5. Загрузить `dist/` unpacked в Chrome и пройти smoke checklist.
+
+6. Создать tag/release на GitHub.
+
+## Smoke checklist перед публикацией
+
+- `dist/` загружается как unpacked extension;
+- название расширения: `HH Orbit`;
+- версия в UI: `v1.0.1`;
+- dark/light theme переключается;
+- при overscroll в dark mode не просвечивает белый фон;
+- Backend mode стартует и останавливается;
+- counters обновляются логично;
+- manual actions отображаются;
+- Logs viewer открывается, ищет и фильтрует;
+- profile/resume selectors работают;
+- build zip содержит `manifest.json`, `background.js`, `content-live-mode.js`, `sidepanel/index.html`, assets и icons.
 
 ## Troubleshooting
 
-### Backend mode не продолжает работу
+### Backend mode не идет дальше
 
-Сначала смотреть logs viewer.
+Смотреть Logs viewer.
 
 Проверить:
 
-- результат session check;
-- результат resume validation;
+- auth/session status;
+- выбранное резюме;
+- active profile;
+- prefilter results;
 - acquisition outcome;
-- prefilter elimination;
-- exhaustion decision.
+- manual actions;
+- exhausted state.
 
-Типовые причины:
-
-- нет валидной сессии;
-- резюме отсутствует или невалидно;
-- все fetched вакансии отфильтрованы profile rules;
-- search space исчерпан.
-
-### Live mode выглядит зависшим
+### Live mode завис
 
 Проверить:
 
-- состояние controlled tab;
-- текущий page type;
-- preflight branch;
-- repeated skipped outcomes;
-- создание manual actions;
-- page availability checks.
+- controlled tab;
+- page type;
+- доступность DOM;
+- preflight result;
+- test/questionnaire detection;
+- runtime blocker.
 
-### Manual actions останавливают run
+### Счетчик `сегодня` выглядит неверно
 
-Если `Stop on manual action` включён, runtime ставится на паузу, когда вакансия требует анкету или тест.
+Проверить, что попытки пишутся в `state.applyAttempts` и имеют `createdAt` в текущем локальном дне.
 
-Это ожидаемое поведение.
+Для backend success нужен outcome:
 
-### Нужны логи
+```text
+success
+```
 
-Используй встроенную ссылку `Logs` в side panel.
+### Нужно понять причину остановки
 
-Logs viewer — основной инструмент для разбора runtime проблем в этом расширении.
+Открыть Logs viewer и смотреть последние events/errors/manual cases.

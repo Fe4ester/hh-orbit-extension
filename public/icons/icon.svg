@@ -1,5 +1,6 @@
-<!-- Placeholder SVG icon -->
-<svg width="128" height="128" xmlns="http://www.w3.org/2000/svg">
-  <rect width="128" height="128" fill="#007bff"/>
-  <text x="64" y="74" font-family="Arial" font-size="48" fill="white" text-anchor="middle">HH</text>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <rect width="128" height="128" rx="30" fill="#171A2B"/>
+  <ellipse cx="64" cy="64" rx="47" ry="27" transform="rotate(-24 64 64)" fill="none" stroke="#7C5CFF" stroke-width="8"/>
+  <path d="M36 42h12v17h12V42h12v44H60V70H48v16H36V42Zm43 0h12v17h9V42h12v44h-12V70h-9v16H79V42Z" fill="#F7F8FC"/>
+  <circle cx="104" cy="38" r="7" fill="#E84D5B" stroke="#171A2B" stroke-width="3"/>
 </svg>

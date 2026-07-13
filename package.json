@@ -1,7 +1,7 @@
 {
-  "name": "hh-orbit-standalone-extension",
-  "version": "1.0.0",
-  "description": "HH Orbit Standalone Extension - Browser-first architecture",
+  "name": "hh-orbit-extension",
+  "version": "1.0.1",
+  "description": "HH Orbit Extension - Browser-first architecture",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {

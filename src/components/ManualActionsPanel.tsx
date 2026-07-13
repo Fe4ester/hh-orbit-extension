@@ -5,7 +5,9 @@ interface ManualActionItem {
   type: string;
   title: string;
   company: string;
+  vacancyId: string | null;
   url: string;
+  reasonCode: string;
 }
 
 interface ManualActionsPanelProps {
@@ -16,6 +18,25 @@ interface ManualActionsPanelProps {
 }
 
 const ITEMS_PER_PAGE = 10;
+
+const REASON_LABELS: Record<string, string> = {
+  questionnaire_required: 'Нужно заполнить анкету',
+  test_required: 'Нужно выполнить тест',
+  cover_letter_required: 'Нужно сопроводительное письмо',
+  external_apply: 'Отклик на внешнем сайте',
+  login_required: 'Нужно войти в HH',
+  captcha_required: 'Нужно пройти проверку',
+};
+
+const ManualTypeIcon: React.FC<{ type: string }> = ({ type }) => (
+  <svg className="manual-type-icon" viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    {type === 'test' || type === 'questionnaire'
+      ? <><path d="M5 2.5h6l2 2v11H5z" /><path d="M8 7h2M8 10h2M8 13h2" /></>
+      : type === 'captcha' || type === 'login_required'
+        ? <><rect x="3.5" y="7.5" width="11" height="8" rx="2" /><path d="M6 7.5V6a3 3 0 0 1 6 0v1.5" /></>
+        : <><circle cx="9" cy="9" r="6" /><path d="M9 5.5v4M9 12.5h.01" /></>}
+  </svg>
+);
 
 export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   actions,
@@ -48,43 +69,36 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   };
 
   return (
-    <div>
+    <div className="manual-actions-list">
       <div className="manual-actions-header">
         <strong>Ожидают: {actions.length}</strong>
       </div>
       {currentActions.map((action) => (
-        <div key={action.id} className="manual-action-item">
-          <div>
-            <div>{action.title}</div>
-            <small>{action.company} · {action.type}</small>
+        <article key={action.id} className="manual-action-item">
+          <div className="manual-action-leading"><span className="manual-type-mark"><ManualTypeIcon type={action.type} /></span>
+            <div className="manual-action-copy">
+              <div className="manual-action-reason">{REASON_LABELS[action.reasonCode] || action.type}</div>
+              <div className="manual-action-title" title={action.title}>{action.title}</div>
+              <small title={action.company}>{action.company}{action.vacancyId ? ` · #${action.vacancyId}` : ''}</small>
+            </div>
           </div>
           <div className="manual-actions-buttons">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+            <button type="button" className="btn btn-primary btn-sm"
               onClick={() => onOpen(action.url)}
               disabled={!action.url}
             >
               Открыть
             </button>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={() => onDone(action.id)}
-            >
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDone(action.id)}>
               Готово
             </button>
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
-              onClick={() => onDismiss(action.id)}
-            >
+            <button type="button" className="btn btn-quiet btn-sm" onClick={() => onDismiss(action.id)}>
               Скрыть
             </button>
           </div>
-        </div>
+        </article>
       ))}
-      {actions.length === 0 && <div className="empty-state-mini">Нет ручных действий</div>}
+      {actions.length === 0 && <div className="empty-state-mini"><span className="empty-state-check">✓</span><span><strong>Всё спокойно</strong>Нет действий, требующих вашего внимания.</span></div>}
       {totalPages > 1 && (
         <div className="pagination-controls">
           <button

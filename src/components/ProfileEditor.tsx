@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { Profile, ResumeCandidate } from '../state/types';
 import type { CreateProfilePayload, UpdateProfilePayload } from '../state/actions';
 import { formatResumeLabel } from './resumeLabel';
+import { SelectMenu } from './SelectMenu';
 
 const COVER_LETTER_HINT_DISMISSED_KEY = 'dismissed_cover_letter_hint';
 const DEFAULT_RESUME_HINT_DISMISSED_KEY = 'dismissed_default_resume_hint';
@@ -49,6 +50,10 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   const [isDefaultResumeHintHighlighted, setIsDefaultResumeHintHighlighted] = useState(true);
   const [isCoverLetterHintDismissing, setIsCoverLetterHintDismissing] = useState(false);
   const [isDefaultResumeHintDismissing, setIsDefaultResumeHintDismissing] = useState(false);
+  const resumeOptions = [
+    { value: '', label: 'Не привязано' },
+    ...resumeCandidates.map((resume) => ({ value: resume.hash, label: formatResumeLabel(resume) })),
+  ];
 
   useEffect(() => {
     const restoreHintHighlights = async () => {
@@ -183,19 +188,13 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
 
         <div className="form-group">
           <label htmlFor="profile-default-resume">Резюме по умолчанию для профиля</label>
-          <select
+          <SelectMenu
             id="profile-default-resume"
             value={selectedResumeHash}
-            onChange={(e) => setSelectedResumeHash(e.target.value)}
-            className="resume-select"
-          >
-            <option value="">Не привязано</option>
-            {resumeCandidates.map((resume) => (
-              <option key={resume.hash} value={resume.hash}>
-                {formatResumeLabel(resume)}
-              </option>
-            ))}
-          </select>
+            options={resumeOptions}
+            placeholder="Не привязано"
+            onChange={setSelectedResumeHash}
+          />
           <small className={isDefaultResumeHintHighlighted
             ? `form-hint highlight-hint dismissible-hint${isDefaultResumeHintDismissing ? ' is-dismissing' : ''}`
             : 'form-hint'}>
