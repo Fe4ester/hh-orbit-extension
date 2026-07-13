@@ -3,6 +3,7 @@ import {
   getAllTimeStats,
   getCurrentRunStats,
   getTodayStats,
+  getTodayLocalApplyStats,
   getAnalyticsSummary,
   getRecentAttempts,
 } from '../src/state/selectors';
@@ -181,10 +182,14 @@ describe('Analytics selectors', () => {
       {
         id: '3',
         outcome: 'ESCALATED',
-        createdAt: now - 1000,
-        finishedAt: now - 900,
+        createdAt: startOfDay + 2000,
+        finishedAt: startOfDay + 2100,
         source: 'local',
       },
+      { id: '4', outcome: 'MANUAL_ACTION_REQUIRED', createdAt: startOfDay + 3000, source: 'local' },
+      { id: '5', outcome: 'SKIPPED_DUPLICATE', createdAt: startOfDay + 4000, source: 'local' },
+      { id: '6', outcome: 'FAILED_RETRYABLE', createdAt: startOfDay + 5000, source: 'local' },
+      { id: '7', outcome: 'FAILED_FINAL', createdAt: startOfDay + 6000, source: 'local' },
     ];
 
     const state: AppState = {
@@ -199,9 +204,70 @@ describe('Analytics selectors', () => {
 
     const stats = getTodayStats(state);
 
-    expect(stats.attemptsTotal).toBe(2);
+    expect(stats.attemptsTotal).toBe(6);
     expect(stats.succeeded).toBe(1);
     expect(stats.escalated).toBe(1);
+    expect(stats.manualActionRequired).toBe(1);
+    expect(stats.skippedDuplicate).toBe(1);
+    expect(stats.failedRetryable).toBe(1);
+    expect(stats.failedFinal).toBe(1);
+  });
+
+  describe('today local apply stats', () => {
+    const startOfToday = new Date().setHours(0, 0, 0, 0);
+    const makeLocalAttempt = (id: string, outcome: string, createdAt: number) => ({
+      id,
+      vacancyId: id,
+      outcome,
+      message: outcome,
+      createdAt,
+    });
+
+    it('counts successful local apply attempts created today', () => {
+      const state = {
+        ...INITIAL_STATE,
+        applyAttempts: [
+          makeLocalAttempt('success', 'success', startOfToday + 1000),
+          makeLocalAttempt('manual', 'test_required', startOfToday + 2000),
+        ],
+      };
+
+      expect(getTodayLocalApplyStats(state)).toEqual({ total: 2, succeeded: 1, manual: 1 });
+    });
+
+    it('does not count a successful attempt from yesterday', () => {
+      const state = {
+        ...INITIAL_STATE,
+        applyAttempts: [makeLocalAttempt('yesterday', 'success', startOfToday - 1)],
+      };
+
+      expect(getTodayLocalApplyStats(state).succeeded).toBe(0);
+    });
+
+    it('does not read the legacy analytics attempt collection', () => {
+      const state: AppState = {
+        ...INITIAL_STATE,
+        analytics: {
+          ...INITIAL_STATE.analytics,
+          attempts: [{ id: 'legacy', outcome: 'SUCCEEDED', createdAt: startOfToday + 1000, source: 'local' }],
+        },
+      };
+
+      expect(getTodayLocalApplyStats(state)).toEqual({ total: 0, succeeded: 0, manual: 0 });
+    });
+
+    it('does not count non-success outcomes as succeeded', () => {
+      const state = {
+        ...INITIAL_STATE,
+        applyAttempts: [
+          makeLocalAttempt('test', 'test_required', startOfToday + 1000),
+          makeLocalAttempt('questionnaire', 'questionnaire_required', startOfToday + 2000),
+          makeLocalAttempt('failed', 'failed', startOfToday + 3000),
+        ],
+      };
+
+      expect(getTodayLocalApplyStats(state)).toEqual({ total: 3, succeeded: 0, manual: 2 });
+    });
   });
 
   it('should compute success rate correctly', () => {
