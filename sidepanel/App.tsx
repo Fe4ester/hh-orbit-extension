@@ -173,7 +173,7 @@ export const App: React.FC = () => {
   return (
     <div className="app" data-theme={theme}>
       <header className="header">
-        <div className="brand"><span className="brand-mark"><AppMark /></span><div className="brand-copy"><h1>HH Orbit</h1><span className="brand-caption">Control center</span></div><span className="version">v1.0.0</span></div>
+        <div className="brand"><span className="brand-mark"><AppMark /></span><div className="brand-copy"><div className="brand-title-row"><h1>HH Orbit</h1><span className="version">v1.0.1</span></div><span className="brand-caption">Control center</span></div></div>
         <div className="header-actions">
           <button type="button" className="icon-button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
