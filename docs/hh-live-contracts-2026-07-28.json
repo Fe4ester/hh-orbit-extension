@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-28",
+  "capture_surface": {
+    "server": "ScraplingServer",
+    "persistent_session": "hh-contracts",
+    "session_durability": "valid only until the MCP browser session/server is restarted",
+    "authenticated": true,
+    "role": "applicant",
+    "sensitive_data_policy": "No cookie values, XSRF values, account identifiers, profile values, message contents, or chat identifiers are persisted."
+  },
+  "navigation": {
+    "global_controls": {
+      "chat_activator": ["chatik-activator-navi-item", "chatikActivator-button", "chatik-activator"],
+      "resumes": ["profileAndResumes-button", "mainmenu_profileAndResumes"],
+      "negotiations": ["vacancyResponses-button", "mainmenu_vacancyResponses"],
+      "favorites": ["favVacancies-button", "mainmenu_favVacancies"],
+      "search": ["searchVacancy-button", "supernova-search"],
+      "notifications": ["userNotifications-button", "mainmenu_notifications"],
+      "profile": ["applicantProfilePage-button", "mainmenu_applicantProfilePage"]
+    },
+    "observed_routes": {
+      "home": "/",
+      "profile": "/profile/me",
+      "profile_address_edit": "/profile/edit/address",
+      "resumes": "/applicant/resumes",
+      "resume": "/resume/<resume-hash>",
+      "resume_history": "/applicant/resumeview/history?resumeHash=<resume-hash>",
+      "resume_skill_verification": "/applicant/skill_verifications/methods",
+      "create_resume": "/applicant/resumes/new",
+      "vacancy_search": "/search/vacancy?text=<query>",
+      "vacancy_search_for_resume": "/search/vacancy?resume=<resume-hash>",
+      "vacancy_detail": "/vacancy/<vacancy-id>",
+      "vacancy_response_form": "/applicant/vacancy_response?vacancyId=<vacancy-id>&startedWithQuestion=false",
+      "vacancy_response_preflight": "/applicant/vacancy_response/popup?vacancyId=<vacancy-id>&resumeHash=<resume-hash>&lux=true&alreadyApplied=false&isTest=no&withoutTest=no",
+      "negotiations": "/applicant/negotiations",
+      "negotiations_filtered": "/applicant/negotiations?state=INVITATION",
+      "favorites": "/applicant/favorite_vacancies",
+      "autosearch": "/applicant/autosearch.xml",
+      "services": "/services",
+      "settings": "/applicant/settings",
+      "vacancy_blacklist": "/applicant/blacklist/vacancy",
+      "gallery": "/applicant/gallery",
+      "subscriptions": "/subscribe",
+      "applications": "/applicant/applications",
+      "employers_to_review": "/employer_reviews/employers",
+      "my_employer_reviews": "/employer_reviews/mine",
+      "my_interview_reviews": "/employer_reviews/mine_interview"
+    },
+    "tracking_parameters": ["hhtmFrom", "hhtmFromLabel", "from", "employerId"],
+    "route_matching_rule": "Use pathname and business query keys. Do not classify pages by tracking parameters."
+  },
+  "pages": {
+    "global_overlays": {
+      "notifications": {
+        "activator": "userNotifications-button",
+        "accessibility": {"aria_haspopup": "dialog", "open_aria_expanded": "true"},
+        "container_selectors": ["drop", "user-notifications-content", "notification-content-wrapper", "drop-divider"],
+        "observed_state": {"selector": "notification notification_empty", "meaning": "empty"}
+      },
+      "profile_menu": {
+        "activator": "applicantProfileDesktopDrop-button",
+        "accessibility": {"aria_haspopup": "menu", "open_aria_expanded": "true"},
+        "items": [
+          {"selector": "mainmenu_applicantSettings", "route": "/applicant/settings"},
+          {"selector": "mainmenu_vacancyBlackList", "route": "/applicant/blacklist/vacancy"},
+          {"selector": "mainmenu_employersReviews", "route": "/employer_reviews/employers"},
+          {"selector": "mainmenu_logoffUser", "type": "submit", "destructive": true}
+        ]
+      },
+      "region_switcher": {
+        "activator": "geoSwitcher-button",
+        "accessibility": {"aria_haspopup": "dialog", "open_aria_expanded": "true"},
+        "selectors": ["drop", "geo-switcher-header", "geo-switcher-search", "cell", "radio-container", "radio", "geo-switcher-name", "drop-divider"],
+        "contract": "The region chooser is a searchable radio-list dialog."
+      }
+    },
+    "resumes": {
+      "url": "/applicant/resumes",
+      "states": ["authenticated", "populated"],
+      "primary_actions": ["create resume", "order resume service", "raise resume in search", "open matched vacancy search", "open resume history", "open skill verification"],
+      "entity_contract": {
+        "resume_card_selector": "resume-card-link-<resume-hash>",
+        "resume_title_selector": "resume-title",
+        "resume_search_link": "/search/vacancy?resume=<resume-hash>",
+        "resume_fields": ["title", "updated time", "weekly shows", "views", "invitations", "search-vacancy count"]
+      },
+      "notable_data_qa": ["resume", "resume-title", "search-shows", "count-new-views", "new-invitations", "skills-methods"]
+    },
+    "profile": {
+      "url": "/profile/me",
+      "states": ["authenticated", "populated"],
+      "actions": ["edit profile", "add contact", "add search area", "add experience", "add education", "add language", "open language verification"],
+      "schema_only": ["identity", "contacts", "search status", "residence", "desired search areas", "work experience", "education", "driving experience", "languages"],
+      "selectors": ["profile-common-card", "profile-common-card-edit", "profile-contact-item-phone", "profile-contact-item-email", "profile-other-communication-methods-add", "search-status-tag", "profile-experience-add", "profile-experience-card", "edit-experience-button-<index>", "profile-education-add", "profile-education-card", "profile-vehicle-card", "profile-language-add", "profile-language-card", "skills-methods_go-to-tests-link"],
+      "privacy": "Profile contents are not copied to this artifact."
+    },
+    "profile_address_edit": {
+      "requested_url": "/profile/edit/address",
+      "controls": [
+        {"selector": "address-editor-detect-location", "type": "button", "purpose": "request automatic location detection"},
+        {"selector": "address-editor-area", "type": "combobox", "field": "city or region"},
+        {"selector": "address-editor-metro", "type": "combobox", "field": "metro station"},
+        {"selector": "address-map-editor-banner-button", "type": "button", "purpose": "open map address editor"},
+        {"selector": "profile-layout-cancel-button", "type": "button", "purpose": "cancel"},
+        {"selector": "profile-layout-save-button", "type": "button", "purpose": "save"}
+      ],
+      "implementation_note": "The editor is client-controlled: save and cancel controls are type=button rather than a native HTML form submit."
+    },
+    "resume_creation_entry": {
+      "requested_url": "/applicant/resumes/new",
+      "resolved_url": "/profile/resume/professional_role?hhtmFrom=&hhtmFromLabel=",
+      "screen_selector": "resume-profile-screen resume-profile-screen_professional_role",
+      "title_selector": "resume-profile-chat-question",
+      "title": "Кем вы хотите работать?",
+      "choice_controls": [
+        {"selector": "resume-profile-card-select-job", "role": "button", "meaning": "select a profession"},
+        {"selector": "resume-profile-card-any-job", "role": "button", "meaning": "any job"},
+        {"selector": "resume-profile-card-dont-know", "role": "button", "meaning": "undecided"}
+      ],
+      "contract_rule": "Creation is a routed multi-screen profile flow, not a single /applicant/resumes/new HTML form."
+    },
+    "skill_verification_methods": {
+      "url": "/applicant/skill_verifications/methods",
+      "method_card_selector": "skills-verification-method-container",
+      "method_title_selector": "verification-method-title",
+      "promo_selector": "verification-method-promo-link",
+      "card_semantics": {"role": "button", "tabindex": 0},
+      "observed_labels": ["Теория", "Практика"],
+      "observed_states": ["available", "expired result", "partner-sponsored"],
+      "sample_method_categories": ["programming language", "database", "operating system", "tooling", "API", "algorithms", "statistics", "machine learning", "testing", "English"],
+      "contract_rules": [
+        "A method may expose theory only or theory plus practice.",
+        "An existing verification can be marked as expired.",
+        "A card may contain a provider and advertisement disclosure; these are optional."
+      ]
+    },
+    "settings": {
+      "url": "/applicant/settings",
+      "page_selector": "applicant-settings-page",
+      "tabs": [
+        {"selector": "settings__applicant-settings", "route": "/applicant/settings"},
+        {"selector": "settings__vacancy-black-list", "route": "/applicant/blacklist/vacancy"},
+        {"selector": "settings__gallery", "route": "/applicant/gallery"},
+        {"selector": "settings__subscriptions", "route": "/subscribe"},
+        {"selector": "settings__my-applications", "route": "/applicant/applications"}
+      ],
+      "password_form": {
+        "form_selector": "settings__password-form",
+        "fields": [
+          {"selector": "settings__password-password", "name": "password", "type": "password"},
+          {"selector": "settings__password-newpassword", "name": "newPassword", "type": "password"},
+          {"selector": "settings__password-newpasswordconfirm", "name": "newPasswordConfirm", "type": "password"}
+        ],
+        "controls": ["password-visibility-switch-button", "forgot-password", "settings__password-submit", "settings__password-cancel"],
+        "forgot_password_route": "/account/remember_password"
+      },
+      "social_connections": {
+        "section": "settings__section-social",
+        "provider_row": "settings__social-network",
+        "connect_button": "settings__connect-button",
+        "cancel_button": "settings__social-cancel"
+      },
+      "dangerous_actions": [
+        {"selector": "setting-delete-me", "route": "/account/delete_me", "meaning": "delete account"}
+      ]
+    },
+    "vacancy_blacklist": {
+      "url": "/applicant/blacklist/vacancy",
+      "observed_state": "empty",
+      "title_selector": "bloko-header-1"
+    },
+    "gallery": {
+      "url": "/applicant/gallery",
+      "actions": [
+        {"selector": "add-image-RESUME_PHOTO", "meaning": "add resume photo"},
+        {"selector": "add-image-PORTFOLIO", "meaning": "add portfolio image"}
+      ]
+    },
+    "subscriptions": {
+      "url": "/subscribe",
+      "sections": ["APPLICANT_JOB_SEARCH", "APPLICANT_NEGOTIATION", "APPLICANT_ADVERTISING"],
+      "selector_pattern": "subscriptions-checkboxes__<channel>-<event>",
+      "channels": ["sms", "push", "email"],
+      "events_observed": ["applicant_similar_vacancies", "applicant_vacancy_saved_search", "applicant_resume_views_daily", "applicant_resume_views_triggered", "applicant_notifications_and_tips", "applicant_resume_status_update", "applicant_new_chat_message", "applicant_career_services", "applicant_digest", "applicant_service_news_and_advertising"],
+      "contract": "Not every event supports every channel; capability must be inferred from the rendered checkbox selector."
+    },
+    "applications": {
+      "url": "/applicant/applications",
+      "selectors": ["settings__applications-list", "settings__application", "setting__application-name"],
+      "dangerous_actions": [{"selector": "settings__application-revoke", "meaning": "revoke a connected application"}]
+    },
+    "employer_reviews_hub": {
+      "routes": {
+        "eligible_employers": "/employer_reviews/employers",
+        "my_employer_reviews": "/employer_reviews/mine",
+        "my_interview_reviews": "/employer_reviews/mine_interview"
+      },
+      "navigation_selectors": ["employer-review-navigation", "employer-review-navigation-employersToReview", "employer-review-navigation-myReviewsExp", "employer-review-navigation-myInterviewReviews"],
+      "eligible_employer_card": {
+        "title": "employer-review-employer-card-title",
+        "vacancy": "employer-review-employer-card-vacancy-title",
+        "recommendation_controls": ["employer-review-chips-recommend-YES", "employer-review-chips-recommend-NO"]
+      },
+      "empty_review_state_selectors": ["reviews-zero-screen-title", "reviews-zero-screen-description", "reviews-zero-screen-button-action"],
+      "interview_reviews_empty_state_target": "/applicant/negotiations"
+    },
+    "negotiations": {
+      "url": "/applicant/negotiations",
+      "states": ["authenticated", "populated"],
+      "tabs": ["all", "invitation", "interview", "hired", "awaiting", "discard", "deleted", "archived"],
+      "selectors": ["negotiations-list", "negotiations-item", "negotiations-item-checkbox", "negotiations-batch-remove", "negotiations-item-vacancy", "negotiations-item-company", "negotiations-item-date", "open_chat", "negotiations-decline", "negotiations-delete"],
+      "row_schema": ["response state", "vacancy", "employer", "date", "employer statistics", "chat action", "boost response action", "decline action when available", "delete action"],
+      "contract_rules": ["A visible chat action does not prove that the current apply attempt succeeded.", "A negotiation can exist with a non-empty topic list even when preflight type is modal.", "A declined/archived row is not a vacancy search result."]
+    },
+    "chat": {
+      "surfaces": {
+        "global_modal": {
+          "activator_container": "chatik-activator-navi-item",
+          "activator_button": "chatikActivator-button",
+          "activator_inner": "chatik-activator",
+          "accessibility_contract": {
+            "aria_label": "Чаты",
+            "aria_haspopup": "dialog",
+            "closed_state": {"aria_expanded": "false"}
+          }
+        },
+        "negotiation_row": {
+          "open_button": "open_chat",
+          "label": "Перейти в чат",
+          "element_type": "button"
+        },
+        "vacancy": {
+          "selectors_observed_in_current_client_bundles": ["open-vacancy-chat", "vacancy-search-item-chat-button", "vacancy-response-link-view-topic", "contact-chat-button", "vacancy-contacts__chat-info"]
+        }
+      },
+      "client_architecture": {
+        "widget": "Chatik",
+        "delivery": "separately hosted chat widget integrated into HH pages",
+        "iframe_entry": "https://chatik.hh.ru/?platform=xhh&dest=iframe",
+        "chat_route": "https://chatik.hh.ru/chat/<chat-id>",
+        "websocket_proxy_frame": "https://websocket.hh.ru/proxy-webapp/index.html",
+        "integration_primitives": ["iframe/widget integration", "window postMessage", "open/close/resize events", "connection enabled by user intent"],
+        "state_names_observed": ["chatikCounters", "chatsList", "hasNewMessages", "lastModifiedTopic", "topicList", "shortTopicList", "pinnedChatMessages", "noSendMessageAllowed", "ReadOnlyTopic", "ArchiveTopic"]
+      },
+      "expanded_modal": {
+        "outer_shell_selectors": ["chatik-root", "chatik-header-draggable-area", "chatik-open-in-new-tab-button", "chatik-close-chatik"],
+        "list_selectors": ["chatik-layout", "title-container", "title", "chatik-checkbox-only-unread", "chatik-open-chat-<chat-id>", "chat-cell-avatar", "chat-cell-title", "chat-cell-meta", "status-icon-read", "chat-cell-creation-time", "chat-cell-subtitle"],
+        "list_controls": [
+          {"selector": "chatik-support-chat-button", "type": "button", "aria_label": "Техническая поддержка"},
+          {"selector": "chatik-collapse-chatik", "type": "button", "aria_label": "Свернуть чат"},
+          {"selector": "chatik-checkbox-only-unread", "type": "checkbox"}
+        ],
+        "empty_state_selectors": ["chatik-zero-state", "chatik-no-chats"]
+      },
+      "opened_chat": {
+        "header_selectors": ["dialog-header-avatar", "participant-info-details", "chatik-user-activity-time", "chatik-chat-menu", "chatik-header-vacancy-link", "chatik-header-vacancy-link-text"],
+        "message_selectors": ["chatik-chat-message-<message-id>", "chatik-chat-message-<message-id>-text", "chat-bubble-wrapper", "chat-bubble-title", "chat-bubble-author-name", "chat-bubble-text", "chat-bubble-indicators", "chat-buble-display-time", "chat-bubble-icon-read", "chatik-message-menu"],
+        "composer": {
+          "attachment_container": "upload-file-button",
+          "attachment_input": {"selector": "upload-file-input", "type": "file"},
+          "attachment_button_aria_label": "uploadFileButton",
+          "textarea": {"selector": "chatik-new-message-text", "placeholder": "Сообщение"},
+          "submit": {
+            "selector": "chatik-do-send-message",
+            "type": "button",
+            "empty_state": "disabled",
+            "keyboard_contract": "Enter sends; Shift+Enter inserts a new line"
+          },
+          "quick_replies": "Rendered as visible buttons without stable data-qa in the observed dialog."
+        },
+        "other_controls": ["chatik-chat-scroll-down-button", "chatik-chat-view-participants", "chatik-chat-toggle-notifications chatik-chat-disable-notifications", "chatik-chat-leave-chat"],
+        "participants_screen": {
+          "back_button": "participants-screen-back-button",
+          "groups": ["employer-group-participants", "applicant-group-participants"],
+          "row_selectors": ["participant", "participant-title", "participant-subtitle", "participant-last-activity"],
+          "privacy": "Participant names and activity values are not persisted."
+        },
+        "message_menu": {
+          "activator": "chatik-message-menu",
+          "observed_own_message_action": {"selector": "chatik-edit-message-item", "role": "menuitem", "label": "Изменить"}
+        },
+        "chat_menu": {
+          "activator": "chatik-chat-menu",
+          "actions": [
+            {"selector": "chatik-chat-view-participants", "label": "Участники чата"},
+            {"selector": "chatik-chat-toggle-notifications chatik-chat-disable-notifications", "label": "Отключить уведомления в чате"},
+            {"selector": "chatik-chat-leave-chat", "label": "Покинуть чат"}
+          ]
+        }
+      },
+      "topic_contract": {
+        "identifiers": ["chatId", "topicId", "vacancyId", "resumeHash"],
+        "collections": ["topicList", "shortTopicList", "topicsByVacancies", "topicsByVacancyId", "topicsByProfile"],
+        "capabilities": ["open chat", "read chat", "mark topics viewed", "archive topic", "change topic state", "send message when allowed"],
+        "write_guards": ["noSendMessageAllowed", "read-only topic", "archived topic", "chat availability", "write possibility"],
+        "privacy": "Identifier values and message bodies are intentionally excluded."
+      },
+      "routes_observed_in_current_client_bundles": [
+        "/chat",
+        "/chat/<dynamic-id>",
+        "/negotiations/get_topic_by_vacancy_id",
+        "/shards/chat/chat_without_resume"
+      ],
+      "live_network_contracts": [
+        {"method": "GET", "url": "https://chatik.hh.ru/chatik/api/chat_data", "observed_status": 200, "trigger": "open a chat"},
+        {"method": "GET", "url": "https://chatik.hh.ru/chatik/api/quick_replies", "observed_status": 200, "trigger": "open a chat"},
+        {"method": "POST", "url": "https://chatik.hh.ru/chatik/api/notify_chat_opened", "observed_status": 200, "trigger": "open a chat"}
+      ],
+      "automation_requirements": [
+        "Resolve the topic from the negotiation/vacancy context before sending.",
+        "Check write guards and topic state before enabling an auto-reply.",
+        "Treat read/mark-viewed and send-message as separate mutations.",
+        "Use idempotency or a local outgoing-message fingerprint to prevent duplicate replies.",
+        "Never persist cookies, XSRF values, raw access tokens, or full message bodies in logs."
+      ],
+      "capture_limit": "Expanded modal and opened-chat DOM are captured. Sending, editing, attachment upload, notification mutation, leaving a chat, and participants-list payloads remain intentionally untriggered because they mutate external state or require a controlled test message."
+    },
+    "favorites": {
+      "url": "/applicant/favorite_vacancies",
+      "states": ["authenticated", "empty"],
+      "empty_state": "No saved vacancies; user is directed to search and can save a vacancy with a heart action.",
+      "actions": ["search vacancies"]
+    },
+    "autosearch": {
+      "url": "/applicant/autosearch.xml",
+      "states": ["authenticated", "empty"],
+      "empty_state": "No subscriptions. The site instructs the user to set search filters and press the heart-marked search icon.",
+      "actions": ["go to search", "subscribe through messengers"]
+    },
+    "vacancy_detail": {
+      "url": "/vacancy/<vacancy-id>",
+      "states": ["authenticated", "open vacancy"],
+      "fields": ["title", "compensation or absent compensation", "experience", "employment", "contract form", "schedule", "work hours", "work format", "viewer count", "employer", "rating", "reviews", "description", "skills", "location", "publication time"],
+      "actions": ["apply", "contact employer when exposed", "ask employer question", "show map", "report vacancy"],
+      "employer_question_contract": "Question is attached to an application, not an independent chat message."
+    },
+    "home": {
+      "url": "/",
+      "search_selectors": ["search-input", "header-search-filters-button", "search-button"],
+      "dashboard_selectors": ["applicant-index-dashboard-sidebar", "activity-card", "activity-score"],
+      "preset_selectors": ["vacancy-search-presets_recommended", "vacancy-search-presets_nearby", "vacancy-search-presets_partTime", "vacancy-search-presets_shift", "vacancy-search-presets_juveniles", "vacancy-search-presets_remote", "vacancy-search-presets_internship"],
+      "vacancy_card_selectors": ["vacancy-serp__vacancy", "serp-item__title", "vacancy-search-mark-favorite_false", "vacancy__blacklist-show-add", "vacancy-serp__vacancy-employer", "vacancy-serp__vacancy-address", "vacancy-serp__vacancy_response", "vacancy-serp__vacancy_contacts"],
+      "direct_response_link": "/applicant/vacancy_response?vacancyId=<vacancy-id>&employerId=<employer-id>&hhtmFrom=<source>"
+    },
+    "services": {
+      "url": "/services",
+      "card_selector_pattern": "service_<service-code>",
+      "observed_service_codes": ["HH_PRO", "COMPLETE_RESUME", "RESUME_AUDIT", "SETKA", "CAREERHHRU_POPULAR", "RESUME_TARGET_EMPLOYER", "SKILLS_VERIFICATION", "MENTORS_CAREER_PLAN", "MENTORS_WORK_STRATEGY", "MENTORS_NEW_PROFESSION", "MENTORS_OTHER_COUNTRY", "MENTORS_INTERVIEW_PRACTICE", "MENTORS_GET_CONFIDENCE", "MENTORS_SOLVE_BURNOUT", "CAREER_GUIDANCE", "CAREERHHRU_CAREER", "CAREER_ARTICLES", "APPLICANT_EDU_CENTER", "SCHOOL", "CAREER", "CAREER_IN_NKO", "HH_RATING_ALL", "RATING", "VACANCY_RESPONSES_SUMMARY"],
+      "route_families": ["/applicant-services/*", "/article/*", "/mentors*", "/career_consult", "/applicant/skill_verifications/methods", "/youth_vacancies", "/rating"]
+    },
+    "vacancy_search": {
+      "url": "/search/vacancy",
+      "query_parameters_observed": ["text", "area", "page", "resume", "employment_form", "work_format", "work_schedule_by_days", "working_hours", "experience", "compensation_per_mode", "professional_role", "label", "ored_clusters", "enable_snippets", "search_session_id"],
+      "search_selectors": ["search-input", "vacancy-serp__compensation", "vacancy-saved-search-create", "search-button", "header-search-filters-button"],
+      "filter_chip_selectors": ["search-filter-area-chip", "search-filter-district-chip", "search-filter-metro-chip", "search-filter-work_schedule_by_days-chip", "search-filter-working_hours-chip", "search-filter-experience-chip", "search-filter-employment_form-chip", "search-filter-compensation_per_mode-chip", "header-search-chips-show-extra"],
+      "results_selectors": ["vacancy-serp__results", "vacancy-serp__vacancy", "serp-item__title", "vacancy-serp__vacancy_response", "vacancy-serp__vacancy_contacts", "vacancy-search-mark-favorite_false", "vacancy__blacklist-show-add"],
+      "pagination_selectors": ["pager-block", "pager-page", "pager-next"],
+      "pagination_contract": "page is zero-based; search_session_id is propagated across page links; the observed last page link was page=39.",
+      "alternate_views": ["/search/vacancy/rss", "/search/vacancy/map"],
+      "autosearch_controls": ["autosearch-subscribe__form", "autosearch-subscribe__messengers-button", "autosearch-subscribe__email-button"]
+    },
+    "employer": {
+      "url": "/employer/<employer-id>",
+      "tabs": {"description": "?tab=DESCRIPTION", "vacancies": "?tab=VACANCIES"},
+      "header_selectors": ["company-logo-image", "company-header-title", "company-header-title-form", "company-header-title-name", "trusted-employer-link", "employer-review-small-widget-total-rating", "employer__search-saved", "resumeservice-button__targetemployer"],
+      "description_selectors": ["employer-view-widget-description", "employer-review-big-widget-reviews-summary", "employer-review-big-widget-leave-review-action", "employer-review-big-widget-review-card-<index>", "employer-page-company-info", "company-info-address", "company-info-industries", "company-info-category", "sidebar-company-site"],
+      "vacancies_tab_selectors": ["employer-vacancy-search-input", "employer-vacancies-header-search-reset-button", "header-search-filters-button", "vacancy-serp__vacancy", "vacancy-serp__vacancy_response"],
+      "actions": ["subscribe to employer", "target employer service", "open reviews", "leave review", "open vacancies", "search/filter employer vacancies"],
+      "vacancy_link_source": "https://hh.ru/vacancy/<vacancy-id>?hhtmFromLabel=employer_vacancy_tab&hhtmFrom=employer"
+    }
+  },
+  "preflight": {
+    "request": {
+      "method": "GET",
+      "path": "/applicant/vacancy_response/popup",
+      "required_query": ["vacancyId", "resumeHash", "lux"],
+      "observed_optional_query": ["alreadyApplied", "isTest", "withoutTest"],
+      "headers": {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "Referer": "https://hh.ru/"},
+      "credentials": "include"
+    },
+    "observed_state_counts_from_20_search_results": {
+      "quickResponse": 12,
+      "modal_with_cover_letter": 3,
+      "test_required_redirect": 3,
+      "quickResponse_with_relocation_warning": 3
+    },
+    "outcomes": {
+      "quickResponse": "No test or cover letter detected; does not itself mean POST success.",
+      "modal": "Read responseStatus for cover letter, relocation, negotiations, and any future blockers.",
+      "test-required": "Redirect to the vacancy-response form; live samples render employer questionnaires rather than a literal skills test.",
+      "alreadyApplied": "Terminal skip; never POST again.",
+      "existing_negotiation": "responseStatus.negotiations.topicList is non-empty; exposes negotiation/chat metadata but is not a new apply success."
+    }
+  },
+  "modal_and_form_contracts": {
+    "questionnaire": {
+      "entry": "preflight type=test-required plus redirect_uri",
+      "url": "/applicant/vacancy_response?vacancyId=<vacancy-id>&startedWithQuestion=false",
+      "fixed_controls": ["resume selector", "optional cover letter expander", "submit application", "return to vacancy"],
+      "form": {"name": "vacancy_response", "id": "RESPONSE_MODAL_FORM_ID", "method": "POST"},
+      "selectors": ["test-description", "employer-asking-for-test", "task-body", "task-question", "radio-container", "textarea-wrapper", "vacancy-response-letter-toggle", "vacancy-response-submit-popup"],
+      "hidden_context_fields": ["_xsrf", "uidPk", "guid", "startTime", "testRequired"],
+      "field_naming": {"choice_question": "task_<task-id>", "free_text_question": "task_<task-id>_text", "custom_choice_value": "open"},
+      "dynamic_question_control_types": ["free text", "single-choice radio", "custom answer that reveals/uses text input"],
+      "rule": "Question wording, count, requiredness, and answer choices are employer-specific. Do not infer answers or submit without explicit user data."
+    },
+    "required_cover_letter": {
+      "entry": "preflight type=modal and responseStatus.shortVacancy.@responseLetterRequired=true",
+      "form": {"name": "vacancy_response", "id": "RESPONSE_MODAL_FORM_ID", "method": "POST"},
+      "fixed_controls": ["resume selector", "cover letter textarea", "submit application", "return to vacancy"],
+      "selectors": ["vacancy-response-popup-form-letter-input", "textarea-wrapper", "form-helper-description", "vacancy-response-submit-popup"],
+      "live_message": "Cover letter is mandatory for this vacancy.",
+      "limit_source": "responseStatus.letterMaxLength",
+      "rule": "Template handling cannot silently resolve relocation or questionnaire decisions."
+    },
+    "relocation_warning": {
+      "entry": "relocationWarning.show=true",
+      "rule": "Separate user confirmation is required. Treat it independently of cover letter and test/questionnaire state."
+    },
+    "already_applied": {
+      "entry": "preflight type=alreadyApplied or equivalent response state",
+      "rule": "Skip POST and report the exact state."
+    }
+  },
+  "chat_and_negotiation_metadata": {
+    "preflight_source": "responseStatus.negotiations.topicList[]",
+    "safe_schema": ["topic state", "current topic type", "vacancy relation", "resume relation", "chat availability state", "inbox availability", "message count", "unread flags", "response reminder allowance", "archived/declined/responded/invited/discarded flags"],
+    "exclusions": ["topic ID", "chat ID", "user IDs", "manager IDs", "message content"],
+    "known_limit": "The actual chat popup/route requires activation of the chat microfrontend; the current read/navigation MCP does not expose click/fill/submit."
+  },
+  "implementation_gaps_to_cover": [
+    "Preserve raw preflight type and classify the rendered response form separately.",
+    "Represent questionnaire, required cover letter, relocation, already-applied, and existing negotiation independently.",
+    "Use data-qa selectors as primary locators; never depend only on Russian visible labels.",
+    "Store only structural diagnostics; redact cookies, CSRF tokens, identifiers, profile fields, and message text."
+  ]
+}
