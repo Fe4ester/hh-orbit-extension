@@ -110,4 +110,35 @@ describe('StateStore', () => {
       expect(newStore.getState().activeProfileId).toBe('persistent-id');
     });
   });
+
+  describe('questionnaires', () => {
+    it('updates nested provider settings without dropping defaults', async () => {
+      await store.updateQuestionnaireSettings({
+        provider: { modelId: 'openrouter/free' },
+        context: { resumeFacts: ['TypeScript, 5 years'] },
+      });
+
+      const settings = store.getState().questionnaires.settings;
+      expect(settings.provider.modelId).toBe('openrouter/free');
+      expect(settings.provider.type).toBe('openrouter');
+      expect(settings.context.resumeFacts).toEqual(['TypeScript, 5 years']);
+      expect(settings.context.savedAnswers).toEqual([]);
+    });
+
+    it('deduplicates questionnaires by id', async () => {
+      const questionnaire = {
+        id: 'questionnaire_1',
+        vacancyId: 'vacancy_1',
+        source: 'hh_live' as const,
+        detectedAt: 1,
+        questions: [],
+      };
+
+      await store.enqueueQuestionnaire(questionnaire);
+      await store.enqueueQuestionnaire({ ...questionnaire, detectedAt: 2 });
+
+      expect(store.getState().questionnaires.queue).toHaveLength(1);
+      expect(store.getState().questionnaires.queue[0].questionnaire.detectedAt).toBe(2);
+    });
+  });
 });

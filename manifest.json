@@ -13,7 +13,16 @@
   ],
   "host_permissions": [
     "https://hh.ru/*",
-    "https://*.hh.ru/*"
+    "https://*.hh.ru/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://openrouter.ai/*",
+    "https://api.groq.com/*",
+    "https://api.deepseek.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js",

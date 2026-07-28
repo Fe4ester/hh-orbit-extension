@@ -47,6 +47,16 @@ import type {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';
+import type {
+  Questionnaire,
+  QuestionnaireAISettingsPatch,
+  QuestionnaireQueueItem,
+  QuestionnaireStatus,
+} from '../questionnaires/types';
+import {
+  enqueueQuestionnaire,
+  transitionQuestionnaire,
+} from '../questionnaires/queue';
 
 export class StateStore {
   private state: AppState | null = null;
@@ -541,18 +551,14 @@ export class StateStore {
     return this.notificationManager;
   }
 
-  // Vacancy queue methods
-
   async materializeVacanciesFromSearch(
     cards: ParsedVacancyCard[],
     profileId: string | null
   ): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    // Clean expired skip list entries first
     await this.cleanSkipList();
 
-    // Get already processed vacancy IDs
     const processedIds = new Set(
       this.state.vacancyQueue
         .filter(v => v.status === 'processed')
@@ -560,7 +566,6 @@ export class StateStore {
         .filter(Boolean)
     );
 
-    // Filter out vacancies in skip list or already processed
     const filteredCards = cards.filter(card => {
       if (!card.vacancyId) return true;
 
@@ -577,7 +582,6 @@ export class StateStore {
       return true;
     });
 
-    // Get profile for keyword prefilter
     const profile = profileId ? this.state.profiles[profileId] : undefined;
 
     this.state.vacancyQueue = materializeVacanciesHelper(
@@ -813,6 +817,109 @@ export class StateStore {
       settings: {
         ...this.state.settings,
         ...patch,
+      },
+    });
+  }
+
+  async updateQuestionnaireSettings(
+    patch: QuestionnaireAISettingsPatch
+  ): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const current = this.state.questionnaires.settings;
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        settings: {
+          ...current,
+          ...patch,
+          provider: {
+            ...current.provider,
+            ...patch.provider,
+          },
+          confidence: {
+            ...current.confidence,
+            ...patch.confidence,
+          },
+          context: {
+            ...current.context,
+            ...patch.context,
+          },
+        },
+      },
+    });
+  }
+
+  async enqueueQuestionnaire(questionnaire: Questionnaire): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const existingIndex = this.state.questionnaires.queue.findIndex(
+      item => item.questionnaire.id === questionnaire.id
+    );
+    const queue = [...this.state.questionnaires.queue];
+    const nextItem = enqueueQuestionnaire(questionnaire);
+
+    if (existingIndex >= 0) {
+      queue[existingIndex] = {
+        ...queue[existingIndex],
+        questionnaire,
+        updatedAt: Date.now(),
+      };
+    } else {
+      queue.push(nextItem);
+    }
+
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        queue,
+      },
+    });
+  }
+
+  async updateQuestionnaireItem(item: QuestionnaireQueueItem): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const queue = this.state.questionnaires.queue.map(current =>
+      current.questionnaire.id === item.questionnaire.id ? item : current
+    );
+    if (!queue.some(current => current.questionnaire.id === item.questionnaire.id)) {
+      queue.push(item);
+    }
+
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        queue,
+      },
+    });
+  }
+
+  async transitionQuestionnaire(
+    questionnaireId: string,
+    status: QuestionnaireStatus
+  ): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const item = this.state.questionnaires.queue.find(
+      current => current.questionnaire.id === questionnaireId
+    );
+    if (!item) throw new Error(`Questionnaire ${questionnaireId} not found`);
+    await this.updateQuestionnaireItem(transitionQuestionnaire(item, status));
+  }
+
+  async setQuestionnaireProcessing(
+    processing: boolean,
+    error: string | null = null
+  ): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        processing,
+        lastProcessedAt: processing ? this.state.questionnaires.lastProcessedAt : Date.now(),
+        lastError: error,
       },
     });
   }

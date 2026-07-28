@@ -1,5 +1,10 @@
 import { INITIAL_STATE } from './types';
 import type { AppState } from './types';
+import {
+  DEFAULT_QUESTIONNAIRE_AI_SETTINGS,
+  INITIAL_QUESTIONNAIRE_STATE,
+} from '../questionnaires/types';
+import { isAIProviderId } from '../questionnaires/providerCatalog';
 
 export interface StorageAdapter {
   get(): Promise<AppState>;
@@ -65,6 +70,45 @@ export class ExtensionStorageAdapter implements StorageAdapter {
         ...state.runtime,
       };
     }
+
+    const persistedProvider = state.questionnaires?.settings?.provider;
+    const providerType = isAIProviderId(persistedProvider?.type)
+      ? persistedProvider.type
+      : DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider.type;
+    state.questionnaires = {
+      ...INITIAL_QUESTIONNAIRE_STATE,
+      ...state.questionnaires,
+      settings: {
+        ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS,
+        ...state.questionnaires?.settings,
+        provider: {
+          ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider,
+          ...persistedProvider,
+          type: providerType,
+          modelId: isAIProviderId(persistedProvider?.type) && typeof persistedProvider.modelId === 'string'
+            ? persistedProvider.modelId
+            : DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider.modelId,
+        },
+        confidence: {
+          ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.confidence,
+          ...state.questionnaires?.settings?.confidence,
+        },
+        context: {
+          ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.context,
+          ...state.questionnaires?.settings?.context,
+          resumeFacts: Array.isArray(state.questionnaires?.settings?.context?.resumeFacts)
+            ? state.questionnaires.settings.context.resumeFacts
+            : [],
+          profileFacts: Array.isArray(state.questionnaires?.settings?.context?.profileFacts)
+            ? state.questionnaires.settings.context.profileFacts
+            : [],
+          savedAnswers: Array.isArray(state.questionnaires?.settings?.context?.savedAnswers)
+            ? state.questionnaires.settings.context.savedAnswers
+            : [],
+        },
+      },
+      queue: Array.isArray(state.questionnaires?.queue) ? state.questionnaires.queue : [],
+    };
 
     return state;
   }

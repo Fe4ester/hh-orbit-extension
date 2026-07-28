@@ -1,3 +1,8 @@
+import {
+  INITIAL_QUESTIONNAIRE_STATE,
+  type QuestionnaireState,
+} from '../questionnaires/types';
+
 // Core state types
 
 export type RunStatus = 'idle' | 'running' | 'paused' | 'stopped' | 'error';
@@ -304,6 +309,7 @@ export interface AppState {
   sessionStatus: SessionStatus;
   runtimeBlocker: RuntimeBlocker;
   lastRuntimeError: string | null;
+  questionnaires: QuestionnaireState;
 }
 
 export const INITIAL_STATE: AppState = (() => {
@@ -379,5 +385,14 @@ export const INITIAL_STATE: AppState = (() => {
     sessionStatus: 'unknown',
     runtimeBlocker: null,
     lastRuntimeError: null,
+    questionnaires: {
+      ...INITIAL_QUESTIONNAIRE_STATE,
+      settings: {
+        ...INITIAL_QUESTIONNAIRE_STATE.settings,
+        provider: { ...INITIAL_QUESTIONNAIRE_STATE.settings.provider },
+        confidence: { ...INITIAL_QUESTIONNAIRE_STATE.settings.confidence },
+      },
+      queue: [],
+    },
   };
 })();
