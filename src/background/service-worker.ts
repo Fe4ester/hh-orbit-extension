@@ -16,7 +16,17 @@ import { LiveAutoApplyEngineV2 as LiveAutoApplyEngine } from '../runtime/liveAut
 import { AcquisitionService } from '../runtime/acquisitionService';
 import { BackendHTTPClient } from '../runtime/backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
+import {
+  HostedAIProvider,
+  ProviderCredentialStore,
+  isAIProviderId,
+  QuestionnaireProcessor,
+  selectPendingManualQuestionnaires,
+  type CandidateContext,
+  type QuestionnaireQueueItem,
+} from '../questionnaires';
 import { createStoreReadyGate } from './storeReadiness';
+import { HH_RESUMES_URL, HH_TAB_PATTERN } from '../config/externalLinks';
 
 const store = new StateStore(new ExtensionStorageAdapter());
 
@@ -461,7 +471,7 @@ async function performResumeRefresh(): Promise<RefreshResumesAPIResult> {
     FileLogger.log('service_worker', 'info', 'Resume refresh: API returned empty, trying DOM fallback via resumes tab');
 
     const tab = await chrome.tabs.create({
-      url: 'https://hh.ru/applicant/resumes',
+      url: HH_RESUMES_URL,
       active: false,  // Don't steal focus
     });
 
@@ -968,6 +978,330 @@ const liveEngine = new LiveAutoApplyEngine({
   log: logRuntimeDiagnostic,
 });
 
+const providerCredentialStore = new ProviderCredentialStore();
+
+async function createQuestionnaireProvider(): Promise<HostedAIProvider> {
+  const provider = store.getState().questionnaires.settings.provider;
+  return new HostedAIProvider({
+    providerId: provider.type,
+    modelId: provider.modelId,
+    customBaseUrl: provider.customBaseUrl,
+    temperature: provider.temperature,
+    timeoutMs: provider.timeoutMs,
+    apiKey: await providerCredentialStore.get(provider.type),
+  });
+}
+
+let cachedResumeContext: { hash: string; facts: string[] } | null = null;
+const questionnairePreparationJobs = new Map<string, Promise<QuestionnaireQueueItem>>();
+type StoredLegendFile = NonNullable<CandidateContext['legendFile']>;
+const legendPreparationJobs = new Map<string, Promise<StoredLegendFile>>();
+
+async function prepareLegendFile(input: {
+  name: string;
+  content: string;
+  loadedAt?: number;
+}): Promise<StoredLegendFile> {
+  const loadedAt = input.loadedAt ?? Date.now();
+  const key = `${loadedAt}:${input.name}:${input.content.length}`;
+  const existing = legendPreparationJobs.get(key);
+  if (existing) return existing;
+
+  const job = (async () => {
+    const startedAt = Date.now();
+    const modelId = store.getState().questionnaires.settings.provider.modelId;
+    FileLogger.log('service_worker', 'info', 'Legend AI preparation started', {
+      name: input.name,
+      chars: input.content.length,
+      modelId,
+    });
+    const provider = await createQuestionnaireProvider();
+    const artifact = await provider.prepareLegend({
+      name: input.name,
+      content: input.content,
+      modelId,
+    });
+    const legendFile: StoredLegendFile = {
+      name: input.name,
+      content: input.content,
+      loadedAt,
+      artifact,
+    };
+    await store.updateQuestionnaireSettings({
+      context: {
+        legendFile,
+        resumeFacts: [],
+        profileFacts: [],
+        savedAnswers: [],
+        instructions: '',
+      },
+    });
+    FileLogger.log('service_worker', 'info', 'Legend AI artifact ready', {
+      name: input.name,
+      preparationMode: artifact.preparationMode ?? 'ai',
+      confirmedFacts: artifact.confirmedFacts.length,
+      inferredDefaults: artifact.inferredDefaults.length,
+      profileTitle: artifact.profileTitle,
+      elapsedMs: Date.now() - startedAt,
+    });
+    broadcastState();
+    return legendFile;
+  })().finally(() => legendPreparationJobs.delete(key));
+  legendPreparationJobs.set(key, job);
+  return job;
+}
+
+async function preparedStoredLegend(): Promise<StoredLegendFile> {
+  const legendFile = store.getState().questionnaires.settings.context.legendFile;
+  if (!legendFile?.content.trim()) throw new Error('Загрузите файл-легенду для ответов');
+  if (legendFile.artifact?.content.trim()) return legendFile;
+  return prepareLegendFile(legendFile);
+}
+
+async function selectedResumeFacts(): Promise<string[]> {
+  const state = store.getState();
+  const resume = state.resumeCandidates.find(candidate => candidate.hash === state.selectedResumeHash);
+  if (!resume) throw new Error('Сначала выберите резюме');
+  if (cachedResumeContext?.hash === resume.hash) return cachedResumeContext.facts;
+
+  const facts = [
+    `Название выбранного резюме: ${resume.title}`,
+    `Идентификатор резюме HH: ${resume.hash}`,
+  ];
+  if (!resume.url?.includes('hh.ru')) {
+    cachedResumeContext = { hash: resume.hash, facts };
+    return facts;
+  }
+
+  try {
+    const text = await backendHTTPClient.fetchResumeContext(resume.url);
+    if (text) facts.push(`Текст резюме HH:\n${text}`);
+  } catch (error) {
+    FileLogger.log('service_worker', 'warn', 'Backend resume context fetch failed', {
+      resumeHash: resume.hash,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  cachedResumeContext = { hash: resume.hash, facts };
+  return facts;
+}
+
+async function questionnaireCandidateContext(): Promise<CandidateContext> {
+  const legendFile = await preparedStoredLegend();
+  return {
+    resumeFacts: await selectedResumeFacts(),
+    profileFacts: [],
+    savedAnswers: [],
+    instructions: '',
+    legendFile,
+  };
+}
+
+const questionnaireProcessor = new QuestionnaireProcessor({
+  store,
+  createProvider: createQuestionnaireProvider,
+  getCandidateContext: questionnaireCandidateContext,
+});
+
+async function prepareManualQuestionnaireCore(
+  actionId: string
+): Promise<QuestionnaireQueueItem> {
+  if (store.getState().mode !== 'backend') {
+    throw new Error('AI-черновики анкет доступны только в Backend-режиме');
+  }
+  await questionnaireCandidateContext();
+
+  const state = store.getState();
+  const action = state.manualActions.find(current => current.id === actionId);
+  if (
+    !action
+    || action.status !== 'pending'
+    || (action.type !== 'questionnaire' && action.type !== 'test')
+  ) {
+    throw new Error('Анкета больше не ожидает обработки');
+  }
+  if (!action.vacancyId) throw new Error('У анкеты отсутствует идентификатор вакансии');
+
+  const contract = await backendHTTPClient.fetchQuestionnaireForm(
+    action.vacancyId,
+    action.url
+  );
+  const item = await questionnaireProcessor.enqueue(contract.questionnaire, {
+    manualActionId: action.id,
+    sourceUrl: contract.sourceUrl,
+    vacancyTitle: action.vacancyTitle,
+    company: action.company,
+    source: 'hh_backend',
+  });
+  const generationStartedAt = Date.now();
+  void FileLogger.log('service_worker', 'info', 'Questionnaire AI generation started', {
+    questionnaireId: item.questionnaire.id,
+    vacancyId: action.vacancyId,
+    modelId: store.getState().questionnaires.settings.provider.modelId,
+    questions: item.questionnaire.questions.length,
+  });
+  const processed = await questionnaireProcessor.processOne(item.questionnaire.id);
+  if (processed.status === 'failed') {
+    void FileLogger.log('service_worker', 'error', 'Questionnaire AI generation failed', {
+      questionnaireId: item.questionnaire.id,
+      vacancyId: action.vacancyId,
+      durationMs: Date.now() - generationStartedAt,
+      error: processed.error,
+    });
+    throw new Error(processed.error || 'AI не подготовил ответы');
+  }
+  void FileLogger.log('service_worker', 'info', 'Questionnaire AI draft ready', {
+    questionnaireId: item.questionnaire.id,
+    vacancyId: action.vacancyId,
+    durationMs: Date.now() - generationStartedAt,
+    answers: processed.answerPlan?.answers.length ?? 0,
+  });
+  await store.markManualActionDone(action.id);
+  broadcastState();
+  return processed;
+}
+
+function prepareManualQuestionnaire(actionId: string): Promise<QuestionnaireQueueItem> {
+  const existing = questionnairePreparationJobs.get(actionId);
+  if (existing) return existing;
+  const job = prepareManualQuestionnaireCore(actionId)
+    .finally(() => questionnairePreparationJobs.delete(actionId));
+  questionnairePreparationJobs.set(actionId, job);
+  return job;
+}
+
+async function processManualQuestionnaires(): Promise<{
+  total: number;
+  drafted: number;
+  failed: number;
+}> {
+  if (store.getState().mode !== 'backend') {
+    throw new Error('Приёмка анкет доступна только в Backend-режиме');
+  }
+  await questionnaireCandidateContext();
+
+  const currentState = store.getState();
+  const actions = selectPendingManualQuestionnaires(
+    currentState.manualActions,
+    currentState.questionnaires.queue
+  );
+  if (actions.length === 0) throw new Error('В ручных действиях нет анкет или тестов с доступной ссылкой');
+
+  let drafted = 0;
+  let failed = 0;
+  await store.setQuestionnaireProcessing(true);
+  try {
+    for (const action of actions) {
+      try {
+        await prepareManualQuestionnaire(action.id);
+        drafted += 1;
+      } catch (error) {
+        failed += 1;
+        FileLogger.log('service_worker', 'error', 'Manual questionnaire processing failed', {
+          manualActionId: action.id,
+          vacancyId: action.vacancyId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      broadcastState();
+    }
+    return { total: actions.length, drafted, failed };
+  } finally {
+    await store.setQuestionnaireProcessing(false);
+    broadcastState();
+  }
+}
+
+async function approveAndSubmitBackendQuestionnaire(
+  questionnaireId: string
+): Promise<void> {
+  if (store.getState().mode !== 'backend') {
+    throw new Error('Отправка анкет доступна только в Backend-режиме');
+  }
+  let item = store.getState().questionnaires.queue.find(
+    current => current.questionnaire.id === questionnaireId
+  );
+  if (!item?.answerPlan || !item.sourceUrl) {
+    throw new Error('У анкеты нет готового backend-черновика');
+  }
+  const answerPlan = item.answerPlan;
+  if (item.status === 'needs_review') {
+    await questionnaireProcessor.approve(questionnaireId);
+    item = store.getState().questionnaires.queue.find(
+      current => current.questionnaire.id === questionnaireId
+    )!;
+  }
+  if (item.status !== 'approved') {
+    throw new Error('Анкета должна находиться на приёмке');
+  }
+
+  const resumeHash = store.getState().selectedResumeHash;
+  if (!resumeHash) throw new Error('Сначала выберите резюме');
+  const result = await backendHTTPClient.submitQuestionnaire(
+    item.questionnaire.vacancyId,
+    resumeHash,
+    answerPlan,
+    item.sourceUrl
+  );
+  await store.recordLocalApplyAttempt({
+    vacancyId: item.questionnaire.vacancyId,
+    profileId: store.getState().activeProfileId,
+    resumeHash,
+    outcome: result.outcome,
+    message: result.message || result.error || '',
+    metadata: result.diagnostics ? { diagnostics: result.diagnostics } : undefined,
+  });
+  if (!result.success) {
+    await store.transitionQuestionnaire(questionnaireId, 'needs_review');
+    const reviewItem = store.getState().questionnaires.queue.find(
+      current => current.questionnaire.id === questionnaireId
+    )!;
+    await store.updateQuestionnaireItem({
+      ...reviewItem,
+      error: result.message || result.error || 'HH отклонил отправку анкеты',
+      updatedAt: Date.now(),
+    });
+    throw new Error(result.message || result.error || 'HH отклонил отправку анкеты');
+  }
+
+  await store.transitionQuestionnaire(questionnaireId, 'filled');
+  await store.transitionQuestionnaire(questionnaireId, 'submitted');
+  broadcastState();
+}
+
+async function processQuestionnairesAfterCollection(): Promise<void> {
+  const state = store.getState();
+  const settings = state.questionnaires.settings;
+  if (
+    state.mode !== 'backend'
+    || !settings.autoProcessAfterCollection
+  ) return;
+  if (
+    selectPendingManualQuestionnaires(
+      state.manualActions,
+      state.questionnaires.queue
+    ).length === 0
+  ) return;
+
+  try {
+    const result = await processManualQuestionnaires();
+    FileLogger.log('service_worker', 'info', 'Backend questionnaire drafts prepared after collection', result);
+  } catch (error) {
+    FileLogger.log('service_worker', 'error', 'Post-collection questionnaire processing failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function runAutoApplyEngine(engine: { start(): Promise<void> }): Promise<void> {
+  try {
+    await engine.start();
+  } finally {
+    await processQuestionnairesAfterCollection();
+  }
+}
+
 // Helper: log controlled tab state changes
 function logControlledTabStateChange(
   _action: string,
@@ -1224,7 +1558,7 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 async function injectContentScriptToExistingTabs() {
-  const tabs = await chrome.tabs.query({ url: 'https://hh.ru/*' });
+  const tabs = await chrome.tabs.query({ url: HH_TAB_PATTERN });
   FileLogger.log('service_worker', 'info', 'Injecting content script to existing tabs', { count: tabs.length });
 
   for (const tab of tabs) {
@@ -1298,13 +1632,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         // Route to correct engine based on mode
         if (state.mode === 'backend') {
           FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: backend mode');
-          backendEngine.start().catch((error) => {
+          runAutoApplyEngine(backendEngine).catch((error) => {
             FileLogger.log('service_worker', 'error', 'Backend engine failed:', error);
             FileLogger.log('service_worker', 'error', 'Backend engine failed', { error: error.message });
           });
         } else {
           FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: live mode');
-          liveEngine.start().catch((error) => {
+          runAutoApplyEngine(liveEngine).catch((error) => {
             FileLogger.log('service_worker', 'error', 'Live engine failed:', error);
             FileLogger.log('service_worker', 'error', 'Live engine failed', { error: error.message });
           });
@@ -1336,6 +1670,115 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === 'UPDATE_SETTINGS') {
         await store.updateSettings(message.patch || {});
         broadcastState();
+        sendResponse({ success: true });
+        return;
+      }
+
+      if (message.type === 'UPDATE_QUESTIONNAIRE_SETTINGS') {
+        await store.updateQuestionnaireSettings(message.patch || {});
+        broadcastState();
+        sendResponse({ success: true });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_PREPARE_LEGEND') {
+        if (typeof message.name !== 'string' || typeof message.content !== 'string') {
+          throw new Error('Некорректный файл легенды');
+        }
+        const legendFile = await prepareLegendFile({
+          name: message.name,
+          content: message.content,
+        });
+        sendResponse({ success: true, legendFile });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_TEST_PROVIDER') {
+        sendResponse(await questionnaireProcessor.testConnection());
+        return;
+      }
+
+      if (message.type === 'AI_PROVIDER_CREDENTIAL_STATUS') {
+        if (!isAIProviderId(message.providerId)) throw new Error('Неизвестный AI-провайдер');
+        sendResponse(await providerCredentialStore.status(message.providerId));
+        return;
+      }
+
+      if (message.type === 'AI_PROVIDER_SAVE_CREDENTIAL') {
+        if (!isAIProviderId(message.providerId)) throw new Error('Неизвестный AI-провайдер');
+        await providerCredentialStore.set(message.providerId, String(message.credential ?? ''));
+        sendResponse({ success: true, ...(await providerCredentialStore.status(message.providerId)) });
+        return;
+      }
+
+      if (message.type === 'AI_PROVIDER_DELETE_CREDENTIAL') {
+        if (!isAIProviderId(message.providerId)) throw new Error('Неизвестный AI-провайдер');
+        await providerCredentialStore.remove(message.providerId);
+        sendResponse({ success: true, configured: false });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_LIST_MODELS') {
+        const modelDetails = await questionnaireProcessor.listModelDetails();
+        sendResponse({ success: true, models: modelDetails.map(model => model.id), modelDetails });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_PROCESS_PENDING') {
+        const result = await questionnaireProcessor.processPending();
+        broadcastState();
+        sendResponse({ success: true, ...result });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_PROCESS_MANUAL_ACTIONS') {
+        const result = await processManualQuestionnaires();
+        sendResponse({
+          success: result.failed === 0,
+          ...result,
+          error: result.failed > 0
+            ? `На приёмке: ${result.drafted}. Не удалось подготовить: ${result.failed}.`
+            : undefined,
+        });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_PREPARE_MANUAL') {
+        const item = await prepareManualQuestionnaire(message.actionId);
+        sendResponse({ success: true, item });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_PROCESS_ONE') {
+        const item = await questionnaireProcessor.processOne(message.id);
+        broadcastState();
+        sendResponse({ success: true, item });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_APPROVE') {
+        await questionnaireProcessor.approve(message.id);
+        broadcastState();
+        sendResponse({ success: true });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_REVISE_ANSWER') {
+        await questionnaireProcessor.reviseAnswer(message.id, message.questionId, message.value || {});
+        broadcastState();
+        sendResponse({ success: true });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_SKIP') {
+        await questionnaireProcessor.skip(message.id);
+        broadcastState();
+        sendResponse({ success: true });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_APPROVE_AND_SUBMIT') {
+        await approveAndSubmitBackendQuestionnaire(message.id);
         sendResponse({ success: true });
         return;
       }

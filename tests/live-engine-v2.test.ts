@@ -174,6 +174,50 @@ describe('LiveAutoApplyEngineV2 - Behavior Regression', () => {
     });
   });
 
+  describe('questionnaire capture hook', () => {
+    it('captures a rendered questionnaire before leaving the response page', async () => {
+      const onQuestionnaireDetected = vi.fn().mockResolvedValue(undefined);
+      engine = new LiveAutoApplyEngineV2({
+        store,
+        acquisitionService: mockAcquisitionService,
+        sleep: mockSleep,
+        log: mockLog,
+        onQuestionnaireDetected,
+      });
+      vi.mocked(chrome.tabs.sendMessage).mockResolvedValue({ testRequired: true });
+
+      const context = {
+        vacancy: {
+          vacancyId: '42',
+          title: 'Developer',
+          company: 'Example',
+          url: 'https://hh.ru/vacancy/42',
+          source: 'search_dom',
+          discoveredAt: 1,
+          profileId: 'profile-1',
+          status: 'discovered',
+        },
+        state: 'handling_redirect',
+        attempt: 1,
+        maxAttempts: 1,
+        errors: [],
+        metadata: {
+          startTime: 1,
+          clickAttempts: 1,
+          modalDetected: false,
+          redirectDetected: true,
+          redirectUrl: 'https://hh.ru/applicant/vacancy_response?vacancyId=42',
+        },
+      };
+
+      const result = await (engine as any).handleRedirect(context, 321);
+
+      expect(onQuestionnaireDetected).toHaveBeenCalledWith(321, '42');
+      expect(result.outcome).toBe('test');
+      expect(chrome.tabs.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('manual-action persistence', () => {
     it('marks a manual-action vacancy processed before pausing', async () => {
       const state = store.getState();
