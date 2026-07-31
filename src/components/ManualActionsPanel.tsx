@@ -15,6 +15,7 @@ interface ManualActionsPanelProps {
   onOpen: (url: string) => void;
   onDone: (id: string) => void;
   onDismiss: (id: string) => void;
+  onPrepareAI?: (id: string) => Promise<{ success?: boolean; error?: string }>;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -43,8 +44,11 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   onOpen,
   onDone,
   onDismiss,
+  onPrepareAI,
 }) => {
   const [currentPage, setCurrentPage] = useState(0);
+  const [preparingId, setPreparingId] = useState<string | null>(null);
+  const [preparationErrors, setPreparationErrors] = useState<Record<string, string>>({});
 
   const totalPages = Math.ceil(actions.length / ITEMS_PER_PAGE);
 
@@ -68,6 +72,23 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
     setCurrentPage((prev) => Math.min(totalPages - 1, prev + 1));
   };
 
+  const handlePrepareAI = async (id: string) => {
+    if (!onPrepareAI) return;
+    setPreparingId(id);
+    setPreparationErrors(current => ({ ...current, [id]: '' }));
+    try {
+      const response = await onPrepareAI(id);
+      if (response?.error) throw new Error(response.error);
+    } catch (error) {
+      setPreparationErrors(current => ({
+        ...current,
+        [id]: error instanceof Error ? error.message : 'Не удалось подготовить черновик',
+      }));
+    } finally {
+      setPreparingId(null);
+    }
+  };
+
   return (
     <div className="manual-actions-list">
       <div className="manual-actions-header">
@@ -83,6 +104,16 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
             </div>
           </div>
           <div className="manual-actions-buttons">
+            {onPrepareAI && (action.type === 'test' || action.type === 'questionnaire') && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void handlePrepareAI(action.id)}
+                disabled={preparingId === action.id}
+              >
+                {preparingId === action.id ? 'AI готовит…' : 'Заполнить с AI'}
+              </button>
+            )}
             <button type="button" className="btn btn-primary btn-sm"
               onClick={() => onOpen(action.url)}
               disabled={!action.url}
@@ -96,6 +127,9 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
               Скрыть
             </button>
           </div>
+          {preparationErrors[action.id] && (
+            <div className="manual-action-error">{preparationErrors[action.id]}</div>
+          )}
         </article>
       ))}
       {actions.length === 0 && <div className="empty-state-mini"><span className="empty-state-check">✓</span><span><strong>Всё спокойно</strong>Нет действий, требующих вашего внимания.</span></div>}
