@@ -136,9 +136,9 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
 
     // PROOF: fetchVacancies called multiple times with different pages
     expect(mockHttpClient.fetchVacancies).toHaveBeenCalledTimes(3);
-    expect(mockHttpClient.fetchVacancies).toHaveBeenNthCalledWith(1, expect.anything(), 0);
-    expect(mockHttpClient.fetchVacancies).toHaveBeenNthCalledWith(2, expect.anything(), 1);
-    expect(mockHttpClient.fetchVacancies).toHaveBeenNthCalledWith(3, expect.anything(), 2);
+    expect(mockHttpClient.fetchVacancies).toHaveBeenNthCalledWith(1, expect.anything(), 0, 'test-resume');
+    expect(mockHttpClient.fetchVacancies).toHaveBeenNthCalledWith(2, expect.anything(), 1, 'test-resume');
+    expect(mockHttpClient.fetchVacancies).toHaveBeenNthCalledWith(3, expect.anything(), 2, 'test-resume');
 
     const state = store.getState();
 
@@ -273,7 +273,7 @@ describe('Backend Exhaustion Policy - Runtime Proof', () => {
     await waitFor(() => mockHttpClient.fetchVacancies.mock.calls.length > 0);
 
     // PROOF: Pagination was reset - starts from page 0 again
-    expect(mockHttpClient.fetchVacancies).toHaveBeenCalledWith(expect.anything(), 0);
+    expect(mockHttpClient.fetchVacancies).toHaveBeenCalledWith(expect.anything(), 0, 'test-resume');
 
     await engine.stop();
     releaseAllSleeps();

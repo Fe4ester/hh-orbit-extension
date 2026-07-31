@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackendAutoApplyEngine } from '../src/runtime/backendAutoApplyEngine';
+import { VacancySearchError } from '../src/runtime/backendHTTPClient';
 import { StateStore } from '../src/state/store';
 import { InMemoryStorageAdapter } from '../src/state/storage';
 
@@ -32,6 +33,27 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
   const releaseNextSleep = async (): Promise<void> => {
     await waitFor(() => sleepResolvers.length > 0);
     sleepResolvers.shift()!();
+  };
+
+  const setReadySearchState = async (): Promise<void> => {
+    await store.updateState({
+      selectedResumeHash: 'test-resume',
+      resumeCandidates: [
+        { hash: 'test-resume', title: 'Test', isActive: true, source: 'hh_detected', lastSeenAt: Date.now() },
+      ],
+      activeProfileId: 'prof1',
+      profiles: {
+        prof1: {
+          id: 'prof1',
+          name: 'Test Profile',
+          keywordsInclude: ['test'],
+          keywordsExclude: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      vacancyQueue: [],
+    });
   };
 
   beforeEach(async () => {
@@ -376,6 +398,49 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
   });
 
   describe('no vacancies / queue empty outcomes', () => {
+    it('pauses on a search captcha without advancing exhaustion state', async () => {
+      mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
+      mockHttpClient.fetchVacancies.mockRejectedValue(
+        new VacancySearchError('captcha_required', 'Vacancy search blocked: captcha_required')
+      );
+
+      await setReadySearchState();
+
+      startPromise = engine.start();
+      await startPromise;
+
+      const state = store.getState();
+      expect(state.runtimeBlocker).toBe('captcha_required');
+      expect(state.sessionStatus).toBe('captcha_required');
+      expect(state.runtime.currentPhase).toBe('paused_manual_action');
+      expect(state.runtime.currentSearchPage).toBe(0);
+      expect(state.runtime.consecutiveEmptyPages).toBe(0);
+      expect(mockHttpClient.fetchVacancies).toHaveBeenCalledWith(
+        expect.anything(),
+        0,
+        'test-resume'
+      );
+    });
+
+    it('stops instead of retrying when the vacancy search contract changes', async () => {
+      mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
+      mockHttpClient.fetchVacancies.mockRejectedValue(
+        new VacancySearchError('contract_mismatch', 'Vacancy search parser contract mismatch')
+      );
+      await setReadySearchState();
+
+      startPromise = engine.start();
+      await startPromise;
+
+      const state = store.getState();
+      expect(state.runtime.currentPhase).toBe('paused_manual_action');
+      expect(state.runtime.pausedReason).toBe('search_contract_changed');
+      expect(state.runtime.currentSearchPage).toBe(0);
+      expect(state.runtime.consecutiveEmptyPages).toBe(0);
+      expect(mockHttpClient.fetchVacancies).toHaveBeenCalledTimes(1);
+      expect(mockSleep).not.toHaveBeenCalled();
+    });
+
     it('should pause when no vacancies found', async () => {
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: true });
       mockHttpClient.getMyResumes.mockResolvedValue([

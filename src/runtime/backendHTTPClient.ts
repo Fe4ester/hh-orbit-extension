@@ -6,6 +6,7 @@
  */
 
 import type { Profile } from '../state/types';
+import { parseSearchResults } from '../live/searchResultsParser';
 
 export interface APIVacancy {
   id: string;
@@ -41,12 +42,60 @@ export interface ApplyResponse {
   };
 }
 
+export type VacancySearchErrorCode =
+  | 'missing_resume'
+  | 'login_required'
+  | 'captcha_required'
+  | 'http_error'
+  | 'contract_mismatch'
+  | 'network_error';
+
+export class VacancySearchError extends Error {
+  constructor(
+    public readonly code: VacancySearchErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'VacancySearchError';
+  }
+}
+
+function redactSensitiveText(text: string): string {
+  return text
+    .replace(
+      /([?&](?:resume(?:Hash)?|topic_id|chat_id|negotiation|applicantActivity)=)[^&\s"'<>]+/gi,
+      '$1[redacted]'
+    )
+    .replace(
+      /("(?:resume(?:Hash)?|topic_id|chat_id|negotiation|applicantActivity)"\s*:\s*)"[^"]*"/gi,
+      '$1"[redacted]"'
+    );
+}
+
 function getStructuredPreview(data: unknown): string {
-  return JSON.stringify(data).substring(0, 200);
+  const serialized = JSON.stringify(data, (key, value) => {
+    if (/token|xsrf|cookie|resume|topic|chat|negotiation|activity|streak/i.test(key)) {
+      return '[redacted]';
+    }
+    return typeof value === 'string' ? redactSensitiveText(value) : value;
+  });
+
+  return redactSensitiveText(serialized ?? String(data)).substring(0, 200);
 }
 
 function previewText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().substring(0, 200);
+  return redactSensitiveText(text).replace(/\s+/g, ' ').trim().substring(0, 200);
+}
+
+function getErrorLogContext(error: unknown): { message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      message: redactSensitiveText(error.message),
+      stack: error.stack ? redactSensitiveText(error.stack) : undefined,
+    };
+  }
+
+  return { message: redactSensitiveText(String(error)) };
 }
 
 function hasQuickResponseQuestionnaireBlocker(data: any): boolean {
@@ -128,25 +177,24 @@ export class BackendHTTPClient {
    * HH API блокирует автоматические запросы (403 Forbidden).
    * Используем hh.ru/search/vacancy вместо api.hh.ru/vacancies.
    */
-  async fetchVacancies(_profile: Profile, page = 0): Promise<APIVacancy[]> {
+  async fetchVacancies(_profile: Profile, page: number, resumeHash: string): Promise<APIVacancy[]> {
+    const normalizedResumeHash = resumeHash.trim();
+    if (!normalizedResumeHash) {
+      throw new VacancySearchError('missing_resume', 'Vacancy search requires a selected resume hash');
+    }
+
     const params = new URLSearchParams({
       items_on_page: '50',
       page: String(page),
+      resume: normalizedResumeHash,
     });
-
-    const state = await chrome.storage.local.get('state');
-    const resumeHash = state.state?.selectedResumeHash;
-
-    if (resumeHash) {
-      params.append('resume', resumeHash);
-    }
 
     const url = `https://hh.ru/search/vacancy?${params.toString()}`;
 
-    this.log('[BackendHTTP] fetchVacancies START (global search)', {
-      url,
-      strategy: 'global_search',
-      resumeHash: resumeHash || 'none',
+    this.log('[BackendHTTP] fetchVacancies START (resume search)', {
+      url: redactSensitiveText(url),
+      strategy: 'resume_search',
+      hasResumeHash: true,
       page,
     });
 
@@ -171,17 +219,46 @@ export class BackendHTTPClient {
         this.log('[BackendHTTP] fetchVacancies HTTP ERROR', {
           status: response.status,
           statusText: response.statusText,
-          bodyPreview: errorText.substring(0, 500),
+          bodyPreview: previewText(errorText),
         });
-        return [];
+        const code = response.status === 401 || response.status === 403 ? 'login_required' : 'http_error';
+        throw new VacancySearchError(code, `Vacancy search failed with HTTP ${response.status}`);
       }
 
       const html = await response.text();
+      const responseUrl = response.url || url;
+      const responseUrlLower = responseUrl.toLowerCase();
+      const htmlLower = html.toLowerCase();
+      const hasVacancyCards = html.includes('data-qa="vacancy-serp__vacancy"');
+      const hasSearchPage =
+        html.includes('data-qa="vacancy-serp__results"') ||
+        html.includes('data-qa="vacancy-serp"') ||
+        html.includes('data-qa="vacancy-search-input"') ||
+        html.includes('data-qa="search-input"');
+      const hasLoginBlocker =
+        responseUrlLower.includes('/login') ||
+        responseUrlLower.includes('/signin') ||
+        html.includes('data-qa="account-login-form"') ||
+        /<form[^>]+action="[^"]*(?:login|signin)/i.test(html);
+      const hasCaptchaBlocker =
+        responseUrlLower.includes('captcha') ||
+        html.includes('data-qa="captcha"') ||
+        htmlLower.includes('g-recaptcha') ||
+        htmlLower.includes('подтвердите, что вы не робот');
 
       this.log('[BackendHTTP] fetchVacancies HTML received', {
         htmlLength: html.length,
-        hasVacancyCards: html.includes('data-qa="vacancy-serp__vacancy"'),
+        responseUrl: redactSensitiveText(responseUrl),
+        hasVacancyCards,
+        hasSearchPage,
+        hasLoginBlocker,
+        hasCaptchaBlocker,
       });
+
+      if (hasLoginBlocker || hasCaptchaBlocker) {
+        const blocker = hasLoginBlocker ? 'login_required' : 'captcha_required';
+        throw new VacancySearchError(blocker, `Vacancy search blocked: ${blocker}`);
+      }
 
       const vacancies = this.parseVacanciesFromHTML(html);
 
@@ -191,20 +268,31 @@ export class BackendHTTPClient {
         withCompanies: vacancies.filter(v => v.employer?.name).length,
       });
 
-      // Fallback: если нашли маркеры, но не распарсили — логировать HTML
-      if (vacancies.length === 0 && html.includes('data-qa="vacancy-serp__vacancy"')) {
+      if (vacancies.length === 0 && hasVacancyCards) {
         this.log('[BackendHTTP] WARNING: Found vacancy markers but parsed 0 cards', {
-          htmlPreview: html.substring(0, 1000),
+          htmlLength: html.length,
         });
+        throw new VacancySearchError('contract_mismatch', 'Vacancy search parser contract mismatch');
+      }
+
+      if (vacancies.length === 0 && !hasSearchPage) {
+        this.log('[BackendHTTP] WARNING: Unexpected vacancy search HTML', {
+          htmlLength: html.length,
+          responseUrl: redactSensitiveText(responseUrl),
+        });
+        throw new VacancySearchError('contract_mismatch', 'Vacancy search returned an unrecognized page');
       }
 
       return vacancies;
     } catch (error) {
-      this.log('[BackendHTTP] fetchVacancies EXCEPTION', {
-        message: (error as Error).message,
-        stack: (error as Error).stack,
-      });
-      return [];
+      this.log('[BackendHTTP] fetchVacancies EXCEPTION', getErrorLogContext(error));
+      if (error instanceof VacancySearchError) {
+        throw error;
+      }
+      throw new VacancySearchError(
+        'network_error',
+        `Vacancy search request failed: ${(error as Error).message}`
+      );
     }
   }
 
@@ -213,99 +301,27 @@ export class BackendHTTPClient {
    */
   private parseVacanciesFromHTML(html: string): APIVacancy[] {
     const vacancies: APIVacancy[] = [];
-
-    const parts = html.split(/<div[^>]*data-qa="vacancy-serp__vacancy"[^>]*>/);
-    const cards = parts.slice(1); // Первая часть — до карточек
+    const seenVacancyIds = new Set<string>();
+    const cards = parseSearchResults(html);
 
     this.log('[BackendHTTP] parseVacanciesFromHTML', { cardsFound: cards.length });
 
-    for (const cardHtml of cards) {
-      try {
-        const idMatch = cardHtml.match(/vacancy\/(\d+)/);
-        if (!idMatch) continue;
-
-        const id = idMatch[1];
-
-        const titleMatch = cardHtml.match(/data-qa="serp-item__title"[^>]*>([\s\S]*?)<\/a>/);
-        const name = titleMatch ? this.stripHtml(titleMatch[1]) : `Vacancy ${id}`;
-
-        const companyMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-employer"[^>]*>([\s\S]*?)<\/a>/);
-        const employerName = companyMatch ? this.stripHtml(companyMatch[1]) : 'Unknown';
-
-        const urlMatch = cardHtml.match(/href="([^"]*\/vacancy\/\d+[^"]*)"/);
-        let alternate_url: string;
-        if (urlMatch) {
-          const href = urlMatch[1];
-          alternate_url = href.startsWith('http') ? href : `https://hh.ru${href}`;
-        } else {
-          alternate_url = `https://hh.ru/vacancy/${id}`;
-        }
-
-        let salary: { from?: number; to?: number; currency: string } | undefined;
-        const salaryMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-compensation"[^>]*>([\s\S]*?)<\/span>/);
-        if (salaryMatch) {
-          const salaryText = this.stripHtml(salaryMatch[1]);
-          salary = this.parseSalary(salaryText);
-        }
-
-        const areaMatch = cardHtml.match(/data-qa="vacancy-serp__vacancy-address"[^>]*>([\s\S]*?)<\/div>/);
-        const areaName = areaMatch ? this.stripHtml(areaMatch[1]) : 'Unknown';
-
-        vacancies.push({
-          id,
-          name,
-          employer: { name: employerName },
-          alternate_url,
-          salary,
-          area: { name: areaName },
-        });
-      } catch (error) {
-        this.log('[BackendHTTP] parseVacanciesFromHTML: card parse error', error);
+    for (const card of cards) {
+      if (!card.vacancyId || seenVacancyIds.has(card.vacancyId)) {
         continue;
       }
+
+      seenVacancyIds.add(card.vacancyId);
+      vacancies.push({
+        id: card.vacancyId,
+        name: card.title,
+        employer: { name: card.company || 'Unknown' },
+        alternate_url: card.url,
+        area: { name: card.location || 'Unknown' },
+      });
     }
 
     return vacancies;
-  }
-
-  /**
-   * Удалить HTML теги
-   */
-  private stripHtml(html: string): string {
-    return html.replace(/<[^>]+>/g, '').trim();
-  }
-
-  /**
-   * Парсинг зарплаты из текста
-   */
-  private parseSalary(text: string): { from?: number; to?: number; currency: string } | undefined {
-    let currency = 'RUR';
-    if (text.includes('₽')) currency = 'RUR';
-    else if (text.includes('$')) currency = 'USD';
-    else if (text.includes('€')) currency = 'EUR';
-
-    // Extract numbers: "100 000" → 100000
-    const numbers = [...text.matchAll(/(\d+(?:\s+\d+)*)/g)].map(m =>
-      parseInt(m[1].replace(/\s+/g, ''), 10)
-    );
-
-    if (numbers.length === 0) return undefined;
-
-    let from: number | undefined;
-    let to: number | undefined;
-
-    if (text.includes('от') && numbers.length >= 1) {
-      from = numbers[0];
-    } else if (text.includes('до') && numbers.length >= 1) {
-      to = numbers[0];
-    } else if (numbers.length === 2) {
-      from = numbers[0];
-      to = numbers[1];
-    } else if (numbers.length === 1) {
-      from = numbers[0];
-    }
-
-    return { from, to, currency };
   }
 
   /**
@@ -322,7 +338,11 @@ export class BackendHTTPClient {
   }> {
     const url = `${this.popupURL}?vacancyId=${vacancyId}&resumeHash=${resumeHash}&lux=true&alreadyApplied=false&isTest=no&withoutTest=no`;
 
-    this.log('[BackendHTTP] preflightApply', { vacancyId, resumeHash, url });
+    this.log('[BackendHTTP] preflightApply', {
+      vacancyId,
+      hasResumeHash: resumeHash.trim().length > 0,
+      url: redactSensitiveText(url),
+    });
 
     try {
       const response = await fetch(url, {
@@ -356,7 +376,9 @@ export class BackendHTTPClient {
       const data = await response.json();
 
       this.log('[BackendHTTP] preflightApply data', { type: data.type });
-      this.log('[BackendHTTP] preflightApply FULL RESPONSE', { data: JSON.stringify(data) });
+      this.log('[BackendHTTP] preflightApply response summary', {
+        summary: this.summarizeJSONResponse(data, response.status),
+      });
 
       if (data.type === 'alreadyApplied') {
         return { canProceed: false, alreadyApplied: true, reason: 'already_applied' };
@@ -410,7 +432,7 @@ export class BackendHTTPClient {
       this.log('[BackendHTTP] preflightApply: unknown type, blocking', { type: data.type });
       return { canProceed: false, reason: `unknown_preflight_type:${String(data.type)}` };
     } catch (error) {
-      this.log('[BackendHTTP] preflightApply error', error);
+      this.log('[BackendHTTP] preflightApply error', getErrorLogContext(error));
       return { canProceed: false, reason: 'network_error' };
     }
   }
@@ -504,7 +526,7 @@ export class BackendHTTPClient {
 
       return await this.normalizeApplyHTTPResponse(response);
     } catch (error) {
-      this.log('[BackendHTTP] applyToVacancy error', error);
+      this.log('[BackendHTTP] applyToVacancy error', getErrorLogContext(error));
       return {
         success: false,
         outcome: 'error',
@@ -627,7 +649,7 @@ export class BackendHTTPClient {
       const summary = this.summarizeJSONResponse(data, response.status);
 
       this.log('[BackendHTTP] applyToVacancy response body', {
-        data: JSON.stringify(data).substring(0, 200),
+        data: getStructuredPreview(data),
         summary,
       });
 
@@ -642,7 +664,7 @@ export class BackendHTTPClient {
     }
 
     const text = await response.text();
-    const preview = text.substring(0, 500);
+    const preview = previewText(text);
 
     this.log('[BackendHTTP] applyToVacancy text fallback', {
       status: response.status,
@@ -795,7 +817,7 @@ export class BackendHTTPClient {
       };
     }
 
-    this.log('[BackendHTTP] Unknown response', data);
+    this.log('[BackendHTTP] Unknown response', { preview: getStructuredPreview(data) });
     return {
       success: false,
       outcome: 'unknown',
@@ -856,7 +878,7 @@ export class BackendHTTPClient {
 
       return { authorized };
     } catch (error) {
-      this.log('[BackendHTTP] checkAuth error', error);
+      this.log('[BackendHTTP] checkAuth error', getErrorLogContext(error));
       return { authorized: false };
     }
   }
@@ -894,13 +916,13 @@ export class BackendHTTPClient {
 
       return resumes;
     } catch (error) {
-      this.log('[BackendHTTP] getMyResumes error', error);
+      this.log('[BackendHTTP] getMyResumes error', getErrorLogContext(error));
       return [];
     }
   }
 
-  async searchVacancies(profile: Profile): Promise<any[]> {
-    return this.fetchVacancies(profile);
+  async searchVacancies(profile: Profile): Promise<APIVacancy[]> {
+    return this.fetchVacancies(profile, 0, profile.selectedResumeHash || '');
   }
 
   async getVacancyDetail(_vacancyId: string): Promise<any | null> {
