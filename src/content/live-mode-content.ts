@@ -11,9 +11,12 @@ import { observePostSubmitState } from '../live/finalSubmitExecutor';
 import { parseSearchResults } from '../live/searchResultsParser';
 import { detectTestRequirement } from '../live/testRequirementDetector';
 import { FileLogger } from '../utils/fileLogger';
+import { redactSensitiveUrl } from '../utils/redactSensitiveUrl';
 
 console.log('[LiveContent] Content script loaded');
-FileLogger.log('content_script', 'info', 'Content script loaded', { url: window.location.href });
+FileLogger.log('content_script', 'info', 'Content script loaded', {
+  url: redactSensitiveUrl(window.location.href),
+});
 
 // Close HH.ru modals on page load
 window.addEventListener('load', () => {
@@ -96,7 +99,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         console.log('[LiveContent] Cover letter UI observation', observation);
         FileLogger.log('content_script', 'info', 'DETECT_COVER_LETTER_UI', {
           ...observation,
-          url: window.location.href
+          url: redactSensitiveUrl(window.location.href)
         });
         sendResponse(observation);
         break;
@@ -227,7 +230,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         FileLogger.log('content_script', 'info', 'CHECK_TEST_REQUIRED', {
           testRequired,
-          url: window.location.href
+          url: redactSensitiveUrl(window.location.href)
         });
 
         sendResponse({ testRequired });
@@ -523,7 +526,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           FileLogger.log('content_script', 'info', 'Navigating to next page via URL', {
             currentPage,
             nextPage,
-            nextUrl
+            nextUrl: redactSensitiveUrl(nextUrl)
           });
 
           window.location.href = nextUrl;
@@ -871,7 +874,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           exists,
           count: modalCount,
           text: modalText,
-          url: window.location.href,
+          url: redactSensitiveUrl(window.location.href),
           usedSelector,
           allModals: allModals.filter(m => m.visible)
         });

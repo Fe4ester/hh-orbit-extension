@@ -19,6 +19,7 @@ import './styles.css';
 const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
 const THEME_STORAGE_KEY = 'ui_theme';
 const HINT_DISMISS_ANIMATION_MS = 200;
+const EXTENSION_VERSION = chrome.runtime.getManifest?.().version ?? 'dev';
 
 type Theme = 'light' | 'dark';
 type IconName = 'play' | 'stop' | 'terminal' | 'sun' | 'moon' | 'user' | 'document' | 'refresh' | 'sliders' | 'alert';
@@ -173,7 +174,7 @@ export const App: React.FC = () => {
   return (
     <div className="app" data-theme={theme}>
       <header className="header">
-        <div className="brand"><span className="brand-mark"><AppMark /></span><div className="brand-copy"><div className="brand-title-row"><h1>HH Orbit</h1><span className="version">v1.0.1</span></div><span className="brand-caption">Control center</span></div></div>
+        <div className="brand"><span className="brand-mark"><AppMark /></span><div className="brand-copy"><div className="brand-title-row"><h1>HH Orbit</h1><span className="version">v{EXTENSION_VERSION}</span></div><span className="brand-caption">Control center</span></div></div>
         <div className="header-actions">
           <button type="button" className="icon-button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} />

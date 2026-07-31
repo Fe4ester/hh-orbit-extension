@@ -694,6 +694,21 @@ export class StateStore {
   async createManualAction(action: Omit<import('./types').ManualAction, 'id' | 'createdAt'>): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
+    const alreadyPending = this.state.manualActions.some(
+      (existing) =>
+        existing.status === 'pending' &&
+        existing.vacancyId === action.vacancyId &&
+        existing.reasonCode === action.reasonCode
+    );
+
+    if (alreadyPending) {
+      FileLogger.log('service_worker', 'debug', 'Manual action already pending', {
+        vacancyId: action.vacancyId,
+        reasonCode: action.reasonCode,
+      });
+      return;
+    }
+
     const newAction: import('./types').ManualAction = {
       ...action,
       id: `ma_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,

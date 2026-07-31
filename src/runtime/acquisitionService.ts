@@ -10,6 +10,7 @@ import { parseSearchResults } from '../live/searchResultsParser';
 import { FileLogger } from '../utils/fileLogger';
 import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
 import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
+import { redactSensitiveUrl } from '../utils/redactSensitiveUrl';
 
 export interface AcquisitionResult {
   success: boolean;
@@ -76,9 +77,9 @@ export class AcquisitionService {
         const searchUrl = buildGlobalSearchUrl(resumeHash);
 
         FileLogger.log('service_worker', 'info', 'Acquisition navigate', {
-          searchUrl,
-          strategy: 'global_search',
-          resumeHash: resumeHash || 'none'
+          searchUrl: redactSensitiveUrl(searchUrl),
+          strategy: 'resume_search',
+          hasResumeHash: Boolean(resumeHash),
         });
 
         // Navigate controlled tab to search URL
@@ -101,7 +102,7 @@ export class AcquisitionService {
         FileLogger.log('service_worker', 'info', 'Acquisition skip navigation', {
           skipNavigation,
           isOnSearchPage,
-          currentUrl
+          currentUrl: redactSensitiveUrl(currentUrl)
         });
       }
 
@@ -110,7 +111,10 @@ export class AcquisitionService {
       const actualUrl = tabAfter.url || '';
 
       if (!actualUrl.includes('/search/vacancy') && !actualUrl.includes('/applicant/vacancy_search')) {
-        FileLogger.log('service_worker', 'error', 'Acquisition failed', { reason: 'not_on_search_page', actualUrl });
+        FileLogger.log('service_worker', 'error', 'Acquisition failed', {
+          reason: 'not_on_search_page',
+          actualUrl: redactSensitiveUrl(actualUrl),
+        });
         return {
           success: false,
           currentUrl: actualUrl,
@@ -178,7 +182,9 @@ export class AcquisitionService {
       FileLogger.log('service_worker', 'info', 'Acquisition parsed', { cardsFound: cards.length });
 
       if (cards.length === 0) {
-        FileLogger.log('service_worker', 'warn', 'Acquisition empty', { currentUrl: actualUrl });
+        FileLogger.log('service_worker', 'warn', 'Acquisition empty', {
+          currentUrl: redactSensitiveUrl(actualUrl),
+        });
         return {
           success: true,
           currentUrl: actualUrl,
@@ -257,7 +263,9 @@ export class AcquisitionService {
 
           // Check if URL is correct
           if (!tab.url?.includes('/search/vacancy')) {
-            FileLogger.log('service_worker', 'warn', 'Tab navigated away', { url: tab.url });
+            FileLogger.log('service_worker', 'warn', 'Tab navigated away', {
+              url: redactSensitiveUrl(tab.url),
+            });
             clearInterval(checkInterval);
             resolve(false);
             return;

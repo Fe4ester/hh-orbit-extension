@@ -173,4 +173,40 @@ describe('LiveAutoApplyEngineV2 - Behavior Regression', () => {
       expect(state.runtime.currentPhase).toBe('idle');
     });
   });
+
+  describe('manual-action persistence', () => {
+    it('marks a manual-action vacancy processed before pausing', async () => {
+      const state = store.getState();
+      await store.updateState({
+        selectedResumeHash: 'resume-1',
+        activeProfileId: 'profile-1',
+        profiles: {
+          'profile-1': {
+            id: 'profile-1', name: 'Profile', keywordsInclude: [], keywordsExclude: [],
+            locations: [], experience: [], schedule: [], employment: [],
+          },
+        },
+        liveMode: { ...state.liveMode, controlledTabId: 321, controlledWindowId: 1 },
+        runtimeState: 'RUNNING',
+        runtime: { ...state.runtime, currentPhase: 'apply' },
+        vacancyQueue: [{
+          vacancyId: 'vacancy-1', title: 'Test vacancy', company: 'Test company',
+          url: 'https://hh.ru/vacancy/vacancy-1', source: 'search_dom',
+          discoveredAt: Date.now(), profileId: 'profile-1', status: 'discovered',
+        }],
+      });
+      vi.mocked(chrome.tabs.get).mockResolvedValue({ id: 321, url: 'https://hh.ru/search/vacancy' } as chrome.tabs.Tab);
+      vi.spyOn(engine as any, 'processSingleVacancy').mockResolvedValue({
+        success: true,
+        outcome: 'manual_action',
+        reason: 'test_required',
+        context: { state: 'manual_action', metadata: {}, errors: [] },
+      });
+
+      await expect((engine as any).runCycle()).resolves.toBe('blocked');
+
+      expect(store.getState().vacancyQueue[0].status).toBe('processed');
+      expect(store.getState().runtime.currentPhase).toBe('paused_manual_action');
+    });
+  });
 });

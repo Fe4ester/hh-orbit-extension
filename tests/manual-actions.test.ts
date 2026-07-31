@@ -53,6 +53,20 @@ describe('Manual Actions', () => {
       expect(action.company).toBe('Tech Corp');
       expect(action.details?.testType).toBe('coding');
     });
+
+    it('does not duplicate an already pending action for the same vacancy and reason', async () => {
+      const action = {
+        type: 'questionnaire' as const,
+        vacancyId: 'v123',
+        status: 'pending' as const,
+        reasonCode: 'questionnaire_required' as const,
+      };
+
+      await store.createManualAction(action);
+      await store.createManualAction(action);
+
+      expect(store.getState().manualActions).toHaveLength(1);
+    });
   });
 
   describe('markManualActionDone', () => {

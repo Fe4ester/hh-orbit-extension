@@ -13,6 +13,7 @@ import { sendMessageWithTimeout } from '../utils/messageWithTimeout';
 import { PreflightService } from './preflightService';
 import type { PreflightResult } from './preflightService';
 import { buildGlobalSearchUrl } from '../live/advancedSearchFormFiller';
+import { redactSensitiveUrl } from '../utils/redactSensitiveUrl';
 
 // State machine states
 type VacancyState =
@@ -209,7 +210,9 @@ export class LiveAutoApplyEngineV2 {
       const currentUrl = tab.url || '';
 
       if (!currentUrl.includes('/search/vacancy') && !currentUrl.includes('/applicant/vacancy_search')) {
-        FileLogger.log('service_worker', 'warn', 'Not on search page, returning', { currentUrl });
+        FileLogger.log('service_worker', 'warn', 'Not on search page, returning', {
+          currentUrl: redactSensitiveUrl(currentUrl),
+        });
         await this.returnToSearchPage(controlledTabId);
         await this.deps.sleep(2000);
       }
@@ -287,7 +290,9 @@ export class LiveAutoApplyEngineV2 {
             lastAppliedSearchUrl: acquisitionResult.currentUrl
           }
         });
-        FileLogger.log('service_worker', 'info', 'Search URL saved', { url: acquisitionResult.currentUrl });
+        FileLogger.log('service_worker', 'info', 'Search URL saved', {
+          url: redactSensitiveUrl(acquisitionResult.currentUrl),
+        });
       }
 
       // СРАЗУ проверяем DOM - есть ли доступные вакансии на странице
@@ -530,15 +535,6 @@ export class LiveAutoApplyEngineV2 {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, success: 1 });
     } else if (result.outcome === 'manual_action') {
       await this.deps.store.incrementRuntimeCounters({ processed: 1, manualActions: 1 });
-
-      // Check if we should stop on manual action
-      if (this.deps.store.getState().settings.stopOnManualAction) {
-        FileLogger.log('service_worker', 'info', 'Manual action detected, stopOnManualAction enabled - pausing', {
-          vacancyId: nextVacancy.vacancyId
-        });
-        await this.deps.store.setRuntimePhase('paused_manual_action', 'manual_action_required');
-        return 'blocked';
-      }
     } else if (result.outcome === 'skipped') {
       // Don't increment processed counter for skipped vacancies (already applied, etc)
       FileLogger.log('service_worker', 'info', 'Vacancy skipped, not counting as processed', {
@@ -696,6 +692,14 @@ export class LiveAutoApplyEngineV2 {
       vacancyId: nextVacancy.vacancyId,
       outcome: result.outcome,
     });
+
+    if (result.outcome === 'manual_action' && this.deps.store.getState().settings.stopOnManualAction) {
+      FileLogger.log('service_worker', 'info', 'Manual action detected, stopOnManualAction enabled - pausing', {
+        vacancyId: nextVacancy.vacancyId
+      });
+      await this.deps.store.setRuntimePhase('paused_manual_action', 'manual_action_required');
+      return 'blocked';
+    }
 
     if (result.outcome === 'success') {
       return 'applied';
@@ -1092,13 +1096,13 @@ export class LiveAutoApplyEngineV2 {
         currentUrl.includes('hh.ru/applicant/vacancy_search');
 
       if (!isSearchPage) {
-        FileLogger.log('service_worker', 'info', 'Redirect detected', { url: currentUrl });
+        FileLogger.log('service_worker', 'info', 'Redirect detected', { url: redactSensitiveUrl(currentUrl) });
         context.metadata.redirectDetected = true;
         context.metadata.redirectUrl = currentUrl;
         return 'redirect';
       }
 
-      FileLogger.log('service_worker', 'info', 'Still on search page, no response', { url: currentUrl });
+      FileLogger.log('service_worker', 'info', 'Still on search page, no response', { url: redactSensitiveUrl(currentUrl) });
       return 'unknown';
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Failed to check redirect', { error: (error as Error).message });
@@ -1260,7 +1264,7 @@ export class LiveAutoApplyEngineV2 {
   private async handleRedirect(context: VacancyContext, tabId: number): Promise<{ outcome: 'test' | 'success' | 'failed' }> {
     FileLogger.log('service_worker', 'info', 'Handling redirect', {
       vacancyId: context.vacancy.vacancyId,
-      url: context.metadata.redirectUrl,
+      url: redactSensitiveUrl(context.metadata.redirectUrl),
     });
 
     try {
@@ -1351,9 +1355,9 @@ export class LiveAutoApplyEngineV2 {
             const searchUrl = buildGlobalSearchUrl(resumeHash);
 
             FileLogger.log('service_worker', 'info', 'Fallback navigation to global search', {
-              searchUrl,
-              strategy: 'global_search',
-              resumeHash: resumeHash || 'none'
+              searchUrl: redactSensitiveUrl(searchUrl),
+              strategy: 'resume_search',
+              hasResumeHash: Boolean(resumeHash),
             });
 
             await chrome.tabs.update(tab.id!, { url: searchUrl, active: true });
@@ -1395,9 +1399,9 @@ export class LiveAutoApplyEngineV2 {
     const searchUrl = buildGlobalSearchUrl(resumeHash);
 
     FileLogger.log('service_worker', 'info', 'Initialize controlled tab with global search', {
-      searchUrl,
-      strategy: 'global_search',
-      resumeHash: resumeHash || 'none'
+      searchUrl: redactSensitiveUrl(searchUrl),
+      strategy: 'resume_search',
+      hasResumeHash: Boolean(resumeHash),
     });
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1475,7 +1479,9 @@ export class LiveAutoApplyEngineV2 {
       return;
     }
 
-    FileLogger.log('service_worker', 'info', 'Returning to search page', { url: searchUrl });
+    FileLogger.log('service_worker', 'info', 'Returning to search page', {
+      url: redactSensitiveUrl(searchUrl),
+    });
 
     try {
       await chrome.tabs.update(tabId, { url: searchUrl });

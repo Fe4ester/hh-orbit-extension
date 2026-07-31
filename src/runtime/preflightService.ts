@@ -35,7 +35,10 @@ export class PreflightService {
    * Выполнить preflight check для вакансии
    */
   async check(vacancyId: string, resumeHash: string): Promise<PreflightResult> {
-    FileLogger.log('service_worker', 'info', 'Preflight check START', { vacancyId, resumeHash });
+    FileLogger.log('service_worker', 'info', 'Preflight check START', {
+      vacancyId,
+      hasResumeHash: Boolean(resumeHash),
+    });
 
     try {
       await this.ensureXsrfToken();
