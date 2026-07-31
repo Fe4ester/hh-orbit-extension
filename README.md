@@ -2,7 +2,7 @@
 
 HH Orbit — Chromium MV3 расширение для автоматизации откликов на HH.ru.
 
-Текущая версия: `1.0.1`.
+Текущая версия: `1.0.2`.
 
 ## Поддержка браузеров
 
@@ -18,7 +18,7 @@ HH Orbit — Chromium MV3 расширение для автоматизации
 - Arc;
 - Opera.
 
-Не поддерживаются в `1.0.1`:
+Не поддерживаются в `1.0.2`:
 
 - Firefox;
 - Safari.
@@ -59,6 +59,21 @@ HH Orbit — Chromium MV3 расширение для автоматизации
 - показывает счетчики запуска: обработано, успех, сегодня, вручную;
 - показывает диагностические логи в side panel;
 - поддерживает dark/light theme.
+
+## Что изменилось в 1.0.2
+
+`1.0.2` — хотфикс поиска вакансий по выбранному резюме.
+
+Главное:
+
+- выбранное резюме явно передается из runtime state в запрос поиска;
+- поиск останавливается безопасно при login/captcha и изменении HTML-контракта;
+- backend и live используют общий парсер поисковой выдачи;
+- параллельные обновления резюме объединяются, временная вкладка всегда закрывается;
+- чувствительные идентификаторы удаляются из диагностических логов;
+- обновлены инструменты сборки с устранением известных уязвимостей.
+
+Подробности релиза: `artifacts/releases/v1.0.2-notes.md`.
 
 ## Что изменилось в 1.0.1
 
@@ -333,14 +348,14 @@ npm run build
 3. Собрать zip из `dist/`:
 
 ```bash
-(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.0.1-chromium.zip .)
+(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.0.2-chromium.zip .)
 ```
 
 4. Проверить zip:
 
 ```bash
-unzip -l artifacts/releases/hh-orbit-v1.0.1-chromium.zip
-shasum -a 256 artifacts/releases/hh-orbit-v1.0.1-chromium.zip
+unzip -l artifacts/releases/hh-orbit-v1.0.2-chromium.zip
+shasum -a 256 artifacts/releases/hh-orbit-v1.0.2-chromium.zip
 ```
 
 5. Загрузить `dist/` unpacked в Chrome и пройти smoke checklist.
@@ -351,7 +366,7 @@ shasum -a 256 artifacts/releases/hh-orbit-v1.0.1-chromium.zip
 
 - `dist/` загружается как unpacked extension;
 - название расширения: `HH Orbit`;
-- версия в UI: `v1.0.1`;
+- версия в UI: `v1.0.2`;
 - dark/light theme переключается;
 - при overscroll в dark mode не просвечивает белый фон;
 - Backend mode стартует и останавливается;

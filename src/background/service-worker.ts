@@ -414,8 +414,25 @@ interface RefreshResumesAPIResult {
   reason?: string;
 }
 
+let resumeRefreshPromise: Promise<RefreshResumesAPIResult> | null = null;
+
 async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
+  if (resumeRefreshPromise) {
+    FileLogger.log('service_worker', 'info', 'Resume refresh already running; joining existing request');
+    return resumeRefreshPromise;
+  }
+
+  resumeRefreshPromise = performResumeRefresh();
+  try {
+    return await resumeRefreshPromise;
+  } finally {
+    resumeRefreshPromise = null;
+  }
+}
+
+async function performResumeRefresh(): Promise<RefreshResumesAPIResult> {
   FileLogger.log('service_worker', 'info', 'Resume refresh started', { source: 'api_with_dom_fallback' });
+  let temporaryTabId: number | null = null;
 
   try {
     // Try API endpoint first
@@ -454,6 +471,8 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
       broadcastNotifications();
       return { success: false, reason: 'tab_creation_failed' };
     }
+
+    temporaryTabId = tab.id;
 
     FileLogger.log('service_worker', 'info', 'Resume refresh: temporary tab created', { tabId: tab.id });
 
@@ -545,6 +564,7 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
 
     // Close temporary tab
     await chrome.tabs.remove(tab.id);
+    temporaryTabId = null;
     FileLogger.log('service_worker', 'info', 'Resume refresh: temporary tab closed');
 
     const parsedResumes = detectionResult.result as Array<{ hash: string; title: string; url: string }>;
@@ -579,6 +599,18 @@ async function doRefreshResumesAPI(): Promise<RefreshResumesAPIResult> {
     store.getNotificationManager().addToast('error', 'Ошибка обновления резюме');
     broadcastNotifications();
     return { success: false, reason: 'exception' };
+  } finally {
+    if (temporaryTabId !== null) {
+      try {
+        await chrome.tabs.remove(temporaryTabId);
+        FileLogger.log('service_worker', 'info', 'Resume refresh: temporary tab closed after failure');
+      } catch (closeError) {
+        FileLogger.log('service_worker', 'warn', 'Resume refresh: failed to close temporary tab', {
+          tabId: temporaryTabId,
+          error: (closeError as Error).message,
+        });
+      }
+    }
   }
 }
 

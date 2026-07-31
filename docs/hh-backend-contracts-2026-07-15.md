@@ -22,7 +22,7 @@ GET https://hh.ru/search/vacancy
 query:
   items_on_page=50
   page=<zero-based integer>
-  resume=<selected resume hash>        # only when selected
+  resume=<selected resume hash>        # required
 headers:
   Accept: text/html,...
   Referer: https://hh.ru/
@@ -31,8 +31,10 @@ credentials: include
 
 - `api.hh.ru/vacancies` is intentionally not used for automatic search because the project treats it as blocked (`403`).
 - HTML card marker: `data-qa="vacancy-serp__vacancy"`.
+- backend and live acquisition share the same search-results parser so selector updates have one implementation path.
 - expected fields: vacancy ID from `/vacancy/<digits>`, title (`serp-item__title`), employer (`vacancy-serp__vacancy-employer`), compensation, address, full/relative vacancy URL.
-- non-OK or network exception returns an empty acquisition result, then engine decides whether to retry or stop.
+- the selected resume hash is passed directly from the initialized state store; the HTTP client never re-reads extension storage.
+- missing resume context, non-OK responses, login/captcha pages, parser contract mismatches, and unrecognized HTML are acquisition errors. They do not increment the empty-page exhaustion counter.
 
 ### Resume discovery
 

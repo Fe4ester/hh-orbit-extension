@@ -1,5 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BackendHTTPClient } from '../src/runtime/backendHTTPClient';
+import type { Profile } from '../src/state/types';
+
+const searchProfile: Profile = {
+  id: 'profile-1',
+  name: 'Python',
+  keywordsInclude: ['python'],
+  keywordsExclude: [],
+  createdAt: 1,
+  updatedAt: 1,
+};
 
 describe('BackendHTTPClient', () => {
   let client: BackendHTTPClient;
@@ -14,6 +24,136 @@ describe('BackendHTTPClient', () => {
     (chrome as any).cookies = {
       get: vi.fn().mockResolvedValue({ value: 'token123456' }),
     };
+  });
+
+  it('uses the resume hash supplied by the initialized state store for vacancy search', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/search/vacancy?items_on_page=50&page=2&resume=resume-from-store',
+      headers: { get: vi.fn().mockReturnValue('text/html; charset=utf-8') },
+      text: vi.fn().mockResolvedValue('<div data-qa="vacancy-serp__results"></div>'),
+    });
+
+    await client.fetchVacancies(searchProfile, 2, 'resume-from-store');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://hh.ru/search/vacancy?items_on_page=50&page=2&resume=resume-from-store',
+      expect.objectContaining({ credentials: 'include' })
+    );
+    expect(chrome.storage.local.get).not.toHaveBeenCalledWith('state');
+    expect(chrome.storage.local.get).not.toHaveBeenCalledWith('app_state');
+    expect(JSON.stringify(logMock.mock.calls)).not.toContain('resume-from-store');
+  });
+
+  it('parses the current vacancy card contract through the shared search parser', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/search/vacancy?resume=resume-1',
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      text: vi.fn().mockResolvedValue(`
+        <main data-qa="vacancy-serp__results">
+          <article data-qa="vacancy-serp__vacancy" class="vacancy-serp-item">
+            <a data-qa="vacancy-serp__vacancy-title" href="/vacancy/123456?from=serp">
+              <span>Python Backend Developer</span>
+            </a>
+          </article>
+        </main>
+      `),
+    });
+
+    await expect(client.fetchVacancies(searchProfile, 0, 'resume-1')).resolves.toEqual([
+      expect.objectContaining({
+        id: '123456',
+        name: 'Python Backend Developer',
+        alternate_url: 'https://hh.ru/vacancy/123456?from=serp',
+      }),
+    ]);
+  });
+
+  it('refuses to run a broad vacancy search without a resume hash', async () => {
+    await expect(client.fetchVacancies(searchProfile, 0, '  ')).rejects.toThrow(
+      'Vacancy search requires a selected resume hash'
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty result only for a recognized empty search page', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/search/vacancy?resume=resume-1',
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      text: vi.fn().mockResolvedValue('<main data-qa="vacancy-serp__results"></main>'),
+    });
+
+    await expect(client.fetchVacancies(searchProfile, 0, 'resume-1')).resolves.toEqual([]);
+  });
+
+  it('does not classify a captcha page as an empty vacancy page', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/search/vacancy?resume=resume-1',
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      text: vi.fn().mockResolvedValue('<div data-qa="captcha">Подтвердите, что вы не робот</div>'),
+    });
+
+    await expect(client.fetchVacancies(searchProfile, 0, 'resume-1')).rejects.toThrow(
+      'Vacancy search blocked: captcha_required'
+    );
+  });
+
+  it('recognizes a login redirect even when the response body has no login form', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/account/login?backurl=%2Fsearch%2Fvacancy',
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      text: vi.fn().mockResolvedValue('<html><body>Вход в личный кабинет</body></html>'),
+    });
+
+    await expect(client.fetchVacancies(searchProfile, 0, 'resume-1')).rejects.toMatchObject({
+      code: 'login_required',
+    });
+  });
+
+  it('reports a parser contract mismatch instead of a false empty page', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/search/vacancy?resume=resume-1',
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      text: vi.fn().mockResolvedValue(
+        '<main data-qa="vacancy-serp__results"><div data-qa="vacancy-serp__vacancy">Changed card contract</div></main>'
+      ),
+    });
+
+    await expect(client.fetchVacancies(searchProfile, 0, 'resume-1')).rejects.toMatchObject({
+      code: 'contract_mismatch',
+    });
+  });
+
+  it('does not classify an unrecognized HTML response as an empty vacancy page', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url: 'https://hh.ru/search/vacancy?resume=resume-1',
+      headers: { get: vi.fn().mockReturnValue('text/html') },
+      text: vi.fn().mockResolvedValue('<html><body>Temporary upstream page</body></html>'),
+    });
+
+    await expect(client.fetchVacancies(searchProfile, 0, 'resume-1')).rejects.toThrow(
+      'Vacancy search returned an unrecognized page'
+    );
   });
 
   it('does not leak XSRF tokens into runtime logger payloads', async () => {
@@ -42,6 +182,17 @@ describe('BackendHTTPClient', () => {
     );
   });
 
+  it('keeps resume API failures diagnosable in structured logs', async () => {
+    fetchMock.mockRejectedValue(new Error('Network request failed'));
+
+    await expect(client.getMyResumes()).resolves.toEqual([]);
+
+    expect(logMock).toHaveBeenCalledWith(
+      '[BackendHTTP] getMyResumes error',
+      expect.objectContaining({ message: 'Network request failed' })
+    );
+  });
+
   it('proceeds on quickResponse preflight responses', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
@@ -55,6 +206,24 @@ describe('BackendHTTPClient', () => {
     expect(result.reason).toBeUndefined();
     expect(result.requiresTest).toBeUndefined();
     expect(result.requiresQuestionnaire).toBeUndefined();
+  });
+
+  it('does not leak resume hashes through preflight diagnostics', async () => {
+    const resumeHash = 'private-resume-hash-123';
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        type: 'quickResponse',
+        respondedWithResume: resumeHash,
+      }),
+    });
+
+    await client.preflightApply('123', resumeHash);
+
+    const serializedLogs = JSON.stringify(logMock.mock.calls);
+    expect(serializedLogs).not.toContain(resumeHash);
+    expect(serializedLogs).toContain('[redacted]');
   });
 
   it('classifies quickResponse payload with tests as blocked', async () => {
@@ -456,5 +625,7 @@ describe('BackendHTTPClient', () => {
         preview: expect.stringContaining('"success":"true"'),
       })
     );
+    expect(JSON.stringify(result.diagnostics)).not.toContain('topic-1');
+    expect(JSON.stringify(result.diagnostics)).not.toContain('neg-1');
   });
 });

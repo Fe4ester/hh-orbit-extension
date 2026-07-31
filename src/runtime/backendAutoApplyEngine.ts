@@ -6,7 +6,7 @@
  */
 
 import type { StateStore } from '../state/store';
-import type { BackendHTTPClient } from './backendHTTPClient';
+import { VacancySearchError, type BackendHTTPClient } from './backendHTTPClient';
 import { hasReachedRunApplyLimit } from './runLimit';
 import { FileLogger } from '../utils/fileLogger';
 
@@ -23,6 +23,8 @@ export type AcquisitionOutcome =
   | { success: false; reason: 'prefilter_eliminated_all'; fetchedCount: number }
   | { success: false; reason: 'no_discovered_after_materialize'; queueLength: number }
   | { success: false; reason: 'exhausted'; consecutiveEmptyPages: number }
+  | { success: false; reason: 'search_blocked'; blocker: 'login_required' | 'captcha_required'; error: string }
+  | { success: false; reason: 'search_contract_changed'; error: string }
   | { success: false; reason: 'error'; error: string };
 
 type CycleOutcome = 'applied' | 'skipped' | 'manual' | 'blocked' | 'no_vacancies' | 'retry';
@@ -207,6 +209,29 @@ export class BackendAutoApplyEngine {
           return 'blocked';
         }
 
+        if (outcome.reason === 'search_blocked') {
+          await this.deps.store.setSessionStatus(outcome.blocker);
+          await this.deps.store.setRuntimeBlocker(outcome.blocker, outcome.error);
+          this.notify(
+            'warn',
+            outcome.blocker === 'login_required'
+              ? 'Требуется повторная авторизация на hh.ru'
+              : 'HH.ru запросил проверку безопасности',
+            true
+          );
+          await this.deps.store.setRuntimePhase(
+            outcome.blocker === 'login_required' ? 'paused_auth' : 'paused_manual_action',
+            outcome.blocker
+          );
+          return 'blocked';
+        }
+
+        if (outcome.reason === 'search_contract_changed') {
+          this.notify('error', 'HH.ru изменил формат выдачи. Автопоиск остановлен для безопасности.', true);
+          await this.deps.store.setRuntimePhase('paused_manual_action', 'search_contract_changed');
+          return 'blocked';
+        }
+
         // All other acquisition failures are non-terminal - retry later
         await this.deps.store.setRuntimePhase('waiting');
 
@@ -353,12 +378,12 @@ export class BackendAutoApplyEngine {
       const exists = state.resumeCandidates.some((r) => r.hash === state.selectedResumeHash);
       if (exists) {
         FileLogger.log('service_worker', 'info', 'Resume already valid', {
-          hash: state.selectedResumeHash
+          hasSelectedResumeHash: true
         });
         return true;
       }
       FileLogger.log('service_worker', 'warn', 'Selected resume not in candidates, refreshing', {
-        hash: state.selectedResumeHash
+        hasSelectedResumeHash: true
       });
     }
 
@@ -395,8 +420,7 @@ export class BackendAutoApplyEngine {
       await this.deps.store.selectResume(resumes[0].hash);
 
       FileLogger.log('service_worker', 'info', 'Resume auto-selected', {
-        hash: resumes[0].hash,
-        title: resumes[0].title
+        hasSelectedResumeHash: true
       });
 
       return true;
@@ -418,6 +442,15 @@ export class BackendAutoApplyEngine {
     }
 
     const profile = state.profiles[profileId];
+    const resumeHash = state.selectedResumeHash;
+
+    if (!resumeHash) {
+      FileLogger.log('service_worker', 'error', 'Vacancy acquisition aborted: selected resume is missing', {
+        profileId,
+      });
+      return { success: false, reason: 'error', error: 'Selected resume is missing' };
+    }
+
     const currentPage = state.runtime.currentSearchPage;
     const consecutiveEmptyPages = state.runtime.consecutiveEmptyPages;
 
@@ -433,7 +466,7 @@ export class BackendAutoApplyEngine {
     });
 
     try {
-      const apiVacancies = await this.deps.httpClient.fetchVacancies(profile, currentPage);
+      const apiVacancies = await this.deps.httpClient.fetchVacancies(profile, currentPage, resumeHash);
 
       FileLogger.log('service_worker', 'info', 'API vacancies fetched', {
         count: apiVacancies.length,
@@ -522,6 +555,33 @@ export class BackendAutoApplyEngine {
 
       return { success: true, discoveredCount };
     } catch (error) {
+      if (
+        error instanceof VacancySearchError &&
+        (error.code === 'login_required' || error.code === 'captcha_required')
+      ) {
+        FileLogger.log('service_worker', 'warn', 'Vacancy acquisition blocked', {
+          blocker: error.code,
+          error: error.message,
+        });
+        return {
+          success: false,
+          reason: 'search_blocked',
+          blocker: error.code,
+          error: error.message,
+        };
+      }
+
+      if (error instanceof VacancySearchError && error.code === 'contract_mismatch') {
+        FileLogger.log('service_worker', 'error', 'Vacancy search contract changed', {
+          error: error.message,
+        });
+        return {
+          success: false,
+          reason: 'search_contract_changed',
+          error: error.message,
+        };
+      }
+
       FileLogger.log('service_worker', 'error', 'Acquisition failed', {
         error: (error as Error).message,
         stack: (error as Error).stack,
