@@ -2,7 +2,7 @@
 
 HH Orbit — Chromium MV3 расширение для автоматизации откликов на HH.ru.
 
-Текущая версия: `1.0.2`.
+Текущая версия: `1.0.3`.
 
 ## Поддержка браузеров
 
@@ -18,7 +18,7 @@ HH Orbit — Chromium MV3 расширение для автоматизации
 - Arc;
 - Opera.
 
-Не поддерживаются в `1.0.2`:
+Не поддерживаются в `1.0.3`:
 
 - Firefox;
 - Safari.
@@ -59,6 +59,19 @@ HH Orbit — Chromium MV3 расширение для автоматизации
 - показывает счетчики запуска: обработано, успех, сегодня, вручную;
 - показывает диагностические логи в side panel;
 - поддерживает dark/light theme.
+
+## Что изменилось в 1.0.3
+
+`1.0.3` — хотфикс устойчивости Live mode и гигиены release-процесса.
+
+Главное:
+
+- Live mode сохраняет обработанную вакансию до паузы на ручном действии и не создаёт дубли manual actions;
+- URL с resume hash редактируются из Live, acquisition и content-script логов;
+- версия sidepanel автоматически берётся из manifest;
+- из репозитория удалены IDE/Codex-артефакты, а `.gitignore` защищает от их повторного добавления.
+
+Подробности релиза: `artifacts/releases/v1.0.3-notes.md`.
 
 ## Что изменилось в 1.0.2
 
@@ -334,7 +347,8 @@ chrome://extensions/
 - `manifest.json`;
 - `package.json`;
 - `package-lock.json`;
-- UI version label.
+
+Sidepanel reads its version from `chrome.runtime.getManifest()`, so after the manifest bump it is updated automatically; verify the displayed version in the smoke checklist.
 
 2. Запустить проверки:
 
@@ -348,14 +362,14 @@ npm run build
 3. Собрать zip из `dist/`:
 
 ```bash
-(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.0.2-chromium.zip .)
+(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.0.3-chromium.zip .)
 ```
 
 4. Проверить zip:
 
 ```bash
-unzip -l artifacts/releases/hh-orbit-v1.0.2-chromium.zip
-shasum -a 256 artifacts/releases/hh-orbit-v1.0.2-chromium.zip
+unzip -l artifacts/releases/hh-orbit-v1.0.3-chromium.zip
+shasum -a 256 artifacts/releases/hh-orbit-v1.0.3-chromium.zip
 ```
 
 5. Загрузить `dist/` unpacked в Chrome и пройти smoke checklist.
@@ -366,7 +380,7 @@ shasum -a 256 artifacts/releases/hh-orbit-v1.0.2-chromium.zip
 
 - `dist/` загружается как unpacked extension;
 - название расширения: `HH Orbit`;
-- версия в UI: `v1.0.2`;
+- версия в UI: `v1.0.3`;
 - dark/light theme переключается;
 - при overscroll в dark mode не просвечивает белый фон;
 - Backend mode стартует и останавливается;
