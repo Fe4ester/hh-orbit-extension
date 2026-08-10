@@ -169,7 +169,7 @@ export const DEFAULT_QUESTIONNAIRE_AI_SETTINGS: QuestionnaireAISettings = {
     type: 'openrouter',
     modelId: 'openrouter/free',
     temperature: 0.1,
-    timeoutMs: 180_000,
+    timeoutMs: 90_000,
   },
   confidence: {
     autoApprove: 0.95,

@@ -150,6 +150,47 @@ describe('HostedAIProvider', () => {
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.groq.com/openai/v1/chat/completions');
   });
 
+  it('retries a rejected structured-output request without response_format', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(json({ error: { message: 'response_format is unsupported' } }, 400))
+      .mockResolvedValueOnce(json({ choices: [{ message: { content: answer } }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'groq', modelId: 'openai/gpt-oss-120b', apiKey: 'groq-secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await expect(provider.generateAnswers({ questionnaire, context, modelId: '' }))
+      .resolves.toMatchObject({ providerId: 'groq' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(fetchImpl.mock.calls[0][1].body));
+    const secondBody = JSON.parse(String(fetchImpl.mock.calls[1][1].body));
+    expect(firstBody).toHaveProperty('response_format');
+    expect(secondBody).not.toHaveProperty('response_format');
+  });
+
+  it('retries an oversized legend with a smaller request', async () => {
+    const legendResponse = JSON.stringify({
+      profileTitle: 'Python-разработчик', seniority: 'senior', geography: 'Москва',
+      summary: 'Senior Python-разработчик', confirmedFacts: ['Python'], inferredDefaults: [],
+    });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(json({ error: { message: 'Request Entity Too Large' } }, 413))
+      .mockResolvedValueOnce(json({ choices: [{ message: { content: legendResponse } }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'openrouter', modelId: 'openrouter/free', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await expect(provider.prepareLegend({
+      name: 'legend.md',
+      content: Array.from({ length: 2_000 }, (_, index) => `Python backend experience ${index}.`).join('\n\n'),
+      modelId: '',
+    })).resolves.toMatchObject({ profileTitle: 'Python-разработчик' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(String(fetchImpl.mock.calls[1][1].body).length)
+      .toBeLessThan(String(fetchImpl.mock.calls[0][1].body).length);
+  });
+
   it('rejects insecure remote custom gateways', () => {
     expect(() => new HostedAIProvider({
       providerId: 'custom_openai', customBaseUrl: 'http://example.com/v1', modelId: 'model',

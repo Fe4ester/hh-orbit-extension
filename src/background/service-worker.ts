@@ -19,6 +19,8 @@ import { FileLogger } from '../utils/fileLogger';
 import {
   HostedAIProvider,
   ProviderCredentialStore,
+  DEFAULT_AI_PROVIDER_ID,
+  getProviderDefinition,
   isAIProviderId,
   QuestionnaireProcessor,
   selectPendingManualQuestionnaires,
@@ -982,13 +984,17 @@ const providerCredentialStore = new ProviderCredentialStore();
 
 async function createQuestionnaireProvider(): Promise<HostedAIProvider> {
   const provider = store.getState().questionnaires.settings.provider;
+  const providerType = isAIProviderId(provider.type) ? provider.type : DEFAULT_AI_PROVIDER_ID;
+  const definition = getProviderDefinition(providerType);
   return new HostedAIProvider({
-    providerId: provider.type,
-    modelId: provider.modelId,
+    providerId: providerType,
+    modelId: providerType === provider.type && provider.modelId
+      ? provider.modelId
+      : definition.defaultModel,
     customBaseUrl: provider.customBaseUrl,
     temperature: provider.temperature,
     timeoutMs: provider.timeoutMs,
-    apiKey: await providerCredentialStore.get(provider.type),
+    apiKey: await providerCredentialStore.get(providerType),
   });
 }
 
@@ -2335,8 +2341,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       sendResponse({ error: 'Unknown message type' });
     } catch (error) {
-      FileLogger.log('service_worker', 'error', 'Message handler error', { error: (error as Error).message });
-      sendResponse({ error: (error as Error).message });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      FileLogger.log('service_worker', 'warn', 'Message request rejected', {
+        messageType: typeof message?.type === 'string' ? message.type : 'unknown',
+        error: errorMessage,
+      });
+      sendResponse({ error: errorMessage });
     }
   })();
 

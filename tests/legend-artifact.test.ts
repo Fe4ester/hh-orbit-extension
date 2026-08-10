@@ -66,10 +66,10 @@ describe('local legend artifact', () => {
     expect(artifact.inferredDefaults[0].value).toBe('180 000–220 000 ₽ gross в месяц');
   });
 
-  it('limits the source sent to the local model', () => {
+  it('limits the source sent to the hosted model', () => {
     const prompt = buildLegendArtifactPrompt('large.md', 'Python profile.\n\n'.repeat(10_000));
 
-    expect(prompt.length).toBeLessThan(21_000);
+    expect(prompt.length).toBeLessThan(11_000);
     expect(prompt).toContain('salary_expectation');
   });
 

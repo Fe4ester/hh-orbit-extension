@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AI_PROVIDER_CATALOG,
+  DEFAULT_AI_PROVIDER_ID,
+  getProviderDefinition,
+  isAIProviderId,
   type AIModelInfo,
   type AIProviderId,
   type QuestionnaireAISettingsPatch,
@@ -36,7 +39,10 @@ function formatPrice(value: number | undefined): string {
 }
 
 export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
-  const definition = AI_PROVIDER_CATALOG[provider.type];
+  const hasKnownProvider = isAIProviderId(provider.type);
+  const providerType = hasKnownProvider ? provider.type : DEFAULT_AI_PROVIDER_ID;
+  const definition = getProviderDefinition(providerType);
+  const modelId = hasKnownProvider ? provider.modelId : definition.defaultModel;
   const [credential, setCredential] = useState('');
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>({ configured: false });
   const [modelDetails, setModelDetails] = useState<AIModelInfo[]>(definition.modelDetails);
@@ -46,10 +52,10 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const selectedModel = useMemo<AIModelInfo>(() => (
-    modelDetails.find(model => model.id === provider.modelId)
-    ?? definition.modelDetails.find(model => model.id === provider.modelId)
-    ?? { id: provider.modelId, name: provider.modelId || 'Модель не выбрана' }
-  ), [definition.modelDetails, modelDetails, provider.modelId]);
+    modelDetails.find(model => model.id === modelId)
+    ?? definition.modelDetails.find(model => model.id === modelId)
+    ?? { id: modelId, name: modelId || 'Модель не выбрана' }
+  ), [definition.modelDetails, modelDetails, modelId]);
   const filteredModels = useMemo(() => {
     const query = modelSearch.trim().toLocaleLowerCase('ru-RU');
     if (!query) return modelDetails;
@@ -62,10 +68,10 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
     setModelSearch('');
     setCredential('');
     setNotice(null);
-    void send<CredentialStatus>({ type: 'AI_PROVIDER_CREDENTIAL_STATUS', providerId: provider.type })
+    void send<CredentialStatus>({ type: 'AI_PROVIDER_CREDENTIAL_STATUS', providerId: providerType })
       .then(setCredentialStatus)
       .catch(() => setCredentialStatus({ configured: false }));
-  }, [definition.modelDetails, provider.type]);
+  }, [definition.modelDetails, providerType]);
 
   const selectProvider = (type: AIProviderId) => {
     const next = AI_PROVIDER_CATALOG[type];
@@ -84,7 +90,7 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
     setNotice(null);
     try {
       const result = await send<CredentialStatus & { error?: string }>({
-        type: 'AI_PROVIDER_SAVE_CREDENTIAL', providerId: provider.type, credential,
+        type: 'AI_PROVIDER_SAVE_CREDENTIAL', providerId: providerType, credential,
       });
       if (result.error) throw new Error(result.error);
       setCredentialStatus(result);
@@ -99,14 +105,14 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
 
   const removeCredential = async () => {
     setBusy('credential');
-    await send({ type: 'AI_PROVIDER_DELETE_CREDENTIAL', providerId: provider.type });
+    await send({ type: 'AI_PROVIDER_DELETE_CREDENTIAL', providerId: providerType });
     setCredentialStatus({ configured: false });
     setNotice({ kind: 'info', text: 'Ключ удалён' });
     setBusy(null);
   };
 
   const ensureCustomPermission = async (): Promise<void> => {
-    if (provider.type !== 'custom_openai' || !provider.customBaseUrl) return;
+    if (providerType !== 'custom_openai' || !provider.customBaseUrl) return;
     const origin = `${new URL(provider.customBaseUrl).origin}/*`;
     if (chrome.permissions && !await chrome.permissions.contains({ origins: [origin] })) {
       const granted = await chrome.permissions.request({ origins: [origin] });
@@ -178,8 +184,8 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
               <li key={item.id}>
                 <button
                   type="button"
-                  aria-current={item.id === provider.type ? 'true' : undefined}
-                  data-selected={item.id === provider.type}
+                  aria-current={item.id === providerType ? 'true' : undefined}
+                  data-selected={item.id === providerType}
                   onClick={() => selectProvider(item.id)}
                 >
                   <span className="ai-provider-logo" aria-hidden="true">{item.name.slice(0, 1)}</span>
@@ -199,7 +205,7 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
 
       <div className="hosted-ai-settings">
           {definition.freeTier && <div className="ai-free-tier"><strong>Бесплатный старт</strong><span>{definition.freeTier}</span></div>}
-          {provider.type === 'custom_openai' && (
+          {providerType === 'custom_openai' && (
             <label className="ai-provider-field">
               <span>Адрес API</span>
               <input type="url" value={provider.customBaseUrl ?? ''} placeholder="Адрес OpenAI-compatible API" onChange={event => onPatch({ provider: { customBaseUrl: event.target.value } })} />
@@ -245,8 +251,8 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
                   <li key={model.id}>
                     <button
                       type="button"
-                      data-selected={model.id === provider.modelId}
-                      aria-current={model.id === provider.modelId ? 'true' : undefined}
+                      data-selected={model.id === modelId}
+                      aria-current={model.id === modelId ? 'true' : undefined}
                       onClick={() => selectModel(model.id)}
                     >
                       <span><strong>{model.name}</strong><small>{model.description || model.id}</small></span>
@@ -277,14 +283,14 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
               {definition.pricingUrl && <a href={definition.pricingUrl} target="_blank" rel="noreferrer">Официальный прайсинг ↗</a>}
               <details>
                 <summary>Указать ID вручную</summary>
-                <input value={provider.modelId} aria-label="ID модели" onChange={event => onPatch({ provider: { modelId: event.target.value } })} />
+                <input value={modelId} aria-label="ID модели" onChange={event => onPatch({ provider: { modelId: event.target.value } })} />
               </details>
             </div>
           </div>
 
           <div className="ai-provider-actions">
-            <button type="button" className="btn btn-primary" disabled={busy !== null || (!credentialStatus.configured && provider.type !== 'custom_openai')} onClick={() => void test()}>{busy === 'test' ? 'Проверяем…' : 'Проверить подключение'}</button>
-            <button type="button" className="btn btn-secondary" disabled={busy !== null || (!credentialStatus.configured && provider.type !== 'custom_openai')} onClick={() => void refreshModels()}>{busy === 'models' ? 'Загружаем…' : 'Обновить модели'}</button>
+            <button type="button" className="btn btn-primary" disabled={busy !== null || (!credentialStatus.configured && providerType !== 'custom_openai')} onClick={() => void test()}>{busy === 'test' ? 'Проверяем…' : 'Проверить подключение'}</button>
+            <button type="button" className="btn btn-secondary" disabled={busy !== null || (!credentialStatus.configured && providerType !== 'custom_openai')} onClick={() => void refreshModels()}>{busy === 'models' ? 'Загружаем…' : 'Обновить модели'}</button>
           </div>
       </div>
       {notice && <div className="questionnaire-notice" data-kind={notice.kind}>{notice.text}</div>}

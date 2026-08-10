@@ -67,6 +67,16 @@ interface ModelListPayload {
 }
 interface ApiErrorPayload { error?: { message?: string }; message?: string }
 
+const MAX_PROVIDER_TIMEOUT_MS = 90_000;
+const LEGEND_SOURCE_LIMITS = [8_000, 3_000] as const;
+
+class AIProviderRequestError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'AIProviderRequestError';
+  }
+}
+
 function pricePerMillion(value: unknown): number | undefined {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
   const parsed = Number(value);
@@ -132,19 +142,30 @@ function extractGeminiText(payload: unknown): string | null {
   return null;
 }
 
-function safeApiError(status: number, payload: unknown): Error {
+function safeApiError(status: number, payload: unknown): AIProviderRequestError {
   const body = payload as ApiErrorPayload;
   const raw = body.error?.message ?? body.message;
   const message = typeof raw === 'string' ? raw.slice(0, 300) : '';
-  if (status === 401 || status === 403) return new Error('API-ключ не принят провайдером');
-  if (status === 429) return new Error('Лимит провайдера исчерпан. Повторите позже или выберите другую модель');
-  return new Error(message ? `AI API: ${message}` : `AI API вернул HTTP ${status}`);
+  if (status === 401 || status === 403) {
+    return new AIProviderRequestError(status, 'API-ключ не принят провайдером');
+  }
+  if (status === 413) {
+    return new AIProviderRequestError(status, 'Контекст не помещается в запрос к выбранной модели');
+  }
+  if (status === 429) {
+    return new AIProviderRequestError(status, 'Лимит провайдера исчерпан. Повторите позже или выберите другую модель');
+  }
+  return new AIProviderRequestError(
+    status,
+    message ? `AI API: ${message}` : `AI API вернул HTTP ${status}`
+  );
 }
 
 export class HostedAIProvider implements AIProvider {
   readonly id: AIProviderId;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(private readonly options: HostedAIProviderOptions) {
     this.id = options.providerId;
@@ -154,6 +175,7 @@ export class HostedAIProvider implements AIProvider {
       this.id === 'custom_openai' ? options.customBaseUrl ?? '' : definition.baseUrl,
     );
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.timeoutMs = Math.min(MAX_PROVIDER_TIMEOUT_MS, Math.max(1, options.timeoutMs));
     if (this.id !== 'custom_openai' && !options.apiKey) throw new Error('Добавьте API-ключ провайдера');
   }
 
@@ -228,11 +250,21 @@ export class HostedAIProvider implements AIProvider {
   async prepareLegend(input: { name: string; content: string; modelId: string }): Promise<LegendArtifact> {
     const modelId = input.modelId || this.options.modelId;
     if (!modelId) throw new Error('Выберите модель');
-    const content = await this.complete(modelId, [
-      { role: 'system', content: 'Create a minimal reusable candidate profile. Obey every output size limit. Return only JSON.' },
-      { role: 'user', content: buildLegendArtifactPrompt(input.name, input.content) },
-    ], 512, 0, legendArtifactResponseFormat());
-    return parseLegendArtifact({ name: input.name, sourceContent: input.content, modelId, responseContent: content });
+    for (const [index, sourceLimit] of LEGEND_SOURCE_LIMITS.entries()) {
+      try {
+        const content = await this.complete(modelId, [
+          { role: 'system', content: 'Create a minimal reusable candidate profile. Obey every output size limit. Return only JSON.' },
+          { role: 'user', content: buildLegendArtifactPrompt(input.name, input.content, sourceLimit) },
+        ], 512, 0, legendArtifactResponseFormat());
+        return parseLegendArtifact({ name: input.name, sourceContent: input.content, modelId, responseContent: content });
+      } catch (error) {
+        const canRetrySmaller = error instanceof AIProviderRequestError
+          && error.status === 413
+          && index < LEGEND_SOURCE_LIMITS.length - 1;
+        if (!canRetrySmaller) throw error;
+      }
+    }
+    throw new Error('Не удалось подготовить профиль легенды');
   }
 
   private async complete(model: string, messages: Message[], maxTokens: number, temperature: number, responseFormat: Record<string, unknown>): Promise<string> {
@@ -266,9 +298,22 @@ export class HostedAIProvider implements AIProvider {
       path = '/chat/completions';
       body = { model, temperature, max_tokens: maxTokens, stream: false, messages, response_format: responseFormat };
     }
-    const payload = await this.requestJson(path, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
+    let payload: unknown;
+    try {
+      payload = await this.requestJson(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch (error) {
+      const supportsUnstructuredRetry = error instanceof AIProviderRequestError
+        && error.status === 400
+        && protocol === 'openai_chat'
+        && this.id !== 'openai';
+      if (!supportsUnstructuredRetry) throw error;
+      const { response_format: _responseFormat, ...fallbackBody } = body as Record<string, unknown>;
+      payload = await this.requestJson(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fallbackBody),
+      });
+    }
     const content = protocol === 'anthropic'
       ? (payload as AnthropicResponsePayload).content?.find(block => block.type === 'text')?.text
       : protocol === 'gemini'
@@ -280,7 +325,7 @@ export class HostedAIProvider implements AIProvider {
 
   private async requestJson(path: string, init: RequestInit): Promise<unknown> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const headers = new Headers(init.headers);
     const key = this.options.apiKey;
     const protocol = getProviderDefinition(this.id).protocol;
@@ -305,7 +350,7 @@ export class HostedAIProvider implements AIProvider {
       if (!response.ok) throw safeApiError(response.status, payload);
       return payload;
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(`AI API не ответил за ${Math.round(this.options.timeoutMs / 1000)} с`);
+      if (controller.signal.aborted) throw new Error(`AI API не ответил за ${Math.round(this.timeoutMs / 1000)} с`);
       throw error;
     } finally {
       clearTimeout(timeout);

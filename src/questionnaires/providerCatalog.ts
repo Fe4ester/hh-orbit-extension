@@ -19,6 +19,8 @@ export interface AIProviderDefinition {
   protocol: 'openai_chat' | 'anthropic' | 'gemini';
 }
 
+export const DEFAULT_AI_PROVIDER_ID: AIProviderId = 'openrouter';
+
 export const AI_PROVIDER_CATALOG: Record<AIProviderId, AIProviderDefinition> = {
   openai: {
     id: 'openai', name: 'OpenAI', description: 'GPT-модели OpenAI',
@@ -128,8 +130,10 @@ export const AI_PROVIDER_CATALOG: Record<AIProviderId, AIProviderDefinition> = {
   },
 };
 
-export function getProviderDefinition(id: AIProviderId): AIProviderDefinition {
-  return AI_PROVIDER_CATALOG[id];
+export function getProviderDefinition(id: unknown): AIProviderDefinition {
+  return isAIProviderId(id)
+    ? AI_PROVIDER_CATALOG[id]
+    : AI_PROVIDER_CATALOG[DEFAULT_AI_PROVIDER_ID];
 }
 
 export function isAIProviderId(value: unknown): value is AIProviderId {

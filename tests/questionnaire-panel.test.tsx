@@ -120,6 +120,32 @@ describe('QuestionnairePanel', () => {
     expect(html).toContain('Нужен ключ');
   });
 
+  it('renders safely when Chrome contains a removed provider id', () => {
+    const staleProvider = {
+      ...INITIAL_QUESTIONNAIRE_STATE.settings.provider,
+      type: 'local_runtime',
+      modelId: 'legacy-local-model',
+    } as unknown as typeof INITIAL_QUESTIONNAIRE_STATE.settings.provider;
+    const html = renderToStaticMarkup(
+      <QuestionnairePanel
+        state={{
+          ...INITIAL_QUESTIONNAIRE_STATE,
+          settings: {
+            ...INITIAL_QUESTIONNAIRE_STATE.settings,
+            provider: staleProvider,
+          },
+        }}
+        selectedResume={null}
+        manualQuestionnaireCount={0}
+        onPatch={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('OpenRouter');
+    expect(html).toContain('OpenRouter Free');
+    expect(html).not.toContain('legacy-local-model');
+  });
+
   it('offers AI preparation on each backend questionnaire action', () => {
     const html = renderToStaticMarkup(
       <ManualActionsPanel

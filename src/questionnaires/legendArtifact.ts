@@ -5,7 +5,7 @@ import type {
   LegendProfileDefault,
 } from './types';
 
-const MAX_LEGEND_INPUT_CHARS = 18_000;
+const DEFAULT_LEGEND_INPUT_CHARS = 8_000;
 const DEFAULT_KEYS = new Set<LegendDefaultKey>([
   'salary_expectation',
   'employment_type',
@@ -19,7 +19,7 @@ const SENIORITY_VALUES = new Set<LegendArtifact['seniority']>([
   'intern', 'junior', 'middle', 'senior', 'lead', 'unknown',
 ]);
 
-function compactLegendSource(content: string): string {
+function compactLegendSource(content: string, maxChars = DEFAULT_LEGEND_INPUT_CHARS): string {
   const blocks = content
     .replace(/\r/g, '')
     .split(/\n{2,}/)
@@ -29,7 +29,7 @@ function compactLegendSource(content: string): string {
   let used = 0;
   const selected: string[] = [];
   for (const block of unique) {
-    const remaining = MAX_LEGEND_INPUT_CHARS - used;
+    const remaining = maxChars - used;
     if (remaining <= 0) break;
     selected.push(block.slice(0, remaining));
     used += Math.min(block.length, remaining) + 2;
@@ -37,7 +37,11 @@ function compactLegendSource(content: string): string {
   return selected.join('\n\n');
 }
 
-export function buildLegendArtifactPrompt(name: string, content: string): string {
+export function buildLegendArtifactPrompt(
+  name: string,
+  content: string,
+  maxSourceChars = DEFAULT_LEGEND_INPUT_CHARS
+): string {
   return [
     'Convert the candidate legend into a compact reusable job-application profile.',
     'Preserve every explicit fact that may affect questionnaire answers.',
@@ -61,7 +65,7 @@ export function buildLegendArtifactPrompt(name: string, content: string): string
     'Allowed keys: salary_expectation, employment_type, work_format, schedule, start_availability, relocation, business_travel.',
     'Write profileTitle, geography, summary, facts, default values, and rationales in Russian.',
     'Salary values must explicitly include ₽, gross or net, and the monthly period.',
-    JSON.stringify({ sourceName: name, legend: compactLegendSource(content) }),
+    JSON.stringify({ sourceName: name, legend: compactLegendSource(content, maxSourceChars) }),
   ].join('\n\n');
 }
 

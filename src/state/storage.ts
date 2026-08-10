@@ -4,7 +4,21 @@ import {
   DEFAULT_QUESTIONNAIRE_AI_SETTINGS,
   INITIAL_QUESTIONNAIRE_STATE,
 } from '../questionnaires/types';
-import { isAIProviderId } from '../questionnaires/providerCatalog';
+import {
+  DEFAULT_AI_PROVIDER_ID,
+  getProviderDefinition,
+  isAIProviderId,
+} from '../questionnaires/providerCatalog';
+
+const MIN_PROVIDER_TIMEOUT_MS = 5_000;
+const MAX_PROVIDER_TIMEOUT_MS = 90_000;
+
+function normalizedTimeout(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider.timeoutMs;
+  }
+  return Math.min(MAX_PROVIDER_TIMEOUT_MS, Math.max(MIN_PROVIDER_TIMEOUT_MS, Math.round(value)));
+}
 
 export interface StorageAdapter {
   get(): Promise<AppState>;
@@ -25,7 +39,9 @@ export class ExtensionStorageAdapter implements StorageAdapter {
       return { ...INITIAL_STATE };
     }
 
-    return this.migrate(result[this.key]);
+    const migrated = this.migrate(result[this.key]);
+    await chrome.storage.local.set({ [this.key]: migrated });
+    return migrated;
   }
 
   async set(state: AppState): Promise<void> {
@@ -44,12 +60,14 @@ export class ExtensionStorageAdapter implements StorageAdapter {
     await chrome.storage.local.remove(this.key);
   }
 
-  private migrate(state: any): AppState {
-    if (!state.schemaVersion || state.schemaVersion < 1) {
-      return { ...INITIAL_STATE, ...state, schemaVersion: 1 };
-    }
+  private migrate(persistedState: any): AppState {
+    const state = {
+      ...INITIAL_STATE,
+      ...persistedState,
+      schemaVersion: 1,
+    };
 
-    if (!state.manualActions) {
+    if (!Array.isArray(state.manualActions)) {
       state.manualActions = [];
     }
 
@@ -74,7 +92,11 @@ export class ExtensionStorageAdapter implements StorageAdapter {
     const persistedProvider = state.questionnaires?.settings?.provider;
     const providerType = isAIProviderId(persistedProvider?.type)
       ? persistedProvider.type
-      : DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider.type;
+      : DEFAULT_AI_PROVIDER_ID;
+    const providerDefinition = getProviderDefinition(providerType);
+    const persistedModelId = typeof persistedProvider?.modelId === 'string'
+      ? persistedProvider.modelId.trim()
+      : '';
     state.questionnaires = {
       ...INITIAL_QUESTIONNAIRE_STATE,
       ...state.questionnaires,
@@ -85,9 +107,10 @@ export class ExtensionStorageAdapter implements StorageAdapter {
           ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider,
           ...persistedProvider,
           type: providerType,
-          modelId: isAIProviderId(persistedProvider?.type) && typeof persistedProvider.modelId === 'string'
-            ? persistedProvider.modelId
-            : DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider.modelId,
+          modelId: isAIProviderId(persistedProvider?.type) && persistedModelId
+            ? persistedModelId
+            : providerDefinition.defaultModel,
+          timeoutMs: normalizedTimeout(persistedProvider?.timeoutMs),
         },
         confidence: {
           ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.confidence,
