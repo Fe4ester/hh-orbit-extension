@@ -584,60 +584,44 @@ export class StateStore {
 
     const profile = profileId ? this.state.profiles[profileId] : undefined;
 
-    this.state.vacancyQueue = materializeVacanciesHelper(
-      this.state.vacancyQueue,
-      filteredCards,
-      profileId,
-      profile
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: materializeVacanciesHelper(
+        this.state.vacancyQueue,
+        filteredCards,
+        profileId,
+        profile
+      ),
+    });
   }
 
   async clearVacancyQueue(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = clearVacancyQueueHelper();
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({ vacancyQueue: clearVacancyQueueHelper() });
   }
 
   async markVacancyQueued(vacancyId: string): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = markVacancyQueuedHelper(
-      this.state.vacancyQueue,
-      vacancyId
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: markVacancyQueuedHelper(this.state.vacancyQueue, vacancyId),
+    });
   }
 
   async markVacancyProcessed(vacancyId: string): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = markVacancyProcessedHelper(
-      this.state.vacancyQueue,
-      vacancyId
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: markVacancyProcessedHelper(this.state.vacancyQueue, vacancyId),
+    });
   }
 
   async markVacancySkipped(vacancyId: string): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = markVacancySkippedHelper(
-      this.state.vacancyQueue,
-      vacancyId
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: markVacancySkippedHelper(this.state.vacancyQueue, vacancyId),
+    });
   }
 
   // Vacancy detail preflight methods
@@ -645,28 +629,23 @@ export class StateStore {
   async setVacancyDetailObservation(observation: VacancyDetailObservation): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.liveMode = setVacancyDetailObservation(this.state.liveMode, observation);
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      liveMode: setVacancyDetailObservation(this.state.liveMode, observation),
+    });
   }
 
   async setPreflightClassification(classification: PreflightClassification): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.liveMode = setPreflightClassification(this.state.liveMode, classification);
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      liveMode: setPreflightClassification(this.state.liveMode, classification),
+    });
   }
 
   async clearPreflightState(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.liveMode = clearPreflightState(this.state.liveMode);
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({ liveMode: clearPreflightState(this.state.liveMode) });
   }
 
   // Apply attempt methods
@@ -676,22 +655,15 @@ export class StateStore {
   ): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.applyAttempts = recordLocalApplyAttemptHelper(
-      this.state.applyAttempts,
-      attempt
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      applyAttempts: recordLocalApplyAttemptHelper(this.state.applyAttempts, attempt),
+    });
   }
 
   async clearApplyAttempts(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.applyAttempts = clearApplyAttemptsHelper();
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({ applyAttempts: clearApplyAttemptsHelper() });
   }
 
   // Manual actions

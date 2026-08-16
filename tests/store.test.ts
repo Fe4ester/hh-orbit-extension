@@ -111,6 +111,41 @@ describe('StateStore', () => {
     });
   });
 
+  describe('state change broadcast', () => {
+    it('fires onStateChange for recordLocalApplyAttempt', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.recordLocalApplyAttempt({
+        vacancyId: 'vacancy_1',
+        outcome: 'applied',
+        message: 'ok',
+      });
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(store.getState().applyAttempts).toHaveLength(1);
+    });
+
+    it('fires onStateChange for vacancy queue mutations', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.markVacancyProcessed('vacancy_1');
+      await store.clearVacancyQueue();
+
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+    });
+
+    it('fires onStateChange for clearApplyAttempts', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.clearApplyAttempts();
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('questionnaires', () => {
     it('updates nested provider settings without dropping defaults', async () => {
       await store.updateQuestionnaireSettings({
