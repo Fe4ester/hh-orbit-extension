@@ -766,15 +766,16 @@ export class StateStore {
   async cleanSkipList(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
     const now = Date.now();
+    const previousLength = this.state.skipList.length;
     const validEntries = this.state.skipList.filter(entry => entry.expiresAt > now);
 
-    if (validEntries.length < this.state.skipList.length) {
+    if (validEntries.length < previousLength) {
       await this.updateState({
         skipList: validEntries,
       });
 
       FileLogger.log('service_worker', 'info', 'Cleaned skip list', {
-        removed: this.state.skipList.length - validEntries.length,
+        removed: previousLength - validEntries.length,
         remaining: validEntries.length,
       });
     }
