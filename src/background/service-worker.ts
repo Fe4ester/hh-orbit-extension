@@ -2673,14 +2673,20 @@ async function broadcastNotifications() {
   broadcastNotificationsUnsafe();
 }
 
-// Clear expired notifications periodically
-setInterval(() => {
+// Periodic maintenance via chrome.alarms: a top-level setInterval dies when
+// the MV3 service worker is unloaded (~30s idle), alarms survive it.
+const MAINTENANCE_ALARM = 'orbit-maintenance';
+
+chrome.alarms.create(MAINTENANCE_ALARM, { periodInMinutes: 0.5 });
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== MAINTENANCE_ALARM) return;
   void (async () => {
     await ensureStoreReady();
     store.getNotificationManager().clearExpired();
     await broadcastNotifications();
   })();
-}, 5000);
+});
 
 // Live mode tab listeners
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {

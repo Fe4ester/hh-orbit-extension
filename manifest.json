@@ -4,6 +4,7 @@
   "version": "1.0.3",
   "description": "Browser-first HH.ru auto-apply extension",
   "permissions": [
+    "alarms",
     "storage",
     "unlimitedStorage",
     "tabs",
