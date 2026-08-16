@@ -205,4 +205,134 @@ describe('HostedAIProvider', () => {
     });
     await expect(provider.testConnection()).resolves.toEqual({ available: false, message: 'API-ключ не принят провайдером' });
   });
+
+  it('requires an API key for hosted providers at construction time', () => {
+    expect(() => new HostedAIProvider({
+      providerId: 'anthropic', modelId: 'claude-sonnet-4-6', timeoutMs: 1_000, temperature: 0,
+    })).toThrow('API-ключ');
+  });
+
+  it('uses the OpenAI-compatible contract and bearer auth for DeepSeek', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ data: [{ id: 'deepseek-chat' }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'deepseek', modelId: 'deepseek-chat', apiKey: 'ds-secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await expect(provider.listModels()).resolves.toContain('deepseek-chat');
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.deepseek.com/models');
+    expect(new Headers(fetchImpl.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer ds-secret');
+  });
+
+  it('lists Anthropic models with dedicated auth headers', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      data: [{ id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' }],
+    }));
+    const provider = new HostedAIProvider({
+      providerId: 'anthropic', modelId: 'claude-sonnet-4-6', apiKey: 'anthropic-secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await expect(provider.listModelDetails()).resolves.toMatchObject([
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    ]);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.anthropic.com/v1/models');
+    const headers = new Headers(fetchImpl.mock.calls[0][1].headers);
+    expect(headers.get('x-api-key')).toBe('anthropic-secret');
+    expect(headers.get('anthropic-version')).toBe('2023-06-01');
+    expect(headers.get('Authorization')).toBeNull();
+  });
+
+  it('routes a custom OpenAI-compatible gateway and allows a missing API key', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ data: [{ id: 'local-model' }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'custom_openai', customBaseUrl: 'https://gateway.example.com/v1',
+      modelId: 'local-model', timeoutMs: 1_000, temperature: 0, fetchImpl,
+    });
+
+    await expect(provider.listModels()).resolves.toEqual(['local-model']);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://gateway.example.com/v1/models');
+    expect(new Headers(fetchImpl.mock.calls[0][1].headers).get('Authorization')).toBeNull();
+  });
+
+  it('sends OpenRouter attribution headers', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ data: [{ id: 'openrouter/free' }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'openrouter', modelId: 'openrouter/free', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await provider.listModels();
+    const headers = new Headers(fetchImpl.mock.calls[0][1].headers);
+    expect(headers.get('HTTP-Referer')).toBe('https://hh-orbit.local');
+    expect(headers.get('X-OpenRouter-Title')).toBe('HH Orbit');
+  });
+
+  it('marks zero-priced models as free', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      data: [{ id: 'vendor/free-model', pricing: { prompt: '0', completion: '0' } }],
+    }));
+    const provider = new HostedAIProvider({
+      providerId: 'openrouter', modelId: 'vendor/free-model', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await expect(provider.listModelDetails()).resolves.toMatchObject([
+      { id: 'vendor/free-model', free: true },
+    ]);
+  });
+
+  it('falls back to the catalog models when the live list is empty', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ models: [] }));
+    const provider = new HostedAIProvider({
+      providerId: 'gemini', modelId: 'gemini-3.6-flash', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    const ids = await provider.listModels();
+    expect(ids).toContain('gemini-3.6-flash');
+    expect(ids.length).toBeGreaterThan(0);
+  });
+
+  it('reports a healthy connection with the live model count', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ data: [{ id: 'm1' }, { id: 'm2' }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'groq', modelId: 'm1', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+
+    await expect(provider.testConnection()).resolves.toEqual({
+      available: true,
+      message: 'Подключение работает · моделей: 2',
+    });
+  });
+
+  it('maps rate limiting to a user-facing message', async () => {
+    const provider = new HostedAIProvider({
+      providerId: 'groq', modelId: 'model', apiKey: 'secret', timeoutMs: 1_000, temperature: 0,
+      fetchImpl: vi.fn().mockResolvedValue(json({ error: { message: 'quota' } }, 429)),
+    });
+
+    await expect(provider.testConnection()).resolves.toEqual({
+      available: false,
+      message: 'Лимит провайдера исчерпан. Повторите позже или выберите другую модель',
+    });
+  });
+
+  it('aborts a hanging request after the configured timeout', async () => {
+    const fetchImpl = vi.fn(
+      (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError'))
+          );
+        })
+    );
+    const provider = new HostedAIProvider({
+      providerId: 'groq', modelId: 'model', apiKey: 'secret',
+      timeoutMs: 25, temperature: 0, fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await expect(provider.listModels()).rejects.toThrow('не ответил');
+  });
 });
