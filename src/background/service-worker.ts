@@ -2685,6 +2685,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     await ensureStoreReady();
     store.getNotificationManager().clearExpired();
     await broadcastNotifications();
+    await store.pruneOldRecords();
   })();
 });
 

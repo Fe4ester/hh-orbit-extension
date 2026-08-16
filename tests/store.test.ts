@@ -146,6 +146,54 @@ describe('StateStore', () => {
     });
   });
 
+  describe('pruneOldRecords', () => {
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+    it('removes attempts, events, applyAttempts, manualActions older than maxAge', async () => {
+      const now = Date.now();
+      const old = now - THIRTY_DAYS_MS - 1000;
+
+      await store.updateState({
+        analytics: {
+          ...store.getState().analytics,
+          attempts: [
+            { id: 'a-old', outcome: 'SUCCESS' as any, createdAt: old, source: 'local' },
+            { id: 'a-new', outcome: 'SUCCESS' as any, createdAt: now, source: 'local' },
+          ],
+          events: [
+            { id: 'e-old', type: 'x', timestamp: old },
+            { id: 'e-new', type: 'x', timestamp: now },
+          ],
+        },
+        applyAttempts: [
+          { id: 'aa-old', vacancyId: 'v1', outcome: 'applied', message: '', createdAt: old },
+          { id: 'aa-new', vacancyId: 'v2', outcome: 'applied', message: '', createdAt: now },
+        ] as any,
+        manualActions: [
+          { id: 'ma-old', type: 'test', vacancyId: 'v1', createdAt: old, status: 'pending', reasonCode: 'x' },
+          { id: 'ma-new', type: 'test', vacancyId: 'v2', createdAt: now, status: 'pending', reasonCode: 'x' },
+        ] as any,
+      });
+
+      await store.pruneOldRecords();
+
+      const state = store.getState();
+      expect(state.analytics.attempts.map(a => a.id)).toEqual(['a-new']);
+      expect(state.analytics.events.map(e => e.id)).toEqual(['e-new']);
+      expect(state.applyAttempts.map(a => a.id)).toEqual(['aa-new']);
+      expect(state.manualActions.map(a => a.id)).toEqual(['ma-new']);
+    });
+
+    it('does not call updateState (no-op) when nothing is old enough to prune', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.pruneOldRecords();
+
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+  });
+
   describe('questionnaires', () => {
     it('updates nested provider settings without dropping defaults', async () => {
       await store.updateQuestionnaireSettings({

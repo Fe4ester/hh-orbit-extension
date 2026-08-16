@@ -781,6 +781,33 @@ export class StateStore {
     }
   }
 
+  async pruneOldRecords(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const cutoff = Date.now() - maxAgeMs;
+
+    const attempts = this.state.analytics.attempts.filter(a => a.createdAt > cutoff);
+    const events = this.state.analytics.events.filter(e => e.timestamp > cutoff);
+    const applyAttempts = this.state.applyAttempts.filter(a => a.createdAt > cutoff);
+    const manualActions = this.state.manualActions.filter(a => a.createdAt > cutoff);
+
+    const removed =
+      (this.state.analytics.attempts.length - attempts.length) +
+      (this.state.analytics.events.length - events.length) +
+      (this.state.applyAttempts.length - applyAttempts.length) +
+      (this.state.manualActions.length - manualActions.length);
+
+    if (removed === 0) return;
+
+    await this.updateState({
+      analytics: { ...this.state.analytics, attempts, events },
+      applyAttempts,
+      manualActions,
+    });
+
+    FileLogger.log('service_worker', 'info', 'Pruned old records', { removed, maxAgeMs });
+  }
+
   async updateSettings(
     patch: Partial<AppState['settings']>
   ): Promise<void> {
