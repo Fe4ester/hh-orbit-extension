@@ -77,6 +77,80 @@ describe('ExtensionStorageAdapter', () => {
     expect(state.schemaVersion).toBe(1);
   });
 
+  it('normalizes a removed local provider while migrating an old schema', async () => {
+    vi.mocked(chrome.storage.local.get).mockResolvedValue({
+      app_state: {
+        ...INITIAL_STATE,
+        schemaVersion: 0,
+        questionnaires: {
+          settings: {
+            provider: { type: 'local_runtime', modelId: 'legacy-local-model', timeoutMs: 180_000 },
+          },
+          queue: [],
+        },
+      },
+    } as any);
+
+    const state = await adapter.get();
+    expect(state.questionnaires.settings.provider).toMatchObject({
+      type: 'openrouter',
+      modelId: 'openrouter/free',
+      timeoutMs: 90_000,
+    });
+    expect(chrome.storage.local.set).toHaveBeenCalledWith({ app_state: state });
+  });
+
+  it('should add questionnaire defaults to existing state', async () => {
+    const { questionnaires: _questionnaires, ...legacyState } = INITIAL_STATE;
+    vi.mocked(chrome.storage.local.get).mockResolvedValue({
+      app_state: legacyState,
+    } as any);
+
+    const state = await adapter.get();
+    expect(state.questionnaires.settings.provider.type).toBe('openrouter');
+    expect(state.questionnaires.settings.provider.modelId).toBe('openrouter/free');
+    expect(state.questionnaires.queue).toEqual([]);
+  });
+
+  it('should preserve persisted provider settings', async () => {
+    vi.mocked(chrome.storage.local.get).mockResolvedValue({
+      app_state: {
+        ...INITIAL_STATE,
+        questionnaires: {
+          settings: {
+            provider: { type: 'groq', modelId: 'openai/gpt-oss-120b', timeoutMs: 60_000 },
+          },
+          queue: [],
+        },
+      },
+    } as any);
+
+    const state = await adapter.get();
+    expect(state.questionnaires.settings.provider.type).toBe('groq');
+    expect(state.questionnaires.settings.provider.modelId).toBe('openai/gpt-oss-120b');
+    expect(state.questionnaires.settings.provider.timeoutMs).toBe(60_000);
+    expect(state.questionnaires.settings.requireReview).toBe(true);
+    expect(state.questionnaires.settings.context.resumeFacts).toEqual([]);
+  });
+
+  it('migrates unsupported legacy providers to the default hosted provider', async () => {
+    vi.mocked(chrome.storage.local.get).mockResolvedValue({
+      app_state: {
+        ...INITIAL_STATE,
+        questionnaires: {
+          settings: { provider: { type: 'unsupported_provider', modelId: 'old-model' } },
+          queue: [],
+        },
+      },
+    } as any);
+
+    const state = await adapter.get();
+    expect(state.questionnaires.settings.provider).toMatchObject({
+      type: 'openrouter',
+      modelId: 'openrouter/free',
+    });
+  });
+
   it('should handle missing chrome API gracefully', async () => {
     const originalChrome = global.chrome;
     // @ts-ignore

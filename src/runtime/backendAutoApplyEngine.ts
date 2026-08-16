@@ -649,7 +649,9 @@ export class BackendAutoApplyEngine {
             vacancyId,
             vacancyTitle: nextVacancy?.title || `Vacancy ${vacancyId}`,
             company: nextVacancy?.company,
-            url: nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
+            url: preflight.questionnaireUrl
+              ? new URL(preflight.questionnaireUrl, 'https://hh.ru').toString()
+              : nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
             profileId: state.activeProfileId || undefined,
             status: 'pending',
             reasonCode: preflight.requiresTest ? 'test_required' : 'questionnaire_required',

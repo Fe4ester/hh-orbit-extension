@@ -10,6 +10,8 @@ import {
 } from '../src/state/selectors';
 import { RuntimeSettingsPanel } from '../src/components/RuntimeSettingsPanel';
 import { ManualActionsPanel } from '../src/components/ManualActionsPanel';
+import { QuestionnairePanel } from '../src/components/QuestionnairePanel';
+import { selectPendingManualQuestionnaires } from '../src/questionnaires';
 import { ProfileEditor } from '../src/components/ProfileEditor';
 import { SelectMenu } from '../src/components/SelectMenu';
 import { formatResumeLabel } from '../src/components/resumeLabel';
@@ -147,6 +149,10 @@ export const App: React.FC = () => {
   const profileVm = getPrimaryProfileViewModel(state);
   const controlsVm = getPrimaryControlsState(state);
   const manualActions = getUserFacingManualActions(state);
+  const backendQuestionnaireActions = selectPendingManualQuestionnaires(
+    state.manualActions,
+    state.questionnaires.queue
+  );
   const todaySuccess = getTodayLocalApplyStats(state).succeeded;
   const editingProfile = editingProfileId ? state.profiles[editingProfileId] : undefined;
   const isRunning = runtimeVm.runtimeState === 'RUNNING';
@@ -282,7 +288,26 @@ export const App: React.FC = () => {
 
         <section className={`panel manual-panel${manualActions.length > 0 ? ' has-actions' : ''}`} aria-labelledby="manual-heading">
           <div className="section-heading"><span className="section-icon"><Icon name="alert" /></span><h2 id="manual-heading">Ручные действия</h2>{manualActions.length > 0 && <span className="section-count">{manualActions.length}</span>}</div>
-          <ManualActionsPanel actions={manualActions} onOpen={(url) => url && chrome.tabs.create({ url, active: true })} onDone={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DONE', id })} onDismiss={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DISMISS', id })} />
+          <ManualActionsPanel
+            actions={manualActions}
+            onOpen={(url) => url && chrome.tabs.create({ url, active: true })}
+            onDone={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DONE', id })}
+            onDismiss={(id) => chrome.runtime.sendMessage({ type: 'MANUAL_ACTION_DISMISS', id })}
+            onPrepareAI={state.mode === 'backend'
+              ? (id) => chrome.runtime.sendMessage({
+                  type: 'QUESTIONNAIRE_PREPARE_MANUAL',
+                  actionId: id,
+                })
+              : undefined}
+          />
+          {state.mode === 'backend' && (
+            <QuestionnairePanel
+              state={state.questionnaires}
+              selectedResume={resumeVm.selectedResume}
+              manualQuestionnaireCount={backendQuestionnaireActions.length}
+              onPatch={(patch) => chrome.runtime.sendMessage({ type: 'UPDATE_QUESTIONNAIRE_SETTINGS', patch })}
+            />
+          )}
         </section>
       </main>
 

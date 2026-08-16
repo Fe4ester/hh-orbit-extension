@@ -110,4 +110,118 @@ describe('StateStore', () => {
       expect(newStore.getState().activeProfileId).toBe('persistent-id');
     });
   });
+
+  describe('state change broadcast', () => {
+    it('fires onStateChange for recordLocalApplyAttempt', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.recordLocalApplyAttempt({
+        vacancyId: 'vacancy_1',
+        outcome: 'applied',
+        message: 'ok',
+      });
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(store.getState().applyAttempts).toHaveLength(1);
+    });
+
+    it('fires onStateChange for vacancy queue mutations', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.markVacancyProcessed('vacancy_1');
+      await store.clearVacancyQueue();
+
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+    });
+
+    it('fires onStateChange for clearApplyAttempts', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.clearApplyAttempts();
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('pruneOldRecords', () => {
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+    it('removes attempts, events, applyAttempts, manualActions older than maxAge', async () => {
+      const now = Date.now();
+      const old = now - THIRTY_DAYS_MS - 1000;
+
+      await store.updateState({
+        analytics: {
+          ...store.getState().analytics,
+          attempts: [
+            { id: 'a-old', outcome: 'SUCCESS' as any, createdAt: old, source: 'local' },
+            { id: 'a-new', outcome: 'SUCCESS' as any, createdAt: now, source: 'local' },
+          ],
+          events: [
+            { id: 'e-old', type: 'x', timestamp: old },
+            { id: 'e-new', type: 'x', timestamp: now },
+          ],
+        },
+        applyAttempts: [
+          { id: 'aa-old', vacancyId: 'v1', outcome: 'applied', message: '', createdAt: old },
+          { id: 'aa-new', vacancyId: 'v2', outcome: 'applied', message: '', createdAt: now },
+        ] as any,
+        manualActions: [
+          { id: 'ma-old', type: 'test', vacancyId: 'v1', createdAt: old, status: 'pending', reasonCode: 'x' },
+          { id: 'ma-new', type: 'test', vacancyId: 'v2', createdAt: now, status: 'pending', reasonCode: 'x' },
+        ] as any,
+      });
+
+      await store.pruneOldRecords();
+
+      const state = store.getState();
+      expect(state.analytics.attempts.map(a => a.id)).toEqual(['a-new']);
+      expect(state.analytics.events.map(e => e.id)).toEqual(['e-new']);
+      expect(state.applyAttempts.map(a => a.id)).toEqual(['aa-new']);
+      expect(state.manualActions.map(a => a.id)).toEqual(['ma-new']);
+    });
+
+    it('does not call updateState (no-op) when nothing is old enough to prune', async () => {
+      const onStateChange = vi.fn();
+      store.setOnStateChange(onStateChange);
+
+      await store.pruneOldRecords();
+
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('questionnaires', () => {
+    it('updates nested provider settings without dropping defaults', async () => {
+      await store.updateQuestionnaireSettings({
+        provider: { modelId: 'openrouter/free' },
+        context: { resumeFacts: ['TypeScript, 5 years'] },
+      });
+
+      const settings = store.getState().questionnaires.settings;
+      expect(settings.provider.modelId).toBe('openrouter/free');
+      expect(settings.provider.type).toBe('openrouter');
+      expect(settings.context.resumeFacts).toEqual(['TypeScript, 5 years']);
+      expect(settings.context.savedAnswers).toEqual([]);
+    });
+
+    it('deduplicates questionnaires by id', async () => {
+      const questionnaire = {
+        id: 'questionnaire_1',
+        vacancyId: 'vacancy_1',
+        source: 'hh_live' as const,
+        detectedAt: 1,
+        questions: [],
+      };
+
+      await store.enqueueQuestionnaire(questionnaire);
+      await store.enqueueQuestionnaire({ ...questionnaire, detectedAt: 2 });
+
+      expect(store.getState().questionnaires.queue).toHaveLength(1);
+      expect(store.getState().questionnaires.queue[0].questionnaire.detectedAt).toBe(2);
+    });
+  });
 });

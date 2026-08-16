@@ -47,6 +47,16 @@ import type {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';
+import type {
+  Questionnaire,
+  QuestionnaireAISettingsPatch,
+  QuestionnaireQueueItem,
+  QuestionnaireStatus,
+} from '../questionnaires/types';
+import {
+  enqueueQuestionnaire,
+  transitionQuestionnaire,
+} from '../questionnaires/queue';
 
 export class StateStore {
   private state: AppState | null = null;
@@ -541,18 +551,14 @@ export class StateStore {
     return this.notificationManager;
   }
 
-  // Vacancy queue methods
-
   async materializeVacanciesFromSearch(
     cards: ParsedVacancyCard[],
     profileId: string | null
   ): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    // Clean expired skip list entries first
     await this.cleanSkipList();
 
-    // Get already processed vacancy IDs
     const processedIds = new Set(
       this.state.vacancyQueue
         .filter(v => v.status === 'processed')
@@ -560,7 +566,6 @@ export class StateStore {
         .filter(Boolean)
     );
 
-    // Filter out vacancies in skip list or already processed
     const filteredCards = cards.filter(card => {
       if (!card.vacancyId) return true;
 
@@ -577,63 +582,46 @@ export class StateStore {
       return true;
     });
 
-    // Get profile for keyword prefilter
     const profile = profileId ? this.state.profiles[profileId] : undefined;
 
-    this.state.vacancyQueue = materializeVacanciesHelper(
-      this.state.vacancyQueue,
-      filteredCards,
-      profileId,
-      profile
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: materializeVacanciesHelper(
+        this.state.vacancyQueue,
+        filteredCards,
+        profileId,
+        profile
+      ),
+    });
   }
 
   async clearVacancyQueue(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = clearVacancyQueueHelper();
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({ vacancyQueue: clearVacancyQueueHelper() });
   }
 
   async markVacancyQueued(vacancyId: string): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = markVacancyQueuedHelper(
-      this.state.vacancyQueue,
-      vacancyId
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: markVacancyQueuedHelper(this.state.vacancyQueue, vacancyId),
+    });
   }
 
   async markVacancyProcessed(vacancyId: string): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = markVacancyProcessedHelper(
-      this.state.vacancyQueue,
-      vacancyId
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: markVacancyProcessedHelper(this.state.vacancyQueue, vacancyId),
+    });
   }
 
   async markVacancySkipped(vacancyId: string): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.vacancyQueue = markVacancySkippedHelper(
-      this.state.vacancyQueue,
-      vacancyId
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      vacancyQueue: markVacancySkippedHelper(this.state.vacancyQueue, vacancyId),
+    });
   }
 
   // Vacancy detail preflight methods
@@ -641,28 +629,23 @@ export class StateStore {
   async setVacancyDetailObservation(observation: VacancyDetailObservation): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.liveMode = setVacancyDetailObservation(this.state.liveMode, observation);
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      liveMode: setVacancyDetailObservation(this.state.liveMode, observation),
+    });
   }
 
   async setPreflightClassification(classification: PreflightClassification): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.liveMode = setPreflightClassification(this.state.liveMode, classification);
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      liveMode: setPreflightClassification(this.state.liveMode, classification),
+    });
   }
 
   async clearPreflightState(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.liveMode = clearPreflightState(this.state.liveMode);
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({ liveMode: clearPreflightState(this.state.liveMode) });
   }
 
   // Apply attempt methods
@@ -672,22 +655,15 @@ export class StateStore {
   ): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.applyAttempts = recordLocalApplyAttemptHelper(
-      this.state.applyAttempts,
-      attempt
-    );
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({
+      applyAttempts: recordLocalApplyAttemptHelper(this.state.applyAttempts, attempt),
+    });
   }
 
   async clearApplyAttempts(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
 
-    this.state.applyAttempts = clearApplyAttemptsHelper();
-
-    await this.storage.set(this.state);
-    this.notifyListeners();
+    await this.updateState({ applyAttempts: clearApplyAttemptsHelper() });
   }
 
   // Manual actions
@@ -790,18 +766,46 @@ export class StateStore {
   async cleanSkipList(): Promise<void> {
     if (!this.state) throw new Error('Store not initialized');
     const now = Date.now();
+    const previousLength = this.state.skipList.length;
     const validEntries = this.state.skipList.filter(entry => entry.expiresAt > now);
 
-    if (validEntries.length < this.state.skipList.length) {
+    if (validEntries.length < previousLength) {
       await this.updateState({
         skipList: validEntries,
       });
 
       FileLogger.log('service_worker', 'info', 'Cleaned skip list', {
-        removed: this.state.skipList.length - validEntries.length,
+        removed: previousLength - validEntries.length,
         remaining: validEntries.length,
       });
     }
+  }
+
+  async pruneOldRecords(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const cutoff = Date.now() - maxAgeMs;
+
+    const attempts = this.state.analytics.attempts.filter(a => a.createdAt > cutoff);
+    const events = this.state.analytics.events.filter(e => e.timestamp > cutoff);
+    const applyAttempts = this.state.applyAttempts.filter(a => a.createdAt > cutoff);
+    const manualActions = this.state.manualActions.filter(a => a.createdAt > cutoff);
+
+    const removed =
+      (this.state.analytics.attempts.length - attempts.length) +
+      (this.state.analytics.events.length - events.length) +
+      (this.state.applyAttempts.length - applyAttempts.length) +
+      (this.state.manualActions.length - manualActions.length);
+
+    if (removed === 0) return;
+
+    await this.updateState({
+      analytics: { ...this.state.analytics, attempts, events },
+      applyAttempts,
+      manualActions,
+    });
+
+    FileLogger.log('service_worker', 'info', 'Pruned old records', { removed, maxAgeMs });
   }
 
   async updateSettings(
@@ -813,6 +817,109 @@ export class StateStore {
       settings: {
         ...this.state.settings,
         ...patch,
+      },
+    });
+  }
+
+  async updateQuestionnaireSettings(
+    patch: QuestionnaireAISettingsPatch
+  ): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const current = this.state.questionnaires.settings;
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        settings: {
+          ...current,
+          ...patch,
+          provider: {
+            ...current.provider,
+            ...patch.provider,
+          },
+          confidence: {
+            ...current.confidence,
+            ...patch.confidence,
+          },
+          context: {
+            ...current.context,
+            ...patch.context,
+          },
+        },
+      },
+    });
+  }
+
+  async enqueueQuestionnaire(questionnaire: Questionnaire): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const existingIndex = this.state.questionnaires.queue.findIndex(
+      item => item.questionnaire.id === questionnaire.id
+    );
+    const queue = [...this.state.questionnaires.queue];
+    const nextItem = enqueueQuestionnaire(questionnaire);
+
+    if (existingIndex >= 0) {
+      queue[existingIndex] = {
+        ...queue[existingIndex],
+        questionnaire,
+        updatedAt: Date.now(),
+      };
+    } else {
+      queue.push(nextItem);
+    }
+
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        queue,
+      },
+    });
+  }
+
+  async updateQuestionnaireItem(item: QuestionnaireQueueItem): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const queue = this.state.questionnaires.queue.map(current =>
+      current.questionnaire.id === item.questionnaire.id ? item : current
+    );
+    if (!queue.some(current => current.questionnaire.id === item.questionnaire.id)) {
+      queue.push(item);
+    }
+
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        queue,
+      },
+    });
+  }
+
+  async transitionQuestionnaire(
+    questionnaireId: string,
+    status: QuestionnaireStatus
+  ): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    const item = this.state.questionnaires.queue.find(
+      current => current.questionnaire.id === questionnaireId
+    );
+    if (!item) throw new Error(`Questionnaire ${questionnaireId} not found`);
+    await this.updateQuestionnaireItem(transitionQuestionnaire(item, status));
+  }
+
+  async setQuestionnaireProcessing(
+    processing: boolean,
+    error: string | null = null
+  ): Promise<void> {
+    if (!this.state) throw new Error('Store not initialized');
+
+    await this.updateState({
+      questionnaires: {
+        ...this.state.questionnaires,
+        processing,
+        lastProcessedAt: processing ? this.state.questionnaires.lastProcessedAt : Date.now(),
+        lastError: error,
       },
     });
   }
