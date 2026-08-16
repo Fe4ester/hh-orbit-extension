@@ -15,9 +15,17 @@ export interface LogEntry {
 }
 
 const STORAGE_KEY = 'extension_logs';
-const MAX_LOGS = 10000; // Rotate after 10k entries
+const MAX_LOGS = 2000; // Rotate after 2k entries
+const BATCH_SIZE = 50;
+const FLUSH_INTERVAL_MS = 2000;
 
 export class FileLogger {
+  private static pending: LogEntry[] = [];
+  private static flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Chains flushes so concurrent callers can't interleave a
+  // storage.get/set read-modify-write and clobber each other's entries.
+  private static flushChain: Promise<void> = Promise.resolve();
+
   static async log(
     source: LogEntry['source'],
     level: LogEntry['level'],
@@ -34,11 +42,41 @@ export class FileLogger {
       screenshot,
     };
 
+    this.pending.push(entry);
+
+    if (this.pending.length >= BATCH_SIZE) {
+      await this.flush();
+      return;
+    }
+
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        void this.flush();
+      }, FLUSH_INTERVAL_MS);
+    }
+  }
+
+  static flush(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    this.flushChain = this.flushChain.then(() => this.flushPending());
+    return this.flushChain;
+  }
+
+  private static async flushPending(): Promise<void> {
+    if (this.pending.length === 0) return;
+
+    const batch = this.pending;
+    this.pending = [];
+
     try {
       const result = await chrome.storage.local.get(STORAGE_KEY);
       const logs: LogEntry[] = result[STORAGE_KEY] || [];
 
-      logs.push(entry);
+      logs.push(...batch);
 
       // Rotation: keep only last MAX_LOGS
       if (logs.length > MAX_LOGS) {
@@ -61,6 +99,8 @@ export class FileLogger {
   }
 
   static async readLogs(limit?: number): Promise<LogEntry[]> {
+    await this.flush();
+
     try {
       const result = await chrome.storage.local.get(STORAGE_KEY);
       const logs: LogEntry[] = result[STORAGE_KEY] || [];
