@@ -14,6 +14,7 @@ import {
 } from '../questionnaires/backendQuestionnaireForm';
 import type { AnswerPlan } from '../questionnaires/types';
 import { parseSearchResults } from '../live/searchResultsParser';
+import { getXsrfCookie } from '../utils/hhCookies';
 
 export interface APIVacancy {
   id: string;
@@ -483,9 +484,9 @@ export class BackendHTTPClient {
 
       this.log('[BackendHTTP] preflightApply response', { status: response.status, ok: response.ok });
 
-      const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
-      if (xsrfCookie?.value) {
-        this.xsrfToken = xsrfCookie.value;
+      const xsrfToken = await getXsrfCookie();
+      if (xsrfToken) {
+        this.xsrfToken = xsrfToken;
         this.log('[BackendHTTP] XSRF token extracted', { hasXsrfToken: true });
       } else {
         this.log('[BackendHTTP] WARNING: No XSRF token found in cookies');
@@ -776,9 +777,9 @@ export class BackendHTTPClient {
     }
 
     try {
-      const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
-      if (xsrfCookie?.value) {
-        this.xsrfToken = xsrfCookie.value;
+      const xsrfToken = await getXsrfCookie();
+      if (xsrfToken) {
+        this.xsrfToken = xsrfToken;
         this.log('[BackendHTTP] XSRF token extracted', {
           hasXsrfToken: true,
         });
@@ -1016,7 +1017,7 @@ export class BackendHTTPClient {
 
     try {
       const hhtoken = await chrome.cookies.get({ url: 'https://hh.ru', name: 'hhtoken' });
-      const xsrf = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
+      const xsrf = await getXsrfCookie();
 
       this.log('[BackendHTTP] checkAuth cookies', { hasHhtoken: !!hhtoken, hasXsrf: !!xsrf });
 
