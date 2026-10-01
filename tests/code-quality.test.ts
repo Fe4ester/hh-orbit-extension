@@ -45,4 +45,13 @@ describe('Code quality checks', () => {
 
     expect(violations).toHaveLength(0);
   });
+
+  it.each([
+    'backendAutoApplyEngine.ts',
+    'liveAutoApplyEngineV2.ts',
+  ])('%s does not write runtimeState through updateState', (filename) => {
+    const content = readFileSync(join(__dirname, '../src/runtime', filename), 'utf-8');
+
+    expect(content).not.toMatch(/updateState\s*\(\s*\{\s*runtimeState\s*:/);
+  });
 });

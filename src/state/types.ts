@@ -49,6 +49,7 @@ export type RuntimeEvent =
   | 'MANUAL_ACTION_REQUIRED'
   | 'NO_MORE_VACANCIES'
   | 'FAILURE'
+  | 'ENGINE_INTERRUPTED'
   | 'RESET';
 
 export type NotificationLevel = 'info' | 'success' | 'warn' | 'error';

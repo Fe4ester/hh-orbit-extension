@@ -36,6 +36,7 @@ const acquisitionService = new AcquisitionService({
 });
 
 async function onStoreReady(): Promise<void> {
+  await store.reconcileInterruptedRuntime();
   FileLogger.log('service_worker', 'info', 'Store initialized');
 
   store.setOnStateChange(() => {

@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StateStore } from '../src/state/store';
 import { InMemoryStorageAdapter, type StorageAdapter } from '../src/state/storage';
-import { INITIAL_STATE, type AppState } from '../src/state/types';
+import { INITIAL_STATE, type AppState, type RuntimeState } from '../src/state/types';
 import { FileLogger } from '../src/utils/fileLogger';
 
 class ControlledStorage implements StorageAdapter {
@@ -26,6 +26,33 @@ class ControlledStorage implements StorageAdapter {
         reject,
       });
     });
+  }
+
+  async clear(): Promise<void> {
+    this.persisted = INITIAL_STATE;
+  }
+}
+
+class RecordingStorage implements StorageAdapter {
+  persisted: AppState;
+  writes: AppState[] = [];
+  failNextWrite = false;
+
+  constructor(initial: AppState) {
+    this.persisted = initial;
+  }
+
+  async get(): Promise<AppState> {
+    return this.persisted;
+  }
+
+  async set(state: AppState): Promise<void> {
+    if (this.failNextWrite) {
+      this.failNextWrite = false;
+      throw new Error('storage failed');
+    }
+    this.writes.push(state);
+    this.persisted = state;
   }
 
   async clear(): Promise<void> {
@@ -329,5 +356,133 @@ describe('StateStore write ordering', () => {
     await next;
     expect(store.getState().mode).toBe('live');
     expect(storage.persisted.mode).toBe('live');
+  });
+});
+
+describe('StateStore interrupted runtime reconciliation', () => {
+  const persistentState = (runtimeState: RuntimeState): AppState => ({
+    ...INITIAL_STATE,
+    runtimeState,
+    profileOrder: ['existing'],
+    runtime: {
+      ...INITIAL_STATE.runtime,
+      currentPhase: 'apply',
+      processed: 7,
+      success: 3,
+      manualActions: 2,
+      pausedReason: 'old_reason',
+      lastEventAt: 100,
+    },
+    vacancyQueue: [{
+      vacancyId: 'vacancy-1',
+      url: 'https://hh.ru/vacancy/1',
+      title: 'Vacancy',
+      source: 'search_dom',
+      discoveredAt: 10,
+      profileId: 'profile-1',
+      status: 'queued',
+    }],
+    applyAttempts: [{
+      id: 'attempt-1',
+      vacancyId: 'vacancy-1',
+      outcome: 'success',
+      message: 'saved',
+      createdAt: 11,
+    }],
+    manualActions: [{
+      id: 'manual-1',
+      type: 'manual_review',
+      vacancyId: 'vacancy-1',
+      createdAt: 12,
+      status: 'pending',
+      reasonCode: 'review',
+    }],
+  });
+
+  it.each(['STARTING', 'RUNNING', 'STOPPING'] as const)(
+    'recovers persisted %s to STOPPED and preserves durable work',
+    async (runtimeState) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(200);
+      const storage = new RecordingStorage(persistentState(runtimeState));
+      const store = new StateStore(storage);
+      const log = vi.spyOn(FileLogger, 'log').mockResolvedValue(undefined);
+
+      try {
+        await store.init();
+        const result = await store.reconcileInterruptedRuntime();
+
+        expect(result).toEqual({ recovered: true, previousState: runtimeState });
+        expect(storage.writes).toHaveLength(1);
+        expect(store.getState()).toMatchObject({
+          runtimeState: 'STOPPED',
+          runtime: {
+            currentPhase: 'idle',
+            processed: 7,
+            success: 3,
+            manualActions: 2,
+            pausedReason: null,
+            lastEventAt: 200,
+          },
+          vacancyQueue: persistentState(runtimeState).vacancyQueue,
+          applyAttempts: persistentState(runtimeState).applyAttempts,
+          manualActions: persistentState(runtimeState).manualActions,
+        });
+        expect(storage.persisted).toEqual(store.getState());
+        expect(log).toHaveBeenCalledWith('service_worker', 'warn', expect.any(String), {
+          previousState: runtimeState,
+          newState: 'STOPPED',
+          reason: 'worker_restart',
+        });
+      } finally {
+        log.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.each([
+    'IDLE',
+    'STOPPED',
+    'ERROR',
+    'PAUSED_BY_USER',
+    'PAUSED_MANUAL_ACTION',
+    'PAUSED_NO_VACANCIES',
+  ] as const)('keeps stable persisted %s without a write', async (runtimeState) => {
+    const storage = new RecordingStorage(persistentState(runtimeState));
+    const store = new StateStore(storage);
+    await store.init();
+
+    await expect(store.reconcileInterruptedRuntime()).resolves.toEqual({ recovered: false });
+    expect(storage.writes).toHaveLength(0);
+    expect(store.getState()).toEqual(persistentState(runtimeState));
+  });
+
+  it('does not publish failed recovery to memory and allows retry', async () => {
+    const storage = new RecordingStorage(persistentState('RUNNING'));
+    const store = new StateStore(storage);
+    await store.init();
+    storage.failNextWrite = true;
+
+    await expect(store.reconcileInterruptedRuntime()).rejects.toThrow('storage failed');
+    expect(store.getState().runtimeState).toBe('RUNNING');
+    expect(storage.persisted.runtimeState).toBe('RUNNING');
+
+    await expect(store.reconcileInterruptedRuntime()).resolves.toEqual({
+      recovered: true,
+      previousState: 'RUNNING',
+    });
+    expect(store.getState().runtimeState).toBe('STOPPED');
+  });
+
+  it('permits START_REQUESTED after recovery', async () => {
+    const storage = new RecordingStorage(persistentState('STARTING'));
+    const store = new StateStore(storage);
+    await store.init();
+
+    await store.reconcileInterruptedRuntime();
+    await store.dispatch('START_REQUESTED');
+
+    expect(store.getState().runtimeState).toBe('STARTING');
   });
 });

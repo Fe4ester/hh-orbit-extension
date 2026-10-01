@@ -100,6 +100,43 @@ export class StateStore {
     }));
   }
 
+  async reconcileInterruptedRuntime(): Promise<{
+    recovered: boolean;
+    previousState?: AppState['runtimeState'];
+  }> {
+    let previousState: AppState['runtimeState'] | undefined;
+
+    await this.changeState((current) => {
+      if (!this.fsm.canTransition(current.runtimeState, 'ENGINE_INTERRUPTED')) {
+        return current;
+      }
+
+      previousState = current.runtimeState;
+      return {
+        ...current,
+        runtimeState: this.fsm.transition(current.runtimeState, 'ENGINE_INTERRUPTED'),
+        runtime: {
+          ...current.runtime,
+          currentPhase: 'idle',
+          pausedReason: null,
+          lastEventAt: Date.now(),
+        },
+      };
+    });
+
+    if (!previousState) {
+      return { recovered: false };
+    }
+
+    await FileLogger.log('service_worker', 'warn', 'Interrupted runtime recovered after worker restart', {
+      previousState,
+      newState: 'STOPPED',
+      reason: 'worker_restart',
+    });
+
+    return { recovered: true, previousState };
+  }
+
   async updateState(partial: Partial<AppState>): Promise<void> {
     await this.changeState((current) => ({ ...current, ...partial }));
   }

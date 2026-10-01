@@ -162,7 +162,7 @@ export class LiveAutoApplyEngineV2 {
   private async stopInternal(): Promise<void> {
     const currentState = this.deps.store.getState().runtimeState;
 
-    if (currentState === 'STOPPED') {
+    if (currentState === 'STOPPED' || currentState === 'IDLE') {
       this.running = false;
       this.stopRequested = false;
       await this.deps.store.setRuntimePhase('idle', null);
@@ -172,7 +172,7 @@ export class LiveAutoApplyEngineV2 {
     if (currentState === 'ERROR') {
       this.running = false;
       this.stopRequested = false;
-      await this.deps.store.updateState({ runtimeState: 'IDLE' });
+      await this.deps.store.dispatch('RESET');
       await this.deps.store.setRuntimePhase('idle', null);
       return;
     }
@@ -180,8 +180,10 @@ export class LiveAutoApplyEngineV2 {
     if (['RUNNING', 'PAUSED_BY_USER', 'PAUSED_MANUAL_ACTION', 'PAUSED_NO_VACANCIES'].includes(currentState)) {
       await this.deps.store.dispatch('STOP_REQUESTED');
       await this.deps.store.dispatch('STOP_CONFIRMED');
-    } else {
-      await this.deps.store.updateState({ runtimeState: 'STOPPED' });
+    } else if (currentState === 'STARTING') {
+      await this.deps.store.dispatch('ENGINE_INTERRUPTED');
+    } else if (currentState === 'STOPPING') {
+      await this.deps.store.dispatch('STOP_CONFIRMED');
     }
 
     this.running = false;

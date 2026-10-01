@@ -71,6 +71,14 @@ describe('RuntimeFSM', () => {
       expect(fsm.canTransition('STOPPED', 'RESET')).toBe(true);
       expect(fsm.transition('STOPPED', 'RESET')).toBe('IDLE');
     });
+
+    it.each(['STARTING', 'RUNNING', 'STOPPING'] as const)(
+      'should allow ENGINE_INTERRUPTED from %s',
+      (state) => {
+        expect(fsm.canTransition(state, 'ENGINE_INTERRUPTED')).toBe(true);
+        expect(fsm.transition(state, 'ENGINE_INTERRUPTED')).toBe('STOPPED');
+      }
+    );
   });
 
   describe('invalid transitions', () => {
@@ -92,6 +100,18 @@ describe('RuntimeFSM', () => {
     it('should block RESUME_REQUESTED from RUNNING', () => {
       expect(fsm.canTransition('RUNNING', 'RESUME_REQUESTED')).toBe(false);
       expect(() => fsm.transition('RUNNING', 'RESUME_REQUESTED')).toThrow();
+    });
+
+    it.each([
+      'IDLE',
+      'STOPPED',
+      'ERROR',
+      'PAUSED_BY_USER',
+      'PAUSED_MANUAL_ACTION',
+      'PAUSED_NO_VACANCIES',
+    ] as const)('should block ENGINE_INTERRUPTED from %s', (state) => {
+      expect(fsm.canTransition(state, 'ENGINE_INTERRUPTED')).toBe(false);
+      expect(() => fsm.transition(state, 'ENGINE_INTERRUPTED')).toThrow();
     });
   });
 

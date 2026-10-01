@@ -132,26 +132,17 @@ export class BackendAutoApplyEngine {
     if (currentState === 'ERROR') {
       this.running = false;
       this.stopRequested = false;
-      await this.deps.store.updateState({ runtimeState: 'IDLE' });
+      await this.deps.store.dispatch('RESET');
       return;
     }
 
-    if (['RUNNING', 'PAUSED_BY_USER', 'PAUSED_MANUAL_ACTION', 'PAUSED_NO_VACANCIES', 'STARTING'].includes(currentState)) {
-      try {
-        if (currentState === 'STARTING') {
-          await this.deps.store.dispatch('START_CONFIRMED');
-        }
-
-        await this.deps.store.dispatch('STOP_REQUESTED');
-        await this.deps.store.dispatch('STOP_CONFIRMED');
-      } catch (error) {
-        FileLogger.log('service_worker', 'error', 'Dispatch failed, forcing STOPPED', {
-          error: (error as Error).message
-        });
-        await this.deps.store.updateState({ runtimeState: 'STOPPED' });
-      }
+    if (currentState === 'STARTING') {
+      await this.deps.store.dispatch('ENGINE_INTERRUPTED');
+    } else if (currentState === 'STOPPING') {
+      await this.deps.store.dispatch('STOP_CONFIRMED');
     } else {
-      await this.deps.store.updateState({ runtimeState: 'STOPPED' });
+      await this.deps.store.dispatch('STOP_REQUESTED');
+      await this.deps.store.dispatch('STOP_CONFIRMED');
     }
 
     this.running = false;

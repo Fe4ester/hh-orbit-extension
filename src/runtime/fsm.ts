@@ -42,6 +42,10 @@ const TRANSITIONS: Record<RuntimeEvent, Transition> = {
     from: ['STARTING', 'RUNNING', 'STOPPING'],
     to: 'ERROR',
   },
+  ENGINE_INTERRUPTED: {
+    from: ['STARTING', 'RUNNING', 'STOPPING'],
+    to: 'STOPPED',
+  },
   RESET: {
     from: ['ERROR', 'STOPPED'],
     to: 'IDLE',
