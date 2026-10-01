@@ -1,8 +1,37 @@
 // State store tests
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StateStore } from '../src/state/store';
-import { InMemoryStorageAdapter } from '../src/state/storage';
+import { InMemoryStorageAdapter, type StorageAdapter } from '../src/state/storage';
+import { INITIAL_STATE, type AppState } from '../src/state/types';
+import { FileLogger } from '../src/utils/fileLogger';
+
+class ControlledStorage implements StorageAdapter {
+  persisted: AppState;
+  writes: Array<{ state: AppState; resolve: () => void; reject: (error: Error) => void }> = [];
+
+  constructor(initial: AppState = { ...INITIAL_STATE, profileOrder: ['existing'] }) {
+    this.persisted = initial;
+  }
+
+  async get(): Promise<AppState> {
+    return this.persisted;
+  }
+
+  set(state: AppState): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.writes.push({
+        state,
+        resolve: () => { this.persisted = state; resolve(); },
+        reject,
+      });
+    });
+  }
+
+  async clear(): Promise<void> {
+    this.persisted = INITIAL_STATE;
+  }
+}
 
 describe('StateStore', () => {
   let store: StateStore;
@@ -109,5 +138,196 @@ describe('StateStore', () => {
 
       expect(newStore.getState().activeProfileId).toBe('persistent-id');
     });
+  });
+});
+
+describe('StateStore write ordering', () => {
+  it('persists independent parallel updates in call order from the last saved state', async () => {
+    const storage = new ControlledStorage();
+    const store = new StateStore(storage);
+    await store.init();
+
+    const first = store.updateState({ mode: 'live' });
+    const second = store.updateState({ selectedResumeHash: 'resume-1' });
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    expect(storage.writes[0].state.mode).toBe('live');
+    expect(storage.writes[0].state.selectedResumeHash).toBeNull();
+
+    storage.writes[0].resolve();
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(2));
+    expect(storage.writes[1].state.mode).toBe('live');
+    expect(storage.writes[1].state.selectedResumeHash).toBe('resume-1');
+    storage.writes[1].resolve();
+    await Promise.all([first, second]);
+
+    expect(store.getState()).toMatchObject({ mode: 'live', selectedResumeHash: 'resume-1' });
+    expect(storage.persisted).toMatchObject({ mode: 'live', selectedResumeHash: 'resume-1' });
+  });
+
+  it('keeps memory and listeners unchanged on failure, then runs the next write', async () => {
+    const storage = new ControlledStorage();
+    const store = new StateStore(storage);
+    await store.init();
+    const listener = vi.fn();
+    const onStateChange = vi.fn();
+    store.subscribe(listener);
+    store.setOnStateChange(onStateChange);
+
+    const first = store.updateState({ mode: 'live' });
+    const firstError = expect(first).rejects.toThrow('storage failed');
+    const second = store.updateState({ selectedResumeHash: 'resume-1' });
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    storage.writes[0].reject(new Error('storage failed'));
+    await firstError;
+    expect(store.getState()).toMatchObject({ mode: 'backend', selectedResumeHash: null });
+    expect(listener).not.toHaveBeenCalled();
+    expect(onStateChange).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(2));
+    expect(storage.writes[1].state.mode).toBe('backend');
+    storage.writes[1].resolve();
+    await second;
+    expect(store.getState()).toMatchObject({ mode: 'backend', selectedResumeHash: 'resume-1' });
+    expect(storage.persisted).toMatchObject({ mode: 'backend', selectedResumeHash: 'resume-1' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies once per successful write in persisted order', async () => {
+    const storage = new ControlledStorage();
+    const store = new StateStore(storage);
+    await store.init();
+    const events: string[] = [];
+    store.subscribe((state) => events.push(`listener:${state.mode}:${state.selectedResumeHash}`));
+    store.setOnStateChange(() => events.push(`broadcast:${store.getState().mode}:${store.getState().selectedResumeHash}`));
+
+    const first = store.updateState({ mode: 'live' });
+    const second = store.updateState({ selectedResumeHash: 'resume-1' });
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    expect(events).toEqual([]);
+    storage.writes[0].resolve();
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(2));
+    expect(events).toEqual(['listener:live:null', 'broadcast:live:null']);
+    storage.writes[1].resolve();
+    await Promise.all([first, second]);
+    expect(events).toEqual([
+      'listener:live:null', 'broadcast:live:null',
+      'listener:live:resume-1', 'broadcast:live:resume-1',
+    ]);
+  });
+
+  it('serializes a former direct queue write with updateState', async () => {
+    const vacancy = {
+      vacancyId: '100001', url: 'https://hh.ru/vacancy/100001', title: 'Test',
+      source: 'search_dom' as const, discoveredAt: 1, profileId: null, status: 'discovered' as const,
+    };
+    const storage = new ControlledStorage({ ...INITIAL_STATE, profileOrder: ['existing'], vacancyQueue: [vacancy] });
+    const store = new StateStore(storage);
+    await store.init();
+
+    const first = store.markVacancyProcessed('100001');
+    const second = store.updateState({ selectedResumeHash: 'resume-1' });
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    storage.writes[0].resolve();
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(2));
+    expect(storage.writes[1].state.vacancyQueue[0].status).toBe('processed');
+    storage.writes[1].resolve();
+    await Promise.all([first, second]);
+    expect(store.getState().vacancyQueue[0].status).toBe('processed');
+    expect(storage.persisted).toMatchObject({ selectedResumeHash: 'resume-1' });
+    expect(storage.persisted.vacancyQueue[0].status).toBe('processed');
+  });
+
+  it('keeps search sync fields when a concurrent diff is saved', async () => {
+    const storage = new ControlledStorage();
+    const store = new StateStore(storage);
+    await store.init();
+    const url = 'https://hh.ru/search/vacancy?text=typescript';
+    const diff = { synced: true, mismatches: [] };
+
+    const sync = store.markSearchSynced(url, 'profile-1');
+    const saveDiff = store.setSearchSyncDiff(diff);
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    storage.writes[0].resolve();
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(2));
+    expect(storage.writes[1].state.liveMode).toMatchObject({
+      searchSyncStatus: 'synced',
+      lastAppliedSearchUrl: url,
+      lastAppliedProfileId: 'profile-1',
+      searchSyncDiff: diff,
+    });
+    storage.writes[1].resolve();
+    await Promise.all([sync, saveDiff]);
+    expect(store.getState().liveMode).toEqual(storage.persisted.liveMode);
+  });
+
+  it('removes processed vacancies without losing a concurrently added vacancy', async () => {
+    const processed = {
+      vacancyId: '100001', url: 'https://hh.ru/vacancy/100001', title: 'Processed',
+      source: 'search_dom' as const, discoveredAt: 1, profileId: null, status: 'processed' as const,
+    };
+    const storage = new ControlledStorage({ ...INITIAL_STATE, profileOrder: ['existing'], vacancyQueue: [processed] });
+    const store = new StateStore(storage);
+    await store.init();
+
+    const add = store.materializeVacanciesFromSearch([
+      { vacancyId: '100002', url: 'https://hh.ru/vacancy/100002', title: 'New' },
+    ], null);
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    const remove = store.removeProcessedVacancies();
+    expect(storage.writes).toHaveLength(1);
+    storage.writes[0].resolve();
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(2));
+    expect(storage.writes[1].state.vacancyQueue.map((item) => item.vacancyId)).toEqual(['100002']);
+    storage.writes[1].resolve();
+    await Promise.all([add, remove]);
+    expect(store.getState().vacancyQueue.map((item) => item.vacancyId)).toEqual(['100002']);
+    expect(storage.persisted.vacancyQueue.map((item) => item.vacancyId)).toEqual(['100002']);
+  });
+
+  it('keeps a committed write successful when callbacks throw', async () => {
+    const storage = new ControlledStorage();
+    const store = new StateStore(storage);
+    await store.init();
+    const log = vi.spyOn(FileLogger, 'log').mockResolvedValue(undefined);
+    const first = vi.fn(() => { throw new Error('listener failed'); });
+    const second = vi.fn();
+    const onStateChange = vi.fn(() => { throw new Error('broadcast failed'); });
+    store.subscribe(first);
+    store.subscribe(second);
+    store.setOnStateChange(onStateChange);
+
+    try {
+      const write = store.updateState({ mode: 'live' });
+      await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+      storage.writes[0].resolve();
+      await expect(write).resolves.toBeUndefined();
+      expect(store.getState().mode).toBe('live');
+      expect(storage.persisted.mode).toBe('live');
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith('service_worker', 'error', expect.stringContaining('listener'), expect.any(Object));
+      expect(log).toHaveBeenCalledWith('service_worker', 'error', expect.stringContaining('onStateChange'), expect.any(Object));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('continues the queue after a transform throws', async () => {
+    const storage = new ControlledStorage();
+    const store = new StateStore(storage);
+    await store.init();
+
+    const invalid = store.dispatch('STOP_REQUESTED');
+    const rejected = expect(invalid).rejects.toThrow('Invalid transition');
+    const next = store.updateState({ mode: 'live' });
+    await rejected;
+    await vi.waitFor(() => expect(storage.writes).toHaveLength(1));
+    expect(storage.writes[0].state.mode).toBe('live');
+    storage.writes[0].resolve();
+    await next;
+    expect(store.getState().mode).toBe('live');
+    expect(storage.persisted.mode).toBe('live');
   });
 });

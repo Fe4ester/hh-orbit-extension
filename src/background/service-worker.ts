@@ -1064,21 +1064,10 @@ async function ensureControlledTabForCurrentHHTab(options?: {
 
   // Set live mode active if not already
   if (!updatedState.liveMode.active) {
-    await store.updateState({
-      liveMode: {
-        ...updatedState.liveMode,
-        active: true,
-        controlledTabPurpose: purpose,
-      },
-    });
+    await store.setControlledTabPurpose(purpose, true);
   } else if (updatedState.liveMode.controlledTabPurpose !== purpose) {
     // Update purpose if changed
-    await store.updateState({
-      liveMode: {
-        ...updatedState.liveMode,
-        controlledTabPurpose: purpose,
-      },
-    });
+    await store.setControlledTabPurpose(purpose);
   }
 
   broadcastState();
@@ -1647,12 +1636,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               purpose = 'vacancy';
             }
 
-            await store.updateState({
-              liveMode: {
-                ...updatedState.liveMode,
-                controlledTabPurpose: purpose,
-              },
-            });
+            await store.setControlledTabPurpose(purpose);
 
             broadcastState();
             store.getNotificationManager().addToast('success', 'Live mode запущен на текущей вкладке');
@@ -1727,12 +1711,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             purpose = 'vacancy';
           }
 
-          await store.updateState({
-            liveMode: {
-              ...updatedState.liveMode,
-              controlledTabPurpose: purpose,
-            },
-          });
+          await store.setControlledTabPurpose(purpose);
 
           broadcastState();
           store.getNotificationManager().addToast('success', 'HH вкладка привязана');
@@ -2315,13 +2294,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                 await store.markSearchOutOfSync();
               }
 
-              // Store sync diff
-              await store.updateState({
-                liveMode: {
-                  ...state.liveMode,
-                  searchSyncDiff: syncDiff,
-                },
-              });
+              await store.setSearchSyncDiff(syncDiff);
 
             } catch (error) {
               FileLogger.log('service_worker', 'error', 'Failed to check search sync', { error: (error as Error).message });

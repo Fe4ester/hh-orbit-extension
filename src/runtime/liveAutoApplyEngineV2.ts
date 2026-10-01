@@ -262,8 +262,7 @@ export class LiveAutoApplyEngineV2 {
     const processedCount = currentState.vacancyQueue.filter(v => v.status === 'processed').length;
     if (processedCount > 0) {
       FileLogger.log('service_worker', 'info', 'Cleaning processed vacancies', { count: processedCount });
-      const cleanedQueue = currentState.vacancyQueue.filter(v => v.status !== 'processed');
-      await this.deps.store.updateState({ vacancyQueue: cleanedQueue });
+      await this.deps.store.removeProcessedVacancies();
     }
 
     // Check if we have discovered vacancies
@@ -283,13 +282,7 @@ export class LiveAutoApplyEngineV2 {
       const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
       if (acquisitionResult.success && acquisitionResult.currentUrl) {
-        const currentState = this.deps.store.getState();
-        await this.deps.store.updateState({
-          liveMode: {
-            ...currentState.liveMode,
-            lastAppliedSearchUrl: acquisitionResult.currentUrl
-          }
-        });
+        await this.deps.store.setLastAppliedSearchUrl(acquisitionResult.currentUrl);
         FileLogger.log('service_worker', 'info', 'Search URL saved', {
           url: redactSensitiveUrl(acquisitionResult.currentUrl),
         });
@@ -342,7 +335,7 @@ export class LiveAutoApplyEngineV2 {
             FileLogger.log('service_worker', 'info', 'No available vacancies, trying next page');
 
             // Очищаем очередь
-            await this.deps.store.updateState({ vacancyQueue: [] });
+            await this.deps.store.clearVacancyQueue();
 
             // Проверяем следующую страницу
             const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
@@ -367,13 +360,7 @@ export class LiveAutoApplyEngineV2 {
                 });
 
                 if (nextPageAcquisition.currentUrl) {
-                  const currentState = this.deps.store.getState();
-                  await this.deps.store.updateState({
-                    liveMode: {
-                      ...currentState.liveMode,
-                      lastAppliedSearchUrl: nextPageAcquisition.currentUrl
-                    }
-                  });
+                  await this.deps.store.setLastAppliedSearchUrl(nextPageAcquisition.currentUrl);
                 }
 
                 // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии (не просто вакансии в очереди)
@@ -473,13 +460,7 @@ export class LiveAutoApplyEngineV2 {
               });
 
               if (nextPageAcquisition.currentUrl) {
-                const currentState = this.deps.store.getState();
-                await this.deps.store.updateState({
-                  liveMode: {
-                    ...currentState.liveMode,
-                    lastAppliedSearchUrl: nextPageAcquisition.currentUrl
-                  }
-                });
+                await this.deps.store.setLastAppliedSearchUrl(nextPageAcquisition.currentUrl);
               }
 
               // Continue to process vacancies
@@ -592,7 +573,7 @@ export class LiveAutoApplyEngineV2 {
             FileLogger.log('service_worker', 'info', 'No available vacancies after skip, trying next page');
 
             // Очистить очередь
-            await this.deps.store.updateState({ vacancyQueue: [] });
+            await this.deps.store.clearVacancyQueue();
 
             // Проверить следующую страницу
             const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
@@ -617,13 +598,7 @@ export class LiveAutoApplyEngineV2 {
                 });
 
                 if (nextPageAcquisition.currentUrl) {
-                  const currentState = this.deps.store.getState();
-                  await this.deps.store.updateState({
-                    liveMode: {
-                      ...currentState.liveMode,
-                      lastAppliedSearchUrl: nextPageAcquisition.currentUrl
-                    }
-                  });
+                  await this.deps.store.setLastAppliedSearchUrl(nextPageAcquisition.currentUrl);
                 }
 
                 // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии
@@ -1363,21 +1338,11 @@ export class LiveAutoApplyEngineV2 {
             await chrome.tabs.update(tab.id!, { url: searchUrl, active: true });
             await this.waitForPageLoad(tab.id!);
 
-            await this.deps.store.updateState({
-              liveMode: {
-                ...this.deps.store.getState().liveMode,
-                lastAppliedSearchUrl: searchUrl
-              }
-            });
+            await this.deps.store.setLastAppliedSearchUrl(searchUrl);
             return { success: true, tabId: tab.id };
           }
 
-          await this.deps.store.updateState({
-            liveMode: {
-              ...this.deps.store.getState().liveMode,
-              lastAppliedSearchUrl: url
-            }
-          });
+          await this.deps.store.setLastAppliedSearchUrl(url);
           return { success: true, tabId: tab.id };
         }
       } catch {
@@ -1412,24 +1377,14 @@ export class LiveAutoApplyEngineV2 {
 
       if (tabs[0].url?.includes('hh.ru')) {
         await this.deps.store.bindControlledTab(tabId, windowId!, tabs[0].url);
-        await this.deps.store.updateState({
-          liveMode: {
-            ...this.deps.store.getState().liveMode,
-            lastAppliedSearchUrl: tabs[0].url
-          }
-        });
+        await this.deps.store.setLastAppliedSearchUrl(tabs[0].url);
         return { success: true, tabId };
       }
 
       await chrome.tabs.update(tabId, { url: searchUrl, active: true });
       await this.waitForPageLoad(tabId);
       await this.deps.store.bindControlledTab(tabId, windowId!, searchUrl);
-      await this.deps.store.updateState({
-        liveMode: {
-          ...this.deps.store.getState().liveMode,
-          lastAppliedSearchUrl: searchUrl
-        }
-      });
+      await this.deps.store.setLastAppliedSearchUrl(searchUrl);
       return { success: true, tabId };
     }
 
@@ -1440,12 +1395,7 @@ export class LiveAutoApplyEngineV2 {
 
     await this.waitForPageLoad(newTab.id);
     await this.deps.store.bindControlledTab(newTab.id, newTab.windowId, searchUrl);
-    await this.deps.store.updateState({
-      liveMode: {
-        ...this.deps.store.getState().liveMode,
-        lastAppliedSearchUrl: searchUrl
-      }
-    });
+    await this.deps.store.setLastAppliedSearchUrl(searchUrl);
     return { success: true, tabId: newTab.id };
   }
 
