@@ -6,7 +6,15 @@
  */
 
 import type { Profile } from '../state/types';
+import {
+  buildBackendQuestionnaireBody,
+  extractBackendPageText,
+  parseBackendQuestionnaireForm,
+  type BackendQuestionnaireFormContract,
+} from '../questionnaires/backendQuestionnaireForm';
+import type { AnswerPlan } from '../questionnaires/types';
 import { parseSearchResults } from '../live/searchResultsParser';
+import { getXsrfCookie } from '../utils/hhCookies';
 
 export interface APIVacancy {
   id: string;
@@ -169,6 +177,124 @@ export class BackendHTTPClient {
 
   constructor(deps: { log: (...args: any[]) => void }) {
     this.log = deps.log;
+  }
+
+  private isTrustedHHURL(value: string): boolean {
+    try {
+      const url = new URL(value, 'https://hh.ru');
+      return url.protocol === 'https:'
+        && (url.hostname === 'hh.ru' || url.hostname.endsWith('.hh.ru'));
+    } catch {
+      return false;
+    }
+  }
+
+  private questionnaireURL(vacancyId: string, candidateUrl?: string): string {
+    if (
+      candidateUrl?.includes('/applicant/vacancy_response')
+      && this.isTrustedHHURL(candidateUrl)
+    ) {
+      return new URL(candidateUrl, 'https://hh.ru').toString();
+    }
+    const params = new URLSearchParams({
+      vacancyId,
+      startedWithQuestion: 'false',
+    });
+    return `https://hh.ru/applicant/vacancy_response?${params.toString()}`;
+  }
+
+  async fetchQuestionnaireForm(
+    vacancyId: string,
+    candidateUrl?: string
+  ): Promise<BackendQuestionnaireFormContract> {
+    const url = this.questionnaireURL(vacancyId, candidateUrl);
+    this.log('[BackendHTTP] fetchQuestionnaireForm', { vacancyId, url });
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'Referer': `https://hh.ru/vacancy/${vacancyId}`,
+      },
+    });
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('Сессия HH истекла — войдите снова');
+    }
+    if (!response.ok) {
+      throw new Error(`HH не вернул анкету: HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    this.log('[BackendHTTP] questionnaire HTML received', {
+      vacancyId,
+      htmlLength: html.length,
+      hasTaskFields: /name=["']task_/i.test(html),
+    });
+    return parseBackendQuestionnaireForm(html, response.url || url, vacancyId);
+  }
+
+  async submitQuestionnaire(
+    vacancyId: string,
+    resumeHash: string,
+    answerPlan: AnswerPlan,
+    candidateUrl?: string
+  ): Promise<ApplyResponse> {
+    const contract = await this.fetchQuestionnaireForm(vacancyId, candidateUrl);
+    if (!this.isTrustedHHURL(contract.actionUrl)) {
+      throw new Error('HH вернул недоверенный адрес отправки анкеты');
+    }
+    const body = buildBackendQuestionnaireBody(contract, answerPlan, resumeHash);
+    await this.ensureXsrfToken();
+    const headers: Record<string, string> = {
+      'Accept': 'application/json,text/html;q=0.9',
+      'Referer': contract.sourceUrl,
+      'X-Requested-With': 'XMLHttpRequest',
+    };
+    if (this.xsrfToken) headers['X-Xsrftoken'] = this.xsrfToken;
+
+    this.log('[BackendHTTP] submitQuestionnaire', {
+      vacancyId,
+      url: contract.actionUrl,
+      hasXsrfToken: Boolean(this.xsrfToken),
+      bodyKeys: Array.from(body.keys()),
+      answerCount: answerPlan.answers.length,
+    });
+    const response = await fetch(contract.actionUrl, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body,
+    });
+    if (response.status === 401 || response.status === 403) {
+      return {
+        success: false,
+        outcome: 'auth_required',
+        message: 'Authorization required',
+      };
+    }
+    if (response.status >= 500) {
+      return {
+        success: false,
+        outcome: 'server_error',
+        message: `Server error: ${response.status}`,
+      };
+    }
+    if (response.ok) return this.normalizeApplyHTTPResponse(response);
+    const structuredError = await this.tryNormalizeErrorResponse(response);
+    return structuredError ?? this.normalizeApplyHTTPResponse(response);
+  }
+
+  async fetchResumeContext(url: string): Promise<string> {
+    if (!this.isTrustedHHURL(url)) throw new Error('Недоверенный адрес резюме');
+    const response = await fetch(url, {
+      credentials: 'include',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'Referer': 'https://hh.ru/applicant/resumes',
+      },
+    });
+    if (!response.ok) throw new Error(`HH не вернул резюме: HTTP ${response.status}`);
+    return extractBackendPageText(await response.text()).slice(0, 50_000);
   }
 
   /**
@@ -335,6 +461,7 @@ export class BackendHTTPClient {
     requiresCoverLetter?: boolean;
     alreadyApplied?: boolean;
     letterMaxLength?: number;
+    questionnaireUrl?: string;
   }> {
     const url = `${this.popupURL}?vacancyId=${vacancyId}&resumeHash=${resumeHash}&lux=true&alreadyApplied=false&isTest=no&withoutTest=no`;
 
@@ -357,9 +484,9 @@ export class BackendHTTPClient {
 
       this.log('[BackendHTTP] preflightApply response', { status: response.status, ok: response.ok });
 
-      const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
-      if (xsrfCookie?.value) {
-        this.xsrfToken = xsrfCookie.value;
+      const xsrfToken = await getXsrfCookie();
+      if (xsrfToken) {
+        this.xsrfToken = xsrfToken;
         this.log('[BackendHTTP] XSRF token extracted', { hasXsrfToken: true });
       } else {
         this.log('[BackendHTTP] WARNING: No XSRF token found in cookies');
@@ -385,20 +512,40 @@ export class BackendHTTPClient {
       }
 
       if (data.type === 'testRequired' || data.type === 'test-required') {
-        return { canProceed: false, requiresTest: true, reason: 'test_required' };
+        return {
+          canProceed: false,
+          requiresTest: true,
+          reason: 'test_required',
+          questionnaireUrl: data.redirect_uri,
+        };
       }
 
       if (data.type === 'questionnaireRequired') {
-        return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
+        return {
+          canProceed: false,
+          requiresQuestionnaire: true,
+          reason: 'questionnaire_required',
+          questionnaireUrl: data.redirect_uri,
+        };
       }
 
       if (data.type === 'quickResponse') {
         if (data.responseStatus?.test?.hasTests === true) {
-          return { canProceed: false, requiresTest: true, reason: 'test_required' };
+          return {
+            canProceed: false,
+            requiresTest: true,
+            reason: 'test_required',
+            questionnaireUrl: data.redirect_uri,
+          };
         }
 
         if (hasQuickResponseQuestionnaireBlocker(data)) {
-          return { canProceed: false, requiresQuestionnaire: true, reason: 'questionnaire_required' };
+          return {
+            canProceed: false,
+            requiresQuestionnaire: true,
+            reason: 'questionnaire_required',
+            questionnaireUrl: data.redirect_uri,
+          };
         }
 
         if (data.responseStatus?.shortVacancy?.['@responseLetterRequired'] === true) {
@@ -590,7 +737,8 @@ export class BackendHTTPClient {
 
   private async tryNormalizeErrorResponse(response: Response): Promise<ApplyResponse | null> {
     try {
-      const data = await response.json();
+      const jsonResponse = typeof response.clone === 'function' ? response.clone() : response;
+      const data = await jsonResponse.json();
       const preview = getStructuredPreview(data);
       const summary = this.summarizeJSONResponse(data, response.status);
       this.log('[BackendHTTP] applyToVacancy error body', {
@@ -629,9 +777,9 @@ export class BackendHTTPClient {
     }
 
     try {
-      const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
-      if (xsrfCookie?.value) {
-        this.xsrfToken = xsrfCookie.value;
+      const xsrfToken = await getXsrfCookie();
+      if (xsrfToken) {
+        this.xsrfToken = xsrfToken;
         this.log('[BackendHTTP] XSRF token extracted', {
           hasXsrfToken: true,
         });
@@ -645,7 +793,8 @@ export class BackendHTTPClient {
 
   private async normalizeApplyHTTPResponse(response: Response): Promise<ApplyResponse> {
     try {
-      const data = await response.json();
+      const jsonResponse = typeof response.clone === 'function' ? response.clone() : response;
+      const data = await jsonResponse.json();
       const summary = this.summarizeJSONResponse(data, response.status);
 
       this.log('[BackendHTTP] applyToVacancy response body', {
@@ -868,7 +1017,7 @@ export class BackendHTTPClient {
 
     try {
       const hhtoken = await chrome.cookies.get({ url: 'https://hh.ru', name: 'hhtoken' });
-      const xsrf = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
+      const xsrf = await getXsrfCookie();
 
       this.log('[BackendHTTP] checkAuth cookies', { hasHhtoken: !!hhtoken, hasXsrf: !!xsrf });
 

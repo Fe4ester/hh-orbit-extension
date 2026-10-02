@@ -235,6 +235,7 @@ describe('BackendHTTPClient', () => {
         responseStatus: {
           test: { hasTests: true },
         },
+        redirect_uri: '/applicant/vacancy_response?vacancyId=123',
       }),
     });
 
@@ -243,6 +244,7 @@ describe('BackendHTTPClient', () => {
     expect(result.canProceed).toBe(false);
     expect(result.requiresTest).toBe(true);
     expect(result.reason).toBe('test_required');
+    expect(result.questionnaireUrl).toBe('/applicant/vacancy_response?vacancyId=123');
   });
 
   it('classifies quickResponse payload with questionnaire blocker as blocked', async () => {
@@ -627,5 +629,80 @@ describe('BackendHTTPClient', () => {
     );
     expect(JSON.stringify(result.diagnostics)).not.toContain('topic-1');
     expect(JSON.stringify(result.diagnostics)).not.toContain('neg-1');
+  });
+
+  it('fetches and submits a questionnaire through authenticated backend HTTP', async () => {
+    const html = `
+      <form name="vacancy_response" action="/applicant/vacancy_response">
+        <input type="hidden" name="_xsrf" value="fresh-form-token">
+        <input type="hidden" name="guid" value="guid-1">
+        <div data-qa="task-question">Ваш город?</div>
+        <textarea name="task_1_text" required></textarea>
+      </form>
+    `;
+    fetchMock
+      .mockResolvedValueOnce(new Response(html, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }))
+      .mockResolvedValueOnce(new Response(html, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: 'true' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    const contract = await client.fetchQuestionnaireForm('123');
+    const result = await client.submitQuestionnaire('123', 'resume-1', {
+      questionnaireId: contract.questionnaire.id,
+      providerId: 'local',
+      modelId: 'openrouter/free',
+      generatedAt: 1,
+      answers: [{
+        questionId: 'task_1',
+        text: 'Москва',
+        confidence: 1,
+        evidence: [{ source: 'user_instruction', reference: 'Проверено' }],
+        requiresReview: false,
+      }],
+    });
+
+    expect(result).toMatchObject({ success: true, outcome: 'success' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const submitOptions = fetchMock.mock.calls[2][1];
+    expect(submitOptions.method).toBe('POST');
+    expect(submitOptions.credentials).toBe('include');
+    expect(submitOptions.body).toBeInstanceOf(FormData);
+    expect(submitOptions.body.get('task_1_text')).toBe('Москва');
+    expect(submitOptions.body.get('resume_hash')).toBe('resume-1');
+  });
+
+  it('refuses a questionnaire form that redirects submission outside HH', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(`
+      <form name="vacancy_response" action="https://example.com/collect">
+        <div data-qa="task-question">Ваш город?</div>
+        <textarea name="task_1_text" required></textarea>
+      </form>
+    `, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    }));
+
+    await expect(client.submitQuestionnaire('123', 'resume-1', {
+      questionnaireId: 'hh_123_task_1',
+      providerId: 'local',
+      modelId: 'openrouter/free',
+      generatedAt: 1,
+      answers: [{
+        questionId: 'task_1',
+        text: 'Москва',
+        confidence: 1,
+        evidence: [{ source: 'user_instruction', reference: 'Проверено' }],
+        requiresReview: false,
+      }],
+    })).rejects.toThrow('недоверенный адрес');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

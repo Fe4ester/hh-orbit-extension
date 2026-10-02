@@ -57,6 +57,7 @@ export interface LiveEngineV2Deps {
   acquisitionService: AcquisitionService;
   sleep: (ms: number) => Promise<void>;
   log: (...args: any[]) => void;
+  onQuestionnaireDetected?: (tabId: number, vacancyId: string) => Promise<void>;
 }
 
 export class LiveAutoApplyEngineV2 {
@@ -992,9 +993,6 @@ export class LiveAutoApplyEngineV2 {
     }
   }
 
-  /**
-   * Step 1: Validate vacancy exists and is clickable
-   */
   private async validateVacancy(context: VacancyContext, tabId: number): Promise<{ valid: boolean; reason?: string }> {
     FileLogger.log('service_worker', 'info', 'Validating vacancy', { vacancyId: context.vacancy.vacancyId });
 
@@ -1023,9 +1021,6 @@ export class LiveAutoApplyEngineV2 {
     }
   }
 
-  /**
-   * Step 2: Click respond button with retry (max 3 attempts)
-   */
   private async clickWithRetry(context: VacancyContext, tabId: number): Promise<{ success: boolean }> {
     const maxClickAttempts = 3;
 
@@ -1071,9 +1066,6 @@ export class LiveAutoApplyEngineV2 {
     return { success: false };
   }
 
-  /**
-   * Step 3: Detect response type (modal/redirect/none)
-   */
   private async detectResponse(context: VacancyContext, tabId: number): Promise<'modal' | 'redirect' | 'unknown'> {
     FileLogger.log('service_worker', 'info', 'Detecting response type', { vacancyId: context.vacancy.vacancyId });
 
@@ -1308,6 +1300,17 @@ export class LiveAutoApplyEngineV2 {
       if (testCheck?.testRequired) {
         FileLogger.log('service_worker', 'info', 'Test detected', { vacancyId: context.vacancy.vacancyId });
 
+        if (this.deps.onQuestionnaireDetected) {
+          try {
+            await this.deps.onQuestionnaireDetected(tabId, context.vacancy.vacancyId || 'unknown');
+          } catch (error) {
+            FileLogger.log('service_worker', 'warn', 'Questionnaire capture failed', {
+              vacancyId: context.vacancy.vacancyId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
         await this.deps.store.createManualAction({
           type: 'questionnaire',
           vacancyId: context.vacancy.vacancyId,
@@ -1322,8 +1325,10 @@ export class LiveAutoApplyEngineV2 {
         // Add to skip list
         await this.deps.store.addToSkipList(context.vacancy.vacancyId || '', 24 * 60 * 60 * 1000, 'test');
 
-        // Go back to search page
-        await this.returnToSearchPage(tabId);
+        // Keep the questionnaire visible when the run will pause for manual review.
+        if (!this.deps.store.getState().settings.stopOnManualAction) {
+          await this.returnToSearchPage(tabId);
+        }
 
         return { outcome: 'test' };
       }

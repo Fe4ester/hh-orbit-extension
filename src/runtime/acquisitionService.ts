@@ -49,7 +49,6 @@ export class AcquisitionService {
       };
     }
 
-    // Get controlled tab
     const controlledTabId = state.liveMode.controlledTabId;
 
     if (!controlledTabId) {
@@ -66,7 +65,6 @@ export class AcquisitionService {
     }
 
     try {
-      // Check current URL first
       const tab = await chrome.tabs.get(controlledTabId);
       const currentUrl = tab.url || '';
       const isOnSearchPage = currentUrl.includes('/search/vacancy') || currentUrl.includes('/applicant/vacancy_search');
@@ -154,11 +152,9 @@ export class AcquisitionService {
         };
       }
 
-      // Wait for React to render vacancy cards
       FileLogger.log('service_worker', 'debug', 'Acquisition wait for render');
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Get HTML from content script
       FileLogger.log('service_worker', 'debug', 'Acquisition fetch html', { tabId: controlledTabId });
       const htmlResponse = await sendMessageWithTimeout(controlledTabId, { type: 'GET_HTML' }, 5000);
       const html = htmlResponse?.html;
@@ -177,7 +173,6 @@ export class AcquisitionService {
       }
       FileLogger.log('service_worker', 'debug', 'Acquisition html fetched', { length: html.length });
 
-      // Parse search results
       const cards = parseSearchResults(html);
       FileLogger.log('service_worker', 'info', 'Acquisition parsed', { cardsFound: cards.length });
 

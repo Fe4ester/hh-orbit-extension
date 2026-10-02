@@ -15,6 +15,7 @@ export interface BackendEngineDeps {
   httpClient: BackendHTTPClient;
   sleep: (ms: number) => Promise<void>;
   log: (...args: any[]) => void;
+  onRunCompleted?: () => Promise<void> | void;
 }
 
 export type AcquisitionOutcome =
@@ -138,6 +139,15 @@ export class BackendAutoApplyEngine {
         }
       } finally {
         if (startupError !== undefined) this.rejectPendingStart(startupError);
+        if (startupAccepted) {
+          try {
+            await this.deps.onRunCompleted?.();
+          } catch (error) {
+            FileLogger.log('service_worker', 'error', 'BackendEngine completion hook failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
     }
   }
@@ -696,7 +706,9 @@ export class BackendAutoApplyEngine {
             vacancyId,
             vacancyTitle: nextVacancy?.title || `Vacancy ${vacancyId}`,
             company: nextVacancy?.company,
-            url: nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
+            url: preflight.questionnaireUrl
+              ? new URL(preflight.questionnaireUrl, 'https://hh.ru').toString()
+              : nextVacancy?.url || `https://hh.ru/vacancy/${vacancyId}`,
             profileId: state.activeProfileId || undefined,
             status: 'pending',
             reasonCode: preflight.requiresTest ? 'test_required' : 'questionnaire_required',

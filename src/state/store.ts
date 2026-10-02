@@ -47,6 +47,16 @@ import type {
   VacancyDetailObservation,
   PreflightClassification,
 } from '../live/vacancyDetailParser';
+import type {
+  Questionnaire,
+  QuestionnaireAISettingsPatch,
+  QuestionnaireQueueItem,
+  QuestionnaireStatus,
+} from '../questionnaires/types';
+import {
+  enqueueQuestionnaire,
+  transitionQuestionnaire,
+} from '../questionnaires/queue';
 
 export class StateStore {
   private state: AppState | null = null;
@@ -491,8 +501,6 @@ export class StateStore {
     return this.notificationManager;
   }
 
-  // Vacancy queue methods
-
   async materializeVacanciesFromSearch(
     cards: ParsedVacancyCard[],
     profileId: string | null
@@ -689,12 +697,189 @@ export class StateStore {
     if (removed > 0) FileLogger.log('service_worker', 'info', 'Cleaned skip list', { removed, remaining });
   }
 
+  async pruneOldRecords(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+    const cutoff = Date.now() - maxAgeMs;
+    let removed = 0;
+    await this.changeState((current) => {
+      const attempts = current.analytics.attempts.filter((attempt) => attempt.createdAt > cutoff);
+      const events = current.analytics.events.filter((event) => event.timestamp > cutoff);
+      const applyAttempts = current.applyAttempts.filter((attempt) => attempt.createdAt > cutoff);
+      const manualActions = current.manualActions.filter((action) => action.createdAt > cutoff);
+      removed =
+        current.analytics.attempts.length - attempts.length +
+        current.analytics.events.length - events.length +
+        current.applyAttempts.length - applyAttempts.length +
+        current.manualActions.length - manualActions.length;
+      return removed === 0 ? current : {
+        ...current,
+        analytics: { ...current.analytics, attempts, events },
+        applyAttempts,
+        manualActions,
+      };
+    });
+    if (removed > 0) FileLogger.log('service_worker', 'info', 'Pruned old records', { removed, maxAgeMs });
+  }
+
   async updateSettings(
     patch: Partial<AppState['settings']>
   ): Promise<void> {
     await this.changeState((current) => ({
       ...current,
       settings: { ...current.settings, ...patch },
+    }));
+  }
+
+  async updateQuestionnaireSettings(
+    patch: QuestionnaireAISettingsPatch
+  ): Promise<void> {
+    await this.changeState((current) => {
+      const settings = current.questionnaires.settings;
+      return {
+        ...current,
+        questionnaires: {
+          ...current.questionnaires,
+          settings: {
+            ...settings,
+            ...patch,
+            provider: {
+              ...settings.provider,
+              ...patch.provider,
+            },
+            confidence: {
+              ...settings.confidence,
+              ...patch.confidence,
+            },
+            context: {
+              ...settings.context,
+              ...patch.context,
+            },
+          },
+        },
+      };
+    });
+  }
+
+  async enqueueQuestionnaire(questionnaire: Questionnaire): Promise<void> {
+    await this.changeState((current) => {
+      const existingIndex = current.questionnaires.queue.findIndex(
+        (item) => item.questionnaire.id === questionnaire.id
+      );
+      const queue = [...current.questionnaires.queue];
+      if (existingIndex >= 0) {
+        queue[existingIndex] = { ...queue[existingIndex], questionnaire, updatedAt: Date.now() };
+      } else {
+        queue.push(enqueueQuestionnaire(questionnaire));
+      }
+      return { ...current, questionnaires: { ...current.questionnaires, queue } };
+    });
+  }
+
+  async updateQuestionnaireItem(item: QuestionnaireQueueItem): Promise<void> {
+    await this.changeState((current) => {
+      const queue = current.questionnaires.queue.map((queued) =>
+        queued.questionnaire.id === item.questionnaire.id ? item : queued
+      );
+      if (!queue.some((queued) => queued.questionnaire.id === item.questionnaire.id)) queue.push(item);
+      return { ...current, questionnaires: { ...current.questionnaires, queue } };
+    });
+  }
+
+  async reviseQuestionnaireAnswer(
+    questionnaireId: string,
+    questionId: string,
+    value: { text?: string; selectedValues?: string[] }
+  ): Promise<void> {
+    await this.changeState((current) => {
+      const item = current.questionnaires.queue.find(
+        queued => queued.questionnaire.id === questionnaireId
+      );
+      if (!item) throw new Error(`Questionnaire ${questionnaireId} not found`);
+      if (item.status !== 'needs_review' || !item.answerPlan) {
+        throw new Error('Answers can only be edited during review');
+      }
+      const question = item.questionnaire.questions.find(candidate => candidate.id === questionId);
+      if (!question) throw new Error(`Question ${questionId} not found`);
+
+      const allowedValues = new Set(question.options?.map(option => option.value) ?? []);
+      const selectedValues = value.selectedValues?.filter(option => allowedValues.has(option));
+      if (value.selectedValues && selectedValues?.length !== value.selectedValues.length) {
+        throw new Error('Answer contains an invalid option');
+      }
+
+      const answers = item.answerPlan.answers.map(answer => answer.questionId === questionId
+        ? {
+            ...answer,
+            text: typeof value.text === 'string' ? value.text : answer.text,
+            selectedValues: value.selectedValues ? selectedValues : answer.selectedValues,
+            confidence: 1,
+            evidence: [{ source: 'user_instruction' as const, reference: 'Ответ проверен пользователем' }],
+            requiresReview: false,
+            warning: undefined,
+          }
+        : answer
+      );
+      if (!answers.some(answer => answer.questionId === questionId)) {
+        answers.push({
+          questionId,
+          text: value.text,
+          selectedValues,
+          confidence: 1,
+          evidence: [{ source: 'user_instruction', reference: 'Ответ добавлен пользователем' }],
+          requiresReview: false,
+        });
+      }
+
+      const revised = {
+        ...item,
+        answerPlan: { ...item.answerPlan, answers },
+        updatedAt: Date.now(),
+      };
+      return {
+        ...current,
+        questionnaires: {
+          ...current.questionnaires,
+          queue: current.questionnaires.queue.map(queued =>
+            queued.questionnaire.id === questionnaireId ? revised : queued
+          ),
+        },
+      };
+    });
+  }
+
+  async transitionQuestionnaire(
+    questionnaireId: string,
+    status: QuestionnaireStatus
+  ): Promise<void> {
+    await this.changeState((current) => {
+      const item = current.questionnaires.queue.find(
+        (queued) => queued.questionnaire.id === questionnaireId
+      );
+      if (!item) throw new Error(`Questionnaire ${questionnaireId} not found`);
+      const transitioned = transitionQuestionnaire(item, status);
+      return {
+        ...current,
+        questionnaires: {
+          ...current.questionnaires,
+          queue: current.questionnaires.queue.map((queued) =>
+            queued.questionnaire.id === questionnaireId ? transitioned : queued
+          ),
+        },
+      };
+    });
+  }
+
+  async setQuestionnaireProcessing(
+    processing: boolean,
+    error: string | null = null
+  ): Promise<void> {
+    await this.changeState((current) => ({
+      ...current,
+      questionnaires: {
+        ...current.questionnaires,
+        processing,
+        lastProcessedAt: processing ? current.questionnaires.lastProcessedAt : Date.now(),
+        lastError: error,
+      },
     }));
   }
 

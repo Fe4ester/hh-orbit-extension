@@ -11,6 +11,8 @@ import { observePostSubmitState } from '../live/finalSubmitExecutor';
 import { parseSearchResults } from '../live/searchResultsParser';
 import { detectTestRequirement } from '../live/testRequirementDetector';
 import { FileLogger } from '../utils/fileLogger';
+import { extractQuestionnaire } from '../live/questionnaireExtractor';
+import { fillQuestionnaire } from '../live/questionnaireFiller';
 import { redactSensitiveUrl } from '../utils/redactSensitiveUrl';
 
 console.log('[LiveContent] Content script loaded');
@@ -237,6 +239,54 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
 
+      case 'EXTRACT_QUESTIONNAIRE': {
+        try {
+          const questionnaire = extractQuestionnaire(document, {
+            vacancyId: String(message.vacancyId || 'unknown'),
+            source: 'hh_live',
+          });
+          sendResponse({ success: true, questionnaire });
+        } catch (error) {
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : 'Questionnaire extraction failed',
+          });
+        }
+        break;
+      }
+
+      case 'EXTRACT_RESUME_CONTEXT': {
+        const container = document.querySelector('main')
+          || document.querySelector('[data-qa="resume"]')
+          || document.body;
+        const text = ((container as HTMLElement).innerText || container.textContent || '')
+          .replace(/\u00a0/g, ' ')
+          .replace(/[ \t]+\n/g, '\n')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim()
+          .slice(0, 50_000);
+        sendResponse({
+          success: text.length > 0,
+          text,
+          title: document.title,
+          url: window.location.href,
+        });
+        break;
+      }
+
+      case 'FILL_QUESTIONNAIRE': {
+        try {
+          const report = fillQuestionnaire(document, message.questionnaire, message.answerPlan);
+          sendResponse({ success: report.errors.length === 0, report });
+        } catch (error) {
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : 'Questionnaire fill failed',
+          });
+        }
+        break;
+      }
+
       case 'CHECK_APPLY_BUTTON_STATE': {
         const { vacancyId } = message;
 
@@ -253,7 +303,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
-        // Check button text
         const button = card.querySelector('[data-qa="vacancy-serp__vacancy_response"]');
         const buttonText = button?.textContent || '';
         const alreadyApplied =
@@ -294,7 +343,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           textPreview: modalText.substring(0, 300)
         });
 
-        // Check for textarea (cover letter)
         const textarea = modal.querySelector('textarea');
         let hadTextarea = false;
 
@@ -302,7 +350,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           FileLogger.log('content_script', 'info', 'Cover letter textarea found');
           hadTextarea = true;
 
-          // Get cover letter from message or use default
           const coverLetterText = message.coverLetter || 'Здравствуйте! Заинтересован в данной вакансии.';
 
           try {
@@ -396,7 +443,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case 'CHECK_MODAL_TYPE': {
-        // Check what type of modal is open
         const modal =
           document.querySelector('[class*="magritte-mobile-container"]') ||
           document.querySelector('[class*="magritte-overlay"]') ||
@@ -411,7 +457,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         const modalText = modal.textContent || '';
 
-        // Check for textarea
         const textarea =
           modal.querySelector('[data-qa="vacancy-response-letter-input"]') ||
           modal.querySelector('textarea[name="letter"]') ||
@@ -592,7 +637,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const buttonText = button.textContent?.trim() || '';
           const isDisabled = button.hasAttribute('disabled');
 
-          // Extract vacancy ID
           const vacancyLink = card.querySelector('a[href*="/vacancy/"]');
           const href = vacancyLink?.getAttribute('href') || '';
           const vacancyIdMatch = href.match(/\/vacancy\/(\d+)/);
@@ -791,10 +835,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             buttonText
           });
 
-          // Click
           (respondButton as HTMLElement).click();
 
-          // Remove highlight after click
           setTimeout(() => {
             (card as HTMLElement).style.backgroundColor = originalBg;
             (card as HTMLElement).style.transition = originalTransition;
@@ -804,7 +846,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ success: true });
         }, 500); // Увеличил до 500ms чтобы highlight был виден
 
-        // Return true to indicate async response
         return true;
       }
 
@@ -941,7 +982,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         FileLogger.log('content_script', 'info', 'CLICK_RESPOND_ON_CARD start', { vacancyId });
 
-        // Find card
         const allCards = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]');
         let card = null;
 
@@ -950,7 +990,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const href = link?.getAttribute('href') || '';
 
           if (href.includes(`/vacancy/${vacancyId}`)) {
-            // Check button before assigning
             const btn = c.querySelector('[data-qa="vacancy-serp__vacancy_response"]');
             const btnText = btn?.textContent?.trim() || '';
 
@@ -1040,7 +1079,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
-        // Check modal content
         const alreadyApplied = !!modal.querySelector('[data-qa="vacancy-response-already-applied"]') ||
                                modal.textContent?.includes('Вы уже откликались');
 
@@ -1212,7 +1250,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 setInterval(() => {
   try {
-    // Check both old bloko modals and new Magritte modals
     const blokoModals = document.querySelectorAll('[data-qa="bloko-modal"]');
     const magritteModals = document.querySelectorAll('[class*="magritte-mobile-container"], [class*="magritte-overlay"]');
     const allModals = [...Array.from(blokoModals), ...Array.from(magritteModals)];

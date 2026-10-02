@@ -6,6 +6,7 @@
  */
 
 import { FileLogger } from '../utils/fileLogger';
+import { getXsrfCookie } from '../utils/hhCookies';
 
 export interface PreflightResult {
   canProceed: boolean;
@@ -232,9 +233,9 @@ export class PreflightService {
     if (this.xsrfToken) return;
 
     try {
-      const xsrfCookie = await chrome.cookies.get({ url: 'https://hh.ru', name: '_xsrf' });
-      if (xsrfCookie?.value) {
-        this.xsrfToken = xsrfCookie.value;
+      const xsrfToken = await getXsrfCookie();
+      if (xsrfToken) {
+        this.xsrfToken = xsrfToken;
         FileLogger.log('service_worker', 'info', 'XSRF token obtained', {
           source: 'cookie',
           hasXsrfToken: true,

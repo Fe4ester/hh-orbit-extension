@@ -12,6 +12,7 @@ global.chrome = {
     },
   },
   runtime: {
+    id: 'abcdefghijklmnopabcdefghijklmnop',
     sendMessage: vi.fn(),
     onMessage: {
       addListener: vi.fn(),
