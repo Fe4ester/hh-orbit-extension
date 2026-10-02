@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createStoreReadyGate } from '../src/background/storeReadiness';
+import { StateStore } from '../src/state/store';
+import type { StorageAdapter } from '../src/state/storage';
+import { INITIAL_STATE, type AppState } from '../src/state/types';
 
 describe('createStoreReadyGate', () => {
   it('does not initialize the store until readiness is requested', () => {
@@ -54,5 +57,32 @@ describe('createStoreReadyGate', () => {
     await expect(ensureReady()).rejects.toThrow('storage unavailable');
 
     expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it('does not publish readiness when interrupted runtime recovery fails', async () => {
+    const persisted: AppState = {
+      ...INITIAL_STATE,
+      profileOrder: ['existing'],
+      runtimeState: 'RUNNING',
+    };
+    const storage: StorageAdapter = {
+      get: vi.fn().mockResolvedValue(persisted),
+      set: vi.fn().mockRejectedValue(new Error('storage unavailable')),
+      clear: vi.fn().mockResolvedValue(undefined),
+    };
+    const store = new StateStore(storage);
+    const publish = vi.fn();
+    const ensureReady = createStoreReadyGate(
+      () => store.init(),
+      async () => {
+        await store.reconcileInterruptedRuntime();
+        publish(store.getState());
+      }
+    );
+
+    await expect(ensureReady()).rejects.toThrow('storage unavailable');
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(store.getState().runtimeState).toBe('RUNNING');
   });
 });

@@ -22,8 +22,18 @@ interface Props {
 type CredentialStatus = { configured: boolean; hint?: string };
 type Notice = { kind: 'success' | 'error' | 'info'; text: string };
 
-function send<T>(message: unknown): Promise<T> {
-  return chrome.runtime.sendMessage(message) as Promise<T>;
+async function send<T>(message: unknown): Promise<T> {
+  const response = await chrome.runtime.sendMessage(message) as T | { error?: unknown };
+  if (
+    response
+    && typeof response === 'object'
+    && 'error' in response
+    && typeof response.error === 'string'
+    && response.error
+  ) {
+    throw new Error(response.error);
+  }
+  return response as T;
 }
 
 function formatTokens(value: number | undefined): string | null {
@@ -63,15 +73,23 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
   }, [modelDetails, modelSearch]);
 
   useEffect(() => {
-    setModelDetails(definition.modelDetails);
-    setModelMenuOpen(false);
-    setModelSearch('');
-    setCredential('');
-    setNotice(null);
+    let cancelled = false;
     void send<CredentialStatus>({ type: 'AI_PROVIDER_CREDENTIAL_STATUS', providerId: providerType })
-      .then(setCredentialStatus)
-      .catch(() => setCredentialStatus({ configured: false }));
-  }, [definition.modelDetails, providerType]);
+      .then(status => {
+        if (!cancelled) setCredentialStatus(status);
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setCredentialStatus({ configured: false });
+        setNotice({
+          kind: 'error',
+          text: error instanceof Error ? error.message : 'Не удалось проверить сохранённый ключ',
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerType]);
 
   const selectProvider = (type: AIProviderId) => {
     const next = AI_PROVIDER_CATALOG[type];
@@ -89,10 +107,9 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
     setBusy('credential');
     setNotice(null);
     try {
-      const result = await send<CredentialStatus & { error?: string }>({
+      const result = await send<CredentialStatus>({
         type: 'AI_PROVIDER_SAVE_CREDENTIAL', providerId: providerType, credential,
       });
-      if (result.error) throw new Error(result.error);
       setCredentialStatus(result);
       setCredential('');
       setNotice({ kind: 'success', text: 'Ключ сохранён на этом устройстве' });
@@ -105,10 +122,16 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
 
   const removeCredential = async () => {
     setBusy('credential');
-    await send({ type: 'AI_PROVIDER_DELETE_CREDENTIAL', providerId: providerType });
-    setCredentialStatus({ configured: false });
-    setNotice({ kind: 'info', text: 'Ключ удалён' });
-    setBusy(null);
+    setNotice(null);
+    try {
+      await send({ type: 'AI_PROVIDER_DELETE_CREDENTIAL', providerId: providerType });
+      setCredentialStatus({ configured: false });
+      setNotice({ kind: 'info', text: 'Ключ удалён' });
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось удалить ключ' });
+    } finally {
+      setBusy(null);
+    }
   };
 
   const ensureCustomPermission = async (): Promise<void> => {

@@ -104,6 +104,23 @@ describe('BackendAutoApplyEngine - Behavior Regression', () => {
   });
 
   describe('normal start enters cycle', () => {
+    it('runs the completion hook after the engine lifecycle finishes', async () => {
+      const onRunCompleted = vi.fn().mockResolvedValue(undefined);
+      engine = new BackendAutoApplyEngine({
+        store,
+        httpClient: mockHttpClient,
+        sleep: mockSleep,
+        log: mockLog,
+        onRunCompleted,
+      });
+
+      await engine.start();
+
+      expect(onRunCompleted).toHaveBeenCalledTimes(1);
+      expect(engine.isRunning()).toBe(false);
+      expect(store.getState().runtimeState).toBe('STOPPED');
+    });
+
     it('should enter cycle and call checkAuth when started', async () => {
       mockHttpClient.checkAuth.mockResolvedValue({ authorized: false });
 

@@ -147,6 +147,42 @@ describe('QuestionnaireProcessor', () => {
     });
   });
 
+  it('preserves concurrent edits to different answers', async () => {
+    const twoQuestionForm: Questionnaire = {
+      ...questionnaire,
+      questions: [
+        ...questionnaire.questions,
+        { id: 'task_2', type: 'text', prompt: 'Почему эта вакансия?', required: true },
+      ],
+    };
+    provider.generateAnswers = vi.fn().mockResolvedValue({
+      ...answerPlan(),
+      answers: [
+        ...answerPlan().answers,
+        {
+          questionId: 'task_2',
+          text: 'Интересный продукт',
+          confidence: 0.9,
+          evidence: [{ source: 'profile' as const, reference: 'Интересы кандидата' }],
+          requiresReview: true,
+        },
+      ],
+    });
+    await store.enqueueQuestionnaire(twoQuestionForm);
+    const service = processor();
+    await service.processOne(questionnaire.id);
+
+    await Promise.all([
+      service.reviseAnswer(questionnaire.id, 'task_1', { text: 'Шесть лет' }),
+      service.reviseAnswer(questionnaire.id, 'task_2', { text: 'Сильная команда' }),
+    ]);
+
+    expect(store.getState().questionnaires.queue[0].answerPlan?.answers).toMatchObject([
+      { questionId: 'task_1', text: 'Шесть лет' },
+      { questionId: 'task_2', text: 'Сильная команда' },
+    ]);
+  });
+
   it('records provider errors and continues processing the queue', async () => {
     await store.enqueueQuestionnaire(questionnaire);
     provider.generateAnswers = vi.fn().mockRejectedValue(new Error('model unavailable'));

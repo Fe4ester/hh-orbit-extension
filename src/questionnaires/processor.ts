@@ -24,6 +24,7 @@ type QuestionnaireStore = Pick<
   | 'getState'
   | 'enqueueQuestionnaire'
   | 'updateQuestionnaireItem'
+  | 'reviseQuestionnaireAnswer'
   | 'transitionQuestionnaire'
   | 'setQuestionnaireProcessing'
 >;
@@ -184,53 +185,7 @@ export class QuestionnaireProcessor {
     questionId: string,
     value: { text?: string; selectedValues?: string[] }
   ): Promise<void> {
-    const item = this.requireItem(questionnaireId);
-    if (item.status !== 'needs_review' || !item.answerPlan) {
-      throw new Error('Answers can only be edited during review');
-    }
-    const question = item.questionnaire.questions.find(current => current.id === questionId);
-    if (!question) throw new Error(`Question ${questionId} not found`);
-
-    const allowedValues = new Set(question.options?.map(option => option.value) ?? []);
-    const selectedValues = value.selectedValues?.filter(option => allowedValues.has(option));
-    if (value.selectedValues && selectedValues?.length !== value.selectedValues.length) {
-      throw new Error('Answer contains an invalid option');
-    }
-
-    const answers = item.answerPlan.answers.map(answer => answer.questionId === questionId
-      ? {
-          ...answer,
-          text: typeof value.text === 'string' ? value.text : answer.text,
-          selectedValues: value.selectedValues ? selectedValues : answer.selectedValues,
-          confidence: 1,
-          evidence: [{
-            source: 'user_instruction' as const,
-            reference: 'Ответ проверен пользователем',
-          }],
-          requiresReview: false,
-          warning: undefined,
-        }
-      : answer
-    );
-    if (!answers.some(answer => answer.questionId === questionId)) {
-      answers.push({
-        questionId,
-        text: value.text,
-        selectedValues,
-        confidence: 1,
-        evidence: [{
-          source: 'user_instruction',
-          reference: 'Ответ добавлен пользователем',
-        }],
-        requiresReview: false,
-      });
-    }
-
-    await this.options.store.updateQuestionnaireItem({
-      ...item,
-      answerPlan: { ...item.answerPlan, answers },
-      updatedAt: Date.now(),
-    });
+    await this.options.store.reviseQuestionnaireAnswer(questionnaireId, questionId, value);
   }
 
   async skip(questionnaireId: string): Promise<void> {

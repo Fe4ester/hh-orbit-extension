@@ -128,7 +128,7 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
         </span>
       </summary>
       <div className="questionnaire-panel-body">
-      <AIProviderWorkspace provider={settings.provider} onPatch={onPatch} />
+      <AIProviderWorkspace key={settings.provider.type} provider={settings.provider} onPatch={onPatch} />
 
       <div className="questionnaire-context">
         <div className="questionnaire-context-heading">

@@ -360,6 +360,7 @@ textarea {
 }
 
 .command-actions .btn { flex: 1; }
+.command-error { grid-column: 1 / -1; padding: var(--space-2) var(--space-3); border-top: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); background: var(--danger-soft); color: var(--danger); font-size: var(--font-size-xs); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 .btn-secondary { border-color: var(--border); background: var(--surface); color: var(--text); }

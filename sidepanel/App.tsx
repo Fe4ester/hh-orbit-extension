@@ -17,6 +17,8 @@ import { SelectMenu } from '../src/components/SelectMenu';
 import { formatResumeLabel } from '../src/components/resumeLabel';
 import { LogsViewer } from './LogsViewer';
 import './styles.css';
+import type { AutoApplyStartResult } from '../src/background/autoApplyStart';
+import { subscribeToAppState } from './stateSync';
 
 const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
 const THEME_STORAGE_KEY = 'ui_theme';
@@ -83,27 +85,10 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<Theme>(getPreferredTheme);
   const [isResumeHintHighlighted, setIsResumeHintHighlighted] = useState(true);
   const [isResumeHintDismissing, setIsResumeHintDismissing] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
-      if (response?.state) setState(response.state);
-    });
-
-    const pollInterval = setInterval(() => {
-      chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
-        if (response?.state) setState(response.state);
-      });
-    }, 500);
-
-    const listener = (message: any) => {
-      if (message.type === 'STATE_UPDATE') setState(message.state);
-    };
-
-    chrome.runtime.onMessage.addListener(listener);
-    return () => {
-      clearInterval(pollInterval);
-      chrome.runtime.onMessage.removeListener(listener);
-    };
+    return subscribeToAppState(chrome.runtime, setState);
   }, []);
 
   useEffect(() => {
@@ -165,7 +150,13 @@ export const App: React.FC = () => {
     ...resumeVm.candidates.map((resume) => ({ value: resume.hash, label: formatResumeLabel(resume) })),
   ];
 
-  const handleStart = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_START' });
+  const handleStart = () => {
+    setStartError(null);
+    chrome.runtime.sendMessage({ type: 'AUTO_APPLY_START' }, (response?: AutoApplyStartResult) => {
+      const error = chrome.runtime.lastError?.message || (response && !response.success ? response.error : null);
+      if (error) setStartError(`Не удалось запустить автоотклики: ${error}`);
+    });
+  };
   const handleStop = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_STOP' });
   const handleModeChange = (mode: AutoApplyMode) => chrome.runtime.sendMessage({ type: 'SET_MODE', mode });
   const dismissResumeHint = () => {
@@ -211,6 +202,7 @@ export const App: React.FC = () => {
             <button className="btn btn-primary" onClick={handleStart} disabled={!controlsVm.canStart}><Icon name="play" />Старт</button>
             <button className={`btn ${isRunning ? 'btn-danger' : 'btn-secondary'}`} onClick={handleStop} disabled={!controlsVm.canStop}><Icon name="stop" />Стоп</button>
           </div>
+          {startError && <div className="command-error" role="alert">{startError}</div>}
         </section>
 
         <section className="panel context-panel" aria-label="Контекст запуска">

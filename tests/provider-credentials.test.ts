@@ -26,4 +26,23 @@ describe('ProviderCredentialStore', () => {
       questionnaire_provider_credentials_v1: { groq: 'two' },
     });
   });
+
+  it('preserves concurrent writes for different providers', async () => {
+    let persisted: Record<string, string> = {};
+    const storage = {
+      get: vi.fn(async () => ({ questionnaire_provider_credentials_v1: { ...persisted } })),
+      set: vi.fn(async (value: Record<string, Record<string, string>>) => {
+        await Promise.resolve();
+        persisted = { ...value.questionnaire_provider_credentials_v1 };
+      }),
+    };
+    const store = new ProviderCredentialStore(storage as any);
+
+    await Promise.all([
+      store.set('openai', 'openai-key'),
+      store.set('groq', 'groq-key'),
+    ]);
+
+    expect(persisted).toEqual({ openai: 'openai-key', groq: 'groq-key' });
+  });
 });

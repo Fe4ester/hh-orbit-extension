@@ -63,6 +63,7 @@ export interface LiveEngineV2Deps {
 export class LiveAutoApplyEngineV2 {
   private running = false;
   private stopRequested = false;
+  private pendingStart: { resolve: () => void; reject: (error: unknown) => void } | null = null;
   private preflightService: PreflightService;
 
   constructor(private deps: LiveEngineV2Deps) {
@@ -71,6 +72,22 @@ export class LiveAutoApplyEngineV2 {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  requestStart(): Promise<void> {
+    if (this.running || this.pendingStart) {
+      return Promise.reject(new Error('Auto-apply is already running'));
+    }
+
+    const accepted = new Promise<void>((resolve, reject) => {
+      this.pendingStart = { resolve, reject };
+    });
+    void this.start().catch((error) => {
+      FileLogger.log('service_worker', 'error', 'LiveEngineV2 lifecycle cleanup failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return accepted;
   }
 
   async start(): Promise<void> {
@@ -83,10 +100,14 @@ export class LiveAutoApplyEngineV2 {
 
     FileLogger.log('service_worker', 'info', 'LiveEngineV2 start');
 
+    let runtimeStarted = false;
+    let startupAccepted = false;
+    let startupError: unknown;
     try {
       await this.deps.store.dispatch('START_REQUESTED');
-      await this.deps.store.dispatch('START_CONFIRMED');
       await this.deps.store.resetRuntimeCounters();
+      await this.deps.store.dispatch('START_CONFIRMED');
+      runtimeStarted = true;
 
       const initResult = await this.initializeControlledTab();
       if (!initResult.success) {
@@ -94,8 +115,7 @@ export class LiveAutoApplyEngineV2 {
           error: initResult.error
         });
         await this.deps.store.setRuntimePhase('paused_manual_action', initResult.error || 'controlled_tab_init_failed');
-        // Early return will trigger finally block for cleanup
-        return;
+        throw new Error(initResult.error || 'controlled_tab_init_failed');
       }
 
       FileLogger.log('service_worker', 'info', 'Controlled tab initialized', {
@@ -108,6 +128,9 @@ export class LiveAutoApplyEngineV2 {
         FileLogger.log('service_worker', 'info', 'Clearing stale controlled_tab_lost blocker after successful init');
         await this.deps.store.clearRuntimeBlocker();
       }
+
+      startupAccepted = true;
+      this.resolvePendingStart();
 
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
@@ -147,8 +170,42 @@ export class LiveAutoApplyEngineV2 {
         error: (error as Error).message,
         stack: (error as Error).stack
       });
+      if (!startupAccepted) {
+        startupError = error;
+      }
     } finally {
-      await this.stopInternal();
+      try {
+        if (runtimeStarted) {
+          await this.stopInternal();
+        } else {
+          await this.cleanupRejectedStart();
+        }
+      } finally {
+        if (startupError !== undefined) this.rejectPendingStart(startupError);
+      }
+    }
+  }
+
+  private resolvePendingStart(): void {
+    const pendingStart = this.pendingStart;
+    this.pendingStart = null;
+    pendingStart?.resolve();
+  }
+
+  private rejectPendingStart(error: unknown): void {
+    const pendingStart = this.pendingStart;
+    this.pendingStart = null;
+    pendingStart?.reject(error);
+  }
+
+  private async cleanupRejectedStart(): Promise<void> {
+    try {
+      if (this.deps.store.getState().runtimeState === 'STARTING') {
+        await this.deps.store.dispatch('ENGINE_INTERRUPTED');
+      }
+    } finally {
+      this.running = false;
+      this.stopRequested = false;
     }
   }
 
@@ -163,7 +220,7 @@ export class LiveAutoApplyEngineV2 {
   private async stopInternal(): Promise<void> {
     const currentState = this.deps.store.getState().runtimeState;
 
-    if (currentState === 'STOPPED') {
+    if (currentState === 'STOPPED' || currentState === 'IDLE') {
       this.running = false;
       this.stopRequested = false;
       await this.deps.store.setRuntimePhase('idle', null);
@@ -173,7 +230,7 @@ export class LiveAutoApplyEngineV2 {
     if (currentState === 'ERROR') {
       this.running = false;
       this.stopRequested = false;
-      await this.deps.store.updateState({ runtimeState: 'IDLE' });
+      await this.deps.store.dispatch('RESET');
       await this.deps.store.setRuntimePhase('idle', null);
       return;
     }
@@ -181,8 +238,10 @@ export class LiveAutoApplyEngineV2 {
     if (['RUNNING', 'PAUSED_BY_USER', 'PAUSED_MANUAL_ACTION', 'PAUSED_NO_VACANCIES'].includes(currentState)) {
       await this.deps.store.dispatch('STOP_REQUESTED');
       await this.deps.store.dispatch('STOP_CONFIRMED');
-    } else {
-      await this.deps.store.updateState({ runtimeState: 'STOPPED' });
+    } else if (currentState === 'STARTING') {
+      await this.deps.store.dispatch('ENGINE_INTERRUPTED');
+    } else if (currentState === 'STOPPING') {
+      await this.deps.store.dispatch('STOP_CONFIRMED');
     }
 
     this.running = false;
@@ -263,8 +322,7 @@ export class LiveAutoApplyEngineV2 {
     const processedCount = currentState.vacancyQueue.filter(v => v.status === 'processed').length;
     if (processedCount > 0) {
       FileLogger.log('service_worker', 'info', 'Cleaning processed vacancies', { count: processedCount });
-      const cleanedQueue = currentState.vacancyQueue.filter(v => v.status !== 'processed');
-      await this.deps.store.updateState({ vacancyQueue: cleanedQueue });
+      await this.deps.store.removeProcessedVacancies();
     }
 
     // Check if we have discovered vacancies
@@ -284,13 +342,7 @@ export class LiveAutoApplyEngineV2 {
       const acquisitionResult = await this.deps.acquisitionService.acquireForProfile(activeProfileId, true);
 
       if (acquisitionResult.success && acquisitionResult.currentUrl) {
-        const currentState = this.deps.store.getState();
-        await this.deps.store.updateState({
-          liveMode: {
-            ...currentState.liveMode,
-            lastAppliedSearchUrl: acquisitionResult.currentUrl
-          }
-        });
+        await this.deps.store.setLastAppliedSearchUrl(acquisitionResult.currentUrl);
         FileLogger.log('service_worker', 'info', 'Search URL saved', {
           url: redactSensitiveUrl(acquisitionResult.currentUrl),
         });
@@ -343,7 +395,7 @@ export class LiveAutoApplyEngineV2 {
             FileLogger.log('service_worker', 'info', 'No available vacancies, trying next page');
 
             // Очищаем очередь
-            await this.deps.store.updateState({ vacancyQueue: [] });
+            await this.deps.store.clearVacancyQueue();
 
             // Проверяем следующую страницу
             const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
@@ -368,13 +420,7 @@ export class LiveAutoApplyEngineV2 {
                 });
 
                 if (nextPageAcquisition.currentUrl) {
-                  const currentState = this.deps.store.getState();
-                  await this.deps.store.updateState({
-                    liveMode: {
-                      ...currentState.liveMode,
-                      lastAppliedSearchUrl: nextPageAcquisition.currentUrl
-                    }
-                  });
+                  await this.deps.store.setLastAppliedSearchUrl(nextPageAcquisition.currentUrl);
                 }
 
                 // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии (не просто вакансии в очереди)
@@ -474,13 +520,7 @@ export class LiveAutoApplyEngineV2 {
               });
 
               if (nextPageAcquisition.currentUrl) {
-                const currentState = this.deps.store.getState();
-                await this.deps.store.updateState({
-                  liveMode: {
-                    ...currentState.liveMode,
-                    lastAppliedSearchUrl: nextPageAcquisition.currentUrl
-                  }
-                });
+                await this.deps.store.setLastAppliedSearchUrl(nextPageAcquisition.currentUrl);
               }
 
               // Continue to process vacancies
@@ -593,7 +633,7 @@ export class LiveAutoApplyEngineV2 {
             FileLogger.log('service_worker', 'info', 'No available vacancies after skip, trying next page');
 
             // Очистить очередь
-            await this.deps.store.updateState({ vacancyQueue: [] });
+            await this.deps.store.clearVacancyQueue();
 
             // Проверить следующую страницу
             const hasNextResult = await sendMessageWithTimeout(controlledTabId, {
@@ -618,13 +658,7 @@ export class LiveAutoApplyEngineV2 {
                 });
 
                 if (nextPageAcquisition.currentUrl) {
-                  const currentState = this.deps.store.getState();
-                  await this.deps.store.updateState({
-                    liveMode: {
-                      ...currentState.liveMode,
-                      lastAppliedSearchUrl: nextPageAcquisition.currentUrl
-                    }
-                  });
+                  await this.deps.store.setLastAppliedSearchUrl(nextPageAcquisition.currentUrl);
                 }
 
                 // Проверяем DOM - есть ли ДОСТУПНЫЕ вакансии
@@ -1368,21 +1402,11 @@ export class LiveAutoApplyEngineV2 {
             await chrome.tabs.update(tab.id!, { url: searchUrl, active: true });
             await this.waitForPageLoad(tab.id!);
 
-            await this.deps.store.updateState({
-              liveMode: {
-                ...this.deps.store.getState().liveMode,
-                lastAppliedSearchUrl: searchUrl
-              }
-            });
+            await this.deps.store.setLastAppliedSearchUrl(searchUrl);
             return { success: true, tabId: tab.id };
           }
 
-          await this.deps.store.updateState({
-            liveMode: {
-              ...this.deps.store.getState().liveMode,
-              lastAppliedSearchUrl: url
-            }
-          });
+          await this.deps.store.setLastAppliedSearchUrl(url);
           return { success: true, tabId: tab.id };
         }
       } catch {
@@ -1417,24 +1441,14 @@ export class LiveAutoApplyEngineV2 {
 
       if (tabs[0].url?.includes('hh.ru')) {
         await this.deps.store.bindControlledTab(tabId, windowId!, tabs[0].url);
-        await this.deps.store.updateState({
-          liveMode: {
-            ...this.deps.store.getState().liveMode,
-            lastAppliedSearchUrl: tabs[0].url
-          }
-        });
+        await this.deps.store.setLastAppliedSearchUrl(tabs[0].url);
         return { success: true, tabId };
       }
 
       await chrome.tabs.update(tabId, { url: searchUrl, active: true });
       await this.waitForPageLoad(tabId);
       await this.deps.store.bindControlledTab(tabId, windowId!, searchUrl);
-      await this.deps.store.updateState({
-        liveMode: {
-          ...this.deps.store.getState().liveMode,
-          lastAppliedSearchUrl: searchUrl
-        }
-      });
+      await this.deps.store.setLastAppliedSearchUrl(searchUrl);
       return { success: true, tabId };
     }
 
@@ -1445,12 +1459,7 @@ export class LiveAutoApplyEngineV2 {
 
     await this.waitForPageLoad(newTab.id);
     await this.deps.store.bindControlledTab(newTab.id, newTab.windowId, searchUrl);
-    await this.deps.store.updateState({
-      liveMode: {
-        ...this.deps.store.getState().liveMode,
-        lastAppliedSearchUrl: searchUrl
-      }
-    });
+    await this.deps.store.setLastAppliedSearchUrl(searchUrl);
     return { success: true, tabId: newTab.id };
   }
 

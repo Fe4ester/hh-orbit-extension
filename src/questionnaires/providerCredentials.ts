@@ -9,6 +9,8 @@ export interface ProviderCredentialStatus {
 }
 
 export class ProviderCredentialStore {
+  private writeQueue: Promise<void> = Promise.resolve();
+
   constructor(private readonly storage = chrome.storage.local) {}
 
   async get(providerId: AIProviderId): Promise<string | null> {
@@ -25,16 +27,24 @@ export class ProviderCredentialStore {
   async set(providerId: AIProviderId, credential: string): Promise<void> {
     const value = credential.trim();
     if (!value) throw new Error('Введите API-ключ');
-    const result = await this.storage.get(STORAGE_KEY);
-    const credentials = { ...(result[STORAGE_KEY] as CredentialMap | undefined) };
-    credentials[providerId] = value;
-    await this.storage.set({ [STORAGE_KEY]: credentials });
+    await this.changeCredentials(credentials => ({ ...credentials, [providerId]: value }));
   }
 
   async remove(providerId: AIProviderId): Promise<void> {
-    const result = await this.storage.get(STORAGE_KEY);
-    const credentials = { ...(result[STORAGE_KEY] as CredentialMap | undefined) };
-    delete credentials[providerId];
-    await this.storage.set({ [STORAGE_KEY]: credentials });
+    await this.changeCredentials(credentials => {
+      const next = { ...credentials };
+      delete next[providerId];
+      return next;
+    });
+  }
+
+  private changeCredentials(transform: (current: CredentialMap) => CredentialMap): Promise<void> {
+    const operation = this.writeQueue.then(async () => {
+      const result = await this.storage.get(STORAGE_KEY);
+      const current = { ...(result[STORAGE_KEY] as CredentialMap | undefined) };
+      await this.storage.set({ [STORAGE_KEY]: transform(current) });
+    });
+    this.writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 }

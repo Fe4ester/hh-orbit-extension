@@ -29,6 +29,17 @@ import {
 } from '../questionnaires';
 import { createStoreReadyGate } from './storeReadiness';
 import { HH_RESUMES_URL, HH_TAB_PATTERN } from '../config/externalLinks';
+import { startAutoApply } from './autoApplyStart';
+import {
+  createBackgroundMessageListener,
+  type BackgroundResult,
+} from './messageRouter';
+import {
+  runSearchLoop as runSearchLoopOperation,
+  scanCurrentSearchPage as scanCurrentSearchPageOperation,
+  type NextSearchPageResult,
+  type SearchPaginationResult,
+} from './searchLoop';
 
 const store = new StateStore(new ExtensionStorageAdapter());
 
@@ -48,6 +59,7 @@ const acquisitionService = new AcquisitionService({
 });
 
 async function onStoreReady(): Promise<void> {
+  await store.reconcileInterruptedRuntime();
   FileLogger.log('service_worker', 'info', 'Store initialized');
 
   store.setOnStateChange(() => {
@@ -89,7 +101,6 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
     broadcastNotifications();
 
     await store.setRuntimeBlocker('controlled_tab_lost', ensureResult.reason || 'Tab binding failed');
-    broadcastState();
     return { success: false, reason: ensureResult.reason };
   }
 
@@ -259,7 +270,6 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
 
   FileLogger.log('service_worker', 'info', 'doCheckRuntimeBlockers: Final status', { finalStatus });
 
-  broadcastState();
   return { success: true, status: finalStatus };
 }
 
@@ -415,7 +425,6 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
 
   store.getNotificationManager().addToast('success', `Найдено резюме: ${candidates.length}`);
   broadcastNotifications();
-  broadcastState();
 
   return { success: true, candidates };
 }
@@ -464,7 +473,6 @@ async function performResumeRefresh(): Promise<RefreshResumesAPIResult> {
 
       store.getNotificationManager().addToast('success', `Обновлено резюме: ${resumes.length}`);
       broadcastNotifications();
-      broadcastState();
 
       return { success: true, count: resumes.length };
     }
@@ -600,7 +608,6 @@ async function performResumeRefresh(): Promise<RefreshResumesAPIResult> {
 
     store.getNotificationManager().addToast('success', `Обновлено резюме: ${parsedResumes.length}`);
     broadcastNotifications();
-    broadcastState();
 
     return { success: true, count: parsedResumes.length };
   } catch (error) {
@@ -678,7 +685,6 @@ async function doObserveVacancyDetail(): Promise<ObserveVacancyDetailResult> {
   await store.setVacancyDetailObservation(observation);
   await store.setPreflightClassification(classification);
 
-  broadcastState();
   store
     .getNotificationManager()
     .addToast('success', `Preflight: ${classification.message}`);
@@ -744,7 +750,6 @@ async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
       metadata: preflightResult.metadata,
     });
 
-    broadcastState();
     store
       .getNotificationManager()
       .addToast(
@@ -945,7 +950,6 @@ async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
       .addToast('warn', 'Требуется ручное действие для продолжения', false, 'manual_action_required');
   }
 
-  broadcastState();
   store
     .getNotificationManager()
     .addToast(
@@ -970,6 +974,7 @@ const backendEngine = new BackendAutoApplyEngine({
   httpClient: backendHTTPClient,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   log: logRuntimeDiagnostic,
+  onRunCompleted: processQuestionnairesAfterCollection,
 });
 
 // Live engine V2
@@ -1050,7 +1055,6 @@ async function prepareLegendFile(input: {
       profileTitle: artifact.profileTitle,
       elapsedMs: Date.now() - startedAt,
     });
-    broadcastState();
     return legendFile;
   })().finally(() => legendPreparationJobs.delete(key));
   legendPreparationJobs.set(key, job);
@@ -1164,7 +1168,6 @@ async function prepareManualQuestionnaireCore(
     answers: processed.answerPlan?.answers.length ?? 0,
   });
   await store.markManualActionDone(action.id);
-  broadcastState();
   return processed;
 }
 
@@ -1210,12 +1213,10 @@ async function processManualQuestionnaires(): Promise<{
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      broadcastState();
     }
     return { total: actions.length, drafted, failed };
   } finally {
     await store.setQuestionnaireProcessing(false);
-    broadcastState();
   }
 }
 
@@ -1273,7 +1274,6 @@ async function approveAndSubmitBackendQuestionnaire(
 
   await store.transitionQuestionnaire(questionnaireId, 'filled');
   await store.transitionQuestionnaire(questionnaireId, 'submitted');
-  broadcastState();
 }
 
 async function processQuestionnairesAfterCollection(): Promise<void> {
@@ -1297,14 +1297,6 @@ async function processQuestionnairesAfterCollection(): Promise<void> {
     FileLogger.log('service_worker', 'error', 'Post-collection questionnaire processing failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-  }
-}
-
-async function runAutoApplyEngine(engine: { start(): Promise<void> }): Promise<void> {
-  try {
-    await engine.start();
-  } finally {
-    await processQuestionnairesAfterCollection();
   }
 }
 
@@ -1404,24 +1396,11 @@ async function ensureControlledTabForCurrentHHTab(options?: {
 
   // Set live mode active if not already
   if (!updatedState.liveMode.active) {
-    await store.updateState({
-      liveMode: {
-        ...updatedState.liveMode,
-        active: true,
-        controlledTabPurpose: purpose,
-      },
-    });
+    await store.setControlledTabPurpose(purpose, true);
   } else if (updatedState.liveMode.controlledTabPurpose !== purpose) {
     // Update purpose if changed
-    await store.updateState({
-      liveMode: {
-        ...updatedState.liveMode,
-        controlledTabPurpose: purpose,
-      },
-    });
+    await store.setControlledTabPurpose(purpose);
   }
-
-  broadcastState();
 
   const stateAfter = store.getState();
   const nextState = {
@@ -1617,8 +1596,78 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// Message handler
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+const CORE_MESSAGE_TYPES = new Set([
+  'GET_STATE',
+  'AUTO_APPLY_STOP',
+  'SET_MODE',
+  'UPDATE_SETTINGS',
+  'UPDATE_QUESTIONNAIRE_SETTINGS',
+  'QUESTIONNAIRE_PREPARE_LEGEND',
+  'QUESTIONNAIRE_TEST_PROVIDER',
+  'AI_PROVIDER_CREDENTIAL_STATUS',
+  'AI_PROVIDER_SAVE_CREDENTIAL',
+  'AI_PROVIDER_DELETE_CREDENTIAL',
+  'QUESTIONNAIRE_LIST_MODELS',
+  'QUESTIONNAIRE_PROCESS_PENDING',
+  'QUESTIONNAIRE_PROCESS_MANUAL_ACTIONS',
+  'QUESTIONNAIRE_PREPARE_MANUAL',
+  'QUESTIONNAIRE_PROCESS_ONE',
+  'QUESTIONNAIRE_APPROVE',
+  'QUESTIONNAIRE_REVISE_ANSWER',
+  'QUESTIONNAIRE_SKIP',
+  'QUESTIONNAIRE_APPROVE_AND_SUBMIT',
+  'MANUAL_ACTION_DONE',
+  'MANUAL_ACTION_DISMISS',
+  'OPEN_SIDEPANEL_FOR_CURRENT_TAB',
+  'DEBUG_OPEN_SIDEPANEL',
+  'DISPATCH_EVENT',
+  'DISMISS_NOTIFICATION',
+  'CREATE_PROFILE',
+  'UPDATE_PROFILE',
+  'DELETE_PROFILE',
+  'DUPLICATE_PROFILE',
+  'SET_ACTIVE_PROFILE',
+  'SELECT_RESUME',
+  'ADD_DEMO_RESUMES',
+  'BIND_RESUME_TO_PROFILE',
+  'RECORD_ATTEMPT',
+  'RECORD_EVENT',
+  'MARK_RUN_STARTED',
+  'MARK_RUN_STOPPED',
+  'CLEAR_RUN_STATS',
+  'SEED_DEMO_ANALYTICS',
+  'RECORD_VACANCY_SCAN',
+  'MARK_NO_MORE_VACANCIES',
+  'RESET_VACANCY_EXHAUSTION',
+  'LIVE_MODE_START',
+  'LIVE_MODE_STOP',
+  'LIVE_MODE_BIND_CURRENT_TAB',
+  'LIVE_MODE_FOCUS_TAB',
+  'CLEAR_VACANCY_QUEUE',
+  'MARK_VACANCY_QUEUED',
+  'MARK_VACANCY_PROCESSED',
+  'MARK_VACANCY_SKIPPED',
+  'LIVE_MODE_OBSERVE_VACANCY_DETAIL',
+  'CLEAR_PREFLIGHT_STATE',
+  'LIVE_MODE_EXECUTE_APPLY_SKELETON',
+  'CLEAR_APPLY_ATTEMPTS',
+  'LIVE_MODE_DETECT_RESUMES',
+  'REFRESH_RESUMES_API',
+]);
+
+function isCoreMessage(message: unknown): message is { type: string; [key: string]: any } {
+  if (!message || typeof message !== 'object' || !('type' in message)) return false;
+  const type = (message as { type?: unknown }).type;
+  return typeof type === 'string' && CORE_MESSAGE_TYPES.has(type);
+}
+
+function handleCoreMessage(
+  message: unknown,
+  _sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void
+): boolean {
+  if (!isCoreMessage(message)) return false;
+
   (async () => {
     try {
       await ensureStoreReady();
@@ -1626,29 +1675,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === 'GET_STATE') {
         const state = store.getState();
         sendResponse({ state });
-        return;
-      }
-
-      if (message.type === 'AUTO_APPLY_START') {
-        const state = store.getState();
-        sendResponse({ success: true });
-
-        FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START', { mode: state.mode });
-
-        // Route to correct engine based on mode
-        if (state.mode === 'backend') {
-          FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: backend mode');
-          runAutoApplyEngine(backendEngine).catch((error) => {
-            FileLogger.log('service_worker', 'error', 'Backend engine failed:', error);
-            FileLogger.log('service_worker', 'error', 'Backend engine failed', { error: error.message });
-          });
-        } else {
-          FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: live mode');
-          runAutoApplyEngine(liveEngine).catch((error) => {
-            FileLogger.log('service_worker', 'error', 'Live engine failed:', error);
-            FileLogger.log('service_worker', 'error', 'Live engine failed', { error: error.message });
-          });
-        }
         return;
       }
 
@@ -1668,21 +1694,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'SET_MODE') {
         await store.updateState({ mode: message.mode });
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'UPDATE_SETTINGS') {
         await store.updateSettings(message.patch || {});
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'UPDATE_QUESTIONNAIRE_SETTINGS') {
         await store.updateQuestionnaireSettings(message.patch || {});
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1732,7 +1755,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'QUESTIONNAIRE_PROCESS_PENDING') {
         const result = await questionnaireProcessor.processPending();
-        broadcastState();
         sendResponse({ success: true, ...result });
         return;
       }
@@ -1757,28 +1779,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'QUESTIONNAIRE_PROCESS_ONE') {
         const item = await questionnaireProcessor.processOne(message.id);
-        broadcastState();
         sendResponse({ success: true, item });
         return;
       }
 
       if (message.type === 'QUESTIONNAIRE_APPROVE') {
         await questionnaireProcessor.approve(message.id);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'QUESTIONNAIRE_REVISE_ANSWER') {
         await questionnaireProcessor.reviseAnswer(message.id, message.questionId, message.value || {});
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'QUESTIONNAIRE_SKIP') {
         await questionnaireProcessor.skip(message.id);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1791,14 +1809,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'MANUAL_ACTION_DONE') {
         await store.markManualActionDone(message.id);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MANUAL_ACTION_DISMISS') {
         await store.dismissManualAction(message.id);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1861,7 +1877,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           // Simulate async start
           setTimeout(async () => {
             await store.dispatch('START_CONFIRMED');
-            broadcastState();
             store.getNotificationManager().addToast('success', 'Запущено', false, 'runtime_started');
             broadcastNotifications();
           }, 500);
@@ -1871,7 +1886,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           // Simulate async stop
           setTimeout(async () => {
             await store.dispatch('STOP_CONFIRMED');
-            broadcastState();
             store.getNotificationManager().addToast('info', 'Остановлено', false, 'runtime_stopped');
             broadcastNotifications();
           }, 300);
@@ -1890,7 +1904,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           broadcastNotifications();
         }
 
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1905,7 +1918,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Profile actions
       if (message.type === 'CREATE_PROFILE') {
         const profileId = await store.createProfile(message.payload);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Профиль создан');
         broadcastNotifications();
         sendResponse({ success: true, profileId });
@@ -1914,7 +1926,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'UPDATE_PROFILE') {
         await store.updateProfile(message.id, message.payload);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Профиль обновлён');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1923,7 +1934,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'DELETE_PROFILE') {
         await store.deleteProfile(message.id);
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Профиль удалён');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1932,7 +1942,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'DUPLICATE_PROFILE') {
         const profileId = await store.duplicateProfile(message.id);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Профиль дублирован');
         broadcastNotifications();
         sendResponse({ success: true, profileId });
@@ -1941,7 +1950,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'SET_ACTIVE_PROFILE') {
         await store.setActiveProfile(message.id);
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Активный профиль изменён', false, 'profile_changed');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1951,7 +1959,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Resume actions
       if (message.type === 'SELECT_RESUME') {
         await store.selectResume(message.hash);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1961,7 +1968,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const currentCandidates = store.getState().resumeCandidates;
         const newCandidates = [...currentCandidates, ...demoResumes];
         await store.setResumeCandidates(newCandidates);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Демо-резюме добавлены');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1970,7 +1976,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'BIND_RESUME_TO_PROFILE') {
         await store.bindResumeToProfile(message.profileId, message.hash);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Резюме привязано к профилю');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1980,42 +1985,36 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Analytics actions
       if (message.type === 'RECORD_ATTEMPT') {
         await store.recordAttempt(message.outcome, message.profileId, message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'RECORD_EVENT') {
         await store.recordEvent(message.eventType, message.payload, message.attemptId, message.profileId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_RUN_STARTED') {
         await store.markRunStarted();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_RUN_STOPPED') {
         await store.markRunStopped();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'CLEAR_RUN_STATS') {
         await store.clearRunStats();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'SEED_DEMO_ANALYTICS') {
         await store.seedDemoAnalytics();
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Демо-аналитика добавлена');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -2025,7 +2024,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Vacancy scan actions
       if (message.type === 'RECORD_VACANCY_SCAN') {
         await store.recordVacancyScan(message.foundCount, message.newCount);
-        broadcastState();
         broadcastNotifications();
         sendResponse({ success: true });
         return;
@@ -2033,7 +2031,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'MARK_NO_MORE_VACANCIES') {
         await store.markNoMoreVacancies(message.reason);
-        broadcastState();
         broadcastNotifications();
         sendResponse({ success: true });
         return;
@@ -2043,7 +2040,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         await store.resetVacancyExhaustion();
         // Dismiss sticky notification
         store.getNotificationManager().dismissByDedupeKey('no_more_vacancies');
-        broadcastState();
         broadcastNotifications();
         sendResponse({ success: true });
         return;
@@ -2096,14 +2092,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               purpose = 'vacancy';
             }
 
-            await store.updateState({
-              liveMode: {
-                ...updatedState.liveMode,
-                controlledTabPurpose: purpose,
-              },
-            });
+            await store.setControlledTabPurpose(purpose);
 
-            broadcastState();
             store.getNotificationManager().addToast('success', 'Live mode запущен на текущей вкладке');
             broadcastNotifications();
             sendResponse({ success: true, tabId: activeTab.id });
@@ -2123,7 +2113,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'LIVE_MODE_STOP') {
         await store.deactivateLiveMode();
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Live mode остановлен');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -2176,14 +2165,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             purpose = 'vacancy';
           }
 
-          await store.updateState({
-            liveMode: {
-              ...updatedState.liveMode,
-              controlledTabPurpose: purpose,
-            },
-          });
+          await store.setControlledTabPurpose(purpose);
 
-          broadcastState();
           store.getNotificationManager().addToast('success', 'HH вкладка привязана');
           broadcastNotifications();
 
@@ -2226,7 +2209,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           } catch {
             // Tab no longer exists
             await store.clearControlledTab();
-            broadcastState();
             sendResponse({ error: 'Controlled tab no longer exists' });
             return;
           }
@@ -2239,7 +2221,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'CLEAR_VACANCY_QUEUE') {
         await store.clearVacancyQueue();
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Очередь вакансий очищена');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -2248,21 +2229,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'MARK_VACANCY_QUEUED') {
         await store.markVacancyQueued(message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_VACANCY_PROCESSED') {
         await store.markVacancyProcessed(message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_VACANCY_SKIPPED') {
         await store.markVacancySkipped(message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -2283,7 +2261,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'CLEAR_PREFLIGHT_STATE') {
         await store.clearPreflightState();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -2306,7 +2283,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === 'CLEAR_APPLY_ATTEMPTS') {
         await store.clearApplyAttempts();
-        broadcastState();
         store.getNotificationManager().addToast('info', 'История apply attempts очищена');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -2339,7 +2315,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-      sendResponse({ error: 'Unknown message type' });
+      sendResponse({ error: `Unhandled core message type: ${message.type}` });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       FileLogger.log('service_worker', 'warn', 'Message request rejected', {
@@ -2350,302 +2326,143 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
   })();
 
-  return true; // Keep channel open for async response
-});
-
-// Runtime blocker handlers
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'CHECK_RUNTIME_BLOCKERS') {
-    FileLogger.log('service_worker', 'info', 'CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
-
-    // Respond immediately
-    sendResponse({ success: true });
-
-    // Do async work
-    ensureStoreReady().then(() => doCheckRuntimeBlockers()).catch((error) => {
-      FileLogger.log('service_worker', 'error', 'CHECK_RUNTIME_BLOCKERS: Async work failed', error);
-    });
-
-    return true;
-  }
-
-  if (message.type === 'CLEAR_RUNTIME_BLOCKER') {
-    (async () => {
-      await ensureStoreReady();
-      await store.clearRuntimeBlocker();
-      await store.setSessionStatus('unknown');
-      broadcastState();
-      sendResponse({ success: true });
-    })();
-    return true;
-  }
-
-  return false;
-});
-
-// Search loop handlers
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  (async () => {
-    try {
-      await ensureStoreReady();
-
-      if (message.type === 'LIVE_MODE_NEXT_SEARCH_PAGE') {
-        const state = store.getState();
-        const controlledTabId = state.liveMode.controlledTabId;
-
-        if (!controlledTabId) {
-          sendResponse({ error: 'No controlled tab' });
-          return;
-        }
-
-        const tab = await chrome.tabs.get(controlledTabId);
-        if (!tab.url) {
-          sendResponse({ error: 'No tab URL' });
-          return;
-        }
-
-        const [htmlResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: () => document.documentElement.outerHTML,
-        });
-
-        const html = htmlResult.result as string;
-
-        // Check if next page exists inline
-        const [hasNextResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: (url: string, html: string) => {
-            // Inline hasNextPage
-            const urlObj = new URL(url);
-            const pageParam = urlObj.searchParams.get('page');
-            let currentPage = 0;
-            if (pageParam !== null) {
-              const parsed = parseInt(pageParam, 10);
-              if (!isNaN(parsed) && parsed >= 0) currentPage = parsed;
-            }
-
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const pagerItems = doc.querySelectorAll('[data-qa="pager-page"]');
-            let totalPages: number | null = null;
-
-            if (pagerItems.length > 0) {
-              let maxPage = 0;
-              pagerItems.forEach((item) => {
-                const pageAttr = item.getAttribute('data-page');
-                if (pageAttr) {
-                  const pageNum = parseInt(pageAttr, 10);
-                  if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            if (totalPages === null) {
-              const links = doc.querySelectorAll('a[href*="page="]');
-              let maxPage = 0;
-              links.forEach((link) => {
-                const href = link.getAttribute('href');
-                if (href) {
-                  const match = href.match(/page=(\d+)/);
-                  if (match) {
-                    const pageNum = parseInt(match[1], 10);
-                    if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                  }
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            const hasNext = totalPages === null || currentPage < totalPages;
-
-            return { hasNext, currentPage };
-          },
-          args: [tab.url, html],
-        });
-
-        const { hasNext, currentPage } = hasNextResult.result as {
-          hasNext: boolean;
-          currentPage: number;
-        };
-
-        if (!hasNext) {
-          sendResponse({ error: 'No next page available' });
-          return;
-        }
-
-        const nextUrl = new URL(tab.url);
-        nextUrl.searchParams.set('page', String(currentPage + 1));
-
-        // Navigate
-        await chrome.tabs.update(controlledTabId, { url: nextUrl.toString() });
-
-        sendResponse({ success: true, nextUrl: nextUrl.toString() });
-      }
-
-      if (message.type === 'LIVE_MODE_RUN_SEARCH_LOOP') {
-        const state = store.getState();
-        const controlledTabId = state.liveMode.controlledTabId;
-
-        if (!controlledTabId) {
-          sendResponse({ error: 'No controlled tab' });
-          return;
-        }
-
-        if (state.liveMode.pageType !== 'search') {
-          sendResponse({ error: 'Not on search page' });
-          return;
-        }
-
-        if (state.vacancyScan.exhausted) {
-          sendResponse({ error: 'Vacancy search exhausted' });
-          return;
-        }
-
-        if (state.runtimeBlocker) {
-          sendResponse({ error: `Runtime blocked: ${state.runtimeBlocker}` });
-          return;
-        }
-
-        await store.startSearchLoop();
-
-        // Scan current page
-        const scanResponse = await new Promise<any>((resolve) => {
-          chrome.runtime.sendMessage({ type: 'LIVE_MODE_SCAN_CURRENT_SEARCH_PAGE' }, resolve);
-        });
-
-        if (!scanResponse.success) {
-          await store.stopSearchLoop();
-          sendResponse({ error: scanResponse.error });
-          return;
-        }
-
-        await store.incrementSearchLoopIteration();
-
-        const updatedState = store.getState();
-
-        if (updatedState.vacancyScan.exhausted) {
-          await store.stopSearchLoop();
-          broadcastState();
-          sendResponse({
-            success: true,
-            stopped: true,
-            reason: 'exhausted',
-            ...scanResponse,
-          });
-          return;
-        }
-
-        // Check if next page exists
-        const tab = await chrome.tabs.get(controlledTabId);
-        if (!tab.url) {
-          await store.stopSearchLoop();
-          sendResponse({ error: 'No tab URL' });
-          return;
-        }
-
-        const [htmlResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: () => document.documentElement.outerHTML,
-        });
-
-        const html = htmlResult.result as string;
-
-        const [hasNextResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: (url: string, html: string) => {
-            const urlObj = new URL(url);
-            const pageParam = urlObj.searchParams.get('page');
-            let currentPage = 0;
-            if (pageParam !== null) {
-              const parsed = parseInt(pageParam, 10);
-              if (!isNaN(parsed) && parsed >= 0) currentPage = parsed;
-            }
-
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const pagerItems = doc.querySelectorAll('[data-qa="pager-page"]');
-            let totalPages: number | null = null;
-
-            if (pagerItems.length > 0) {
-              let maxPage = 0;
-              pagerItems.forEach((item) => {
-                const pageAttr = item.getAttribute('data-page');
-                if (pageAttr) {
-                  const pageNum = parseInt(pageAttr, 10);
-                  if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            if (totalPages === null) {
-              const links = doc.querySelectorAll('a[href*="page="]');
-              let maxPage = 0;
-              links.forEach((link) => {
-                const href = link.getAttribute('href');
-                if (href) {
-                  const match = href.match(/page=(\d+)/);
-                  if (match) {
-                    const pageNum = parseInt(match[1], 10);
-                    if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                  }
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            return totalPages === null || currentPage < totalPages;
-          },
-          args: [tab.url, html],
-        });
-
-        const hasNext = hasNextResult.result as boolean;
-
-        if (!hasNext) {
-          // Last page reached
-          if (scanResponse.newCount === 0) {
-            // No new vacancies on last page -> mark exhausted
-            await store.markNoMoreVacancies('no_unseen_vacancies');
-          }
-          await store.stopSearchLoop();
-          broadcastState();
-          sendResponse({
-            success: true,
-            stopped: true,
-            reason: 'last_page',
-            ...scanResponse,
-          });
-          return;
-        }
-
-        // Navigate to next page
-        const nextResponse = await new Promise<any>((resolve) => {
-          chrome.runtime.sendMessage({ type: 'LIVE_MODE_NEXT_SEARCH_PAGE' }, resolve);
-        });
-
-        if (!nextResponse.success) {
-          await store.stopSearchLoop();
-          sendResponse({ error: nextResponse.error });
-          return;
-        }
-
-        await store.stopSearchLoop();
-        broadcastState();
-
-        sendResponse({
-          success: true,
-          stopped: false,
-          ...scanResponse,
-          nextUrl: nextResponse.nextUrl,
-        });
-      }
-    } catch (error) {
-      FileLogger.log('service_worker', 'error', 'Search loop error', { error: (error as Error).message });
-      sendResponse({ error: (error as Error).message });
-    }
-  })();
-
   return true;
+}
+
+async function clearRuntimeBlockerCommand(): Promise<BackgroundResult> {
+  await store.clearRuntimeBlocker();
+  await store.setSessionStatus('unknown');
+  return { success: true };
+}
+
+async function inspectSearchPagination(): Promise<
+  | { success: true; hasNext: boolean; currentPage: number; currentUrl: string }
+  | { success: false; error: string }
+> {
+  const controlledTabId = store.getState().liveMode.controlledTabId;
+  if (!controlledTabId) return { success: false, error: 'No controlled tab' };
+
+  const tab = await chrome.tabs.get(controlledTabId);
+  if (!tab.url) return { success: false, error: 'No tab URL' };
+
+  const [htmlResult] = await chrome.scripting.executeScript({
+    target: { tabId: controlledTabId },
+    func: () => document.documentElement.outerHTML,
+  });
+  const html = htmlResult.result as string;
+
+  const [paginationResult] = await chrome.scripting.executeScript({
+    target: { tabId: controlledTabId },
+    func: (url: string, pageHtml: string) => {
+      const urlObject = new URL(url);
+      const pageParam = urlObject.searchParams.get('page');
+      const parsedPage = pageParam === null ? 0 : Number.parseInt(pageParam, 10);
+      const currentPage = Number.isNaN(parsedPage) || parsedPage < 0 ? 0 : parsedPage;
+      const documentNode = new DOMParser().parseFromString(pageHtml, 'text/html');
+      let totalPages: number | null = null;
+      let maxPage = 0;
+
+      documentNode.querySelectorAll('[data-qa="pager-page"]').forEach((item) => {
+        const page = Number.parseInt(item.getAttribute('data-page') || '', 10);
+        if (!Number.isNaN(page) && page > maxPage) maxPage = page;
+      });
+
+      if (maxPage === 0) {
+        documentNode.querySelectorAll('a[href*="page="]').forEach((link) => {
+          const match = link.getAttribute('href')?.match(/page=(\d+)/);
+          const page = match ? Number.parseInt(match[1], 10) : 0;
+          if (!Number.isNaN(page) && page > maxPage) maxPage = page;
+        });
+      }
+
+      if (maxPage > 0) totalPages = maxPage;
+      return { hasNext: totalPages === null || currentPage < totalPages, currentPage };
+    },
+    args: [tab.url, html],
+  });
+
+  const result = paginationResult.result as { hasNext: boolean; currentPage: number } | undefined;
+  if (!result) return { success: false, error: 'Search pagination inspection failed' };
+  return { success: true, ...result, currentUrl: tab.url };
+}
+
+async function nextSearchPageCommand(): Promise<NextSearchPageResult> {
+  const controlledTabId = store.getState().liveMode.controlledTabId;
+  if (!controlledTabId) return { success: false, error: 'No controlled tab' };
+
+  const pagination = await inspectSearchPagination();
+  if (!pagination.success) return pagination;
+  if (!pagination.hasNext) return { success: false, error: 'No next page available' };
+
+  const nextUrl = new URL(pagination.currentUrl);
+  nextUrl.searchParams.set('page', String(pagination.currentPage + 1));
+  await chrome.tabs.update(controlledTabId, { url: nextUrl.toString() });
+  return { success: true, nextUrl: nextUrl.toString() };
+}
+
+async function scanCurrentSearchPageCommand() {
+  return scanCurrentSearchPageOperation({
+    getState: () => store.getState(),
+    acquireForProfile: (profileId, skipNavigation) =>
+      acquisitionService.acquireForProfile(profileId, skipNavigation),
+    recordVacancyScan: (foundCount, newCount) => store.recordVacancyScan(foundCount, newCount),
+  });
+}
+
+async function runSearchLoopCommand(): Promise<BackgroundResult> {
+  return runSearchLoopOperation({
+    getState: () => store.getState(),
+    startSearchLoop: () => store.startSearchLoop(),
+    stopSearchLoop: () => store.stopSearchLoop(),
+    incrementSearchLoopIteration: () => store.incrementSearchLoopIteration(),
+    markNoMoreVacancies: (reason) => store.markNoMoreVacancies(reason),
+    scanCurrentPage: scanCurrentSearchPageCommand,
+    getHasNextPage: async (): Promise<SearchPaginationResult> => {
+      const pagination = await inspectSearchPagination();
+      return pagination.success
+        ? { success: true, hasNext: pagination.hasNext }
+        : pagination;
+    },
+    nextSearchPage: nextSearchPageCommand,
+  });
+}
+
+const backgroundMessageListener = createBackgroundMessageListener({
+  ensureStoreReady,
+  isCoreMessage,
+  coreHandler: handleCoreMessage,
+  handlers: {
+    startAutoApply: async () => {
+      const mode = store.getState().mode;
+      FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START', { mode });
+      const result = await startAutoApply(mode, {
+        backend: backendEngine,
+        live: liveEngine,
+      });
+      if (!result.success) {
+        FileLogger.log('service_worker', 'error', 'AUTO_APPLY_START rejected', {
+          mode,
+          error: result.error,
+        });
+      }
+      return result;
+    },
+    checkRuntimeBlockers: async () => {
+      FileLogger.log('service_worker', 'info', 'CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
+      await doCheckRuntimeBlockers();
+    },
+    clearRuntimeBlocker: clearRuntimeBlockerCommand,
+    nextSearchPage: nextSearchPageCommand,
+    runSearchLoop: runSearchLoopCommand,
+  },
+  onDetachedError: (messageType, error) => {
+    FileLogger.log('service_worker', 'error', `${messageType}: Async work failed`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
 });
+
+chrome.runtime.onMessage.addListener(backgroundMessageListener);
 
 // Broadcast state to all sidepanels
 function broadcastStateSnapshot(state: ReturnType<StateStore['getState']>): void {
@@ -2775,13 +2592,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                 await store.markSearchOutOfSync();
               }
 
-              // Store sync diff
-              await store.updateState({
-                liveMode: {
-                  ...state.liveMode,
-                  searchSyncDiff: syncDiff,
-                },
-              });
+              await store.setSearchSyncDiff(syncDiff);
 
             } catch (error) {
               FileLogger.log('service_worker', 'error', 'Failed to check search sync', { error: (error as Error).message });
@@ -2886,7 +2697,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           }
         }
 
-          await broadcastState();
         });
       }
     }
@@ -2918,7 +2728,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         await store.stopSearchLoop();
       }
 
-        await broadcastState();
         await broadcastNotifications();
       });
     }
