@@ -89,7 +89,6 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
     broadcastNotifications();
 
     await store.setRuntimeBlocker('controlled_tab_lost', ensureResult.reason || 'Tab binding failed');
-    broadcastState();
     return { success: false, reason: ensureResult.reason };
   }
 
@@ -259,7 +258,6 @@ async function doCheckRuntimeBlockers(): Promise<CheckRuntimeBlockersResult> {
 
   FileLogger.log('service_worker', 'info', 'doCheckRuntimeBlockers: Final status', { finalStatus });
 
-  broadcastState();
   return { success: true, status: finalStatus };
 }
 
@@ -415,7 +413,6 @@ async function doDetectResumes(): Promise<DetectResumesResult> {
 
   store.getNotificationManager().addToast('success', `Найдено резюме: ${candidates.length}`);
   broadcastNotifications();
-  broadcastState();
 
   return { success: true, candidates };
 }
@@ -464,7 +461,6 @@ async function performResumeRefresh(): Promise<RefreshResumesAPIResult> {
 
       store.getNotificationManager().addToast('success', `Обновлено резюме: ${resumes.length}`);
       broadcastNotifications();
-      broadcastState();
 
       return { success: true, count: resumes.length };
     }
@@ -600,7 +596,6 @@ async function performResumeRefresh(): Promise<RefreshResumesAPIResult> {
 
     store.getNotificationManager().addToast('success', `Обновлено резюме: ${parsedResumes.length}`);
     broadcastNotifications();
-    broadcastState();
 
     return { success: true, count: parsedResumes.length };
   } catch (error) {
@@ -678,7 +673,6 @@ async function doObserveVacancyDetail(): Promise<ObserveVacancyDetailResult> {
   await store.setVacancyDetailObservation(observation);
   await store.setPreflightClassification(classification);
 
-  broadcastState();
   store
     .getNotificationManager()
     .addToast('success', `Preflight: ${classification.message}`);
@@ -744,7 +738,6 @@ async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
       metadata: preflightResult.metadata,
     });
 
-    broadcastState();
     store
       .getNotificationManager()
       .addToast(
@@ -945,7 +938,6 @@ async function doExecuteApply(realClick: boolean): Promise<ExecuteApplyResult> {
       .addToast('warn', 'Требуется ручное действие для продолжения', false, 'manual_action_required');
   }
 
-  broadcastState();
   store
     .getNotificationManager()
     .addToast(
@@ -1027,6 +1019,7 @@ async function ensureControlledTabForCurrentHHTab(options?: {
 
   const state = store.getState();
   let rebound = false;
+  let stateMutated = false;
 
   // Check if need to bind/rebind
   if (state.liveMode.controlledTabId !== activeTab.id) {
@@ -1034,12 +1027,14 @@ async function ensureControlledTabForCurrentHHTab(options?: {
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB BIND', { tabId: activeTab.id });
     await store.bindControlledTab(activeTab.id, activeTab.windowId!, activeTab.url);
     rebound = true;
+    stateMutated = true;
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB BIND ok');
   } else if (state.liveMode.currentUrl !== activeTab.url) {
     // Refresh stale URL
     // Refresh stale URL (logged via FileLogger below)
     await store.updateLiveContextFromUrl(activeTab.url);
     rebound = true;
+    stateMutated = true;
     FileLogger.log('service_worker', 'info', 'ENSURE_CONTROLLED_TAB REFRESH ok');
   }
 
@@ -1077,12 +1072,14 @@ async function ensureControlledTabForCurrentHHTab(options?: {
   // Set live mode active if not already
   if (!updatedState.liveMode.active) {
     await store.setControlledTabPurpose(purpose, true);
+    stateMutated = true;
   } else if (updatedState.liveMode.controlledTabPurpose !== purpose) {
     // Update purpose if changed
     await store.setControlledTabPurpose(purpose);
+    stateMutated = true;
   }
 
-  broadcastState();
+  if (!stateMutated) broadcastState();
 
   const stateAfter = store.getState();
   const nextState = {
@@ -1361,28 +1358,24 @@ function handleCoreMessage(
 
       if (message.type === 'SET_MODE') {
         await store.updateState({ mode: message.mode });
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'UPDATE_SETTINGS') {
         await store.updateSettings(message.patch || {});
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MANUAL_ACTION_DONE') {
         await store.markManualActionDone(message.id);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MANUAL_ACTION_DISMISS') {
         await store.dismissManualAction(message.id);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1445,7 +1438,6 @@ function handleCoreMessage(
           // Simulate async start
           setTimeout(async () => {
             await store.dispatch('START_CONFIRMED');
-            broadcastState();
             store.getNotificationManager().addToast('success', 'Запущено', false, 'runtime_started');
             broadcastNotifications();
           }, 500);
@@ -1455,7 +1447,6 @@ function handleCoreMessage(
           // Simulate async stop
           setTimeout(async () => {
             await store.dispatch('STOP_CONFIRMED');
-            broadcastState();
             store.getNotificationManager().addToast('info', 'Остановлено', false, 'runtime_stopped');
             broadcastNotifications();
           }, 300);
@@ -1474,7 +1465,6 @@ function handleCoreMessage(
           broadcastNotifications();
         }
 
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1489,7 +1479,6 @@ function handleCoreMessage(
       // Profile actions
       if (message.type === 'CREATE_PROFILE') {
         const profileId = await store.createProfile(message.payload);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Профиль создан');
         broadcastNotifications();
         sendResponse({ success: true, profileId });
@@ -1498,7 +1487,6 @@ function handleCoreMessage(
 
       if (message.type === 'UPDATE_PROFILE') {
         await store.updateProfile(message.id, message.payload);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Профиль обновлён');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1507,7 +1495,6 @@ function handleCoreMessage(
 
       if (message.type === 'DELETE_PROFILE') {
         await store.deleteProfile(message.id);
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Профиль удалён');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1516,7 +1503,6 @@ function handleCoreMessage(
 
       if (message.type === 'DUPLICATE_PROFILE') {
         const profileId = await store.duplicateProfile(message.id);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Профиль дублирован');
         broadcastNotifications();
         sendResponse({ success: true, profileId });
@@ -1525,7 +1511,6 @@ function handleCoreMessage(
 
       if (message.type === 'SET_ACTIVE_PROFILE') {
         await store.setActiveProfile(message.id);
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Активный профиль изменён', false, 'profile_changed');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1535,7 +1520,6 @@ function handleCoreMessage(
       // Resume actions
       if (message.type === 'SELECT_RESUME') {
         await store.selectResume(message.hash);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1545,7 +1529,6 @@ function handleCoreMessage(
         const currentCandidates = store.getState().resumeCandidates;
         const newCandidates = [...currentCandidates, ...demoResumes];
         await store.setResumeCandidates(newCandidates);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Демо-резюме добавлены');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1554,7 +1537,6 @@ function handleCoreMessage(
 
       if (message.type === 'BIND_RESUME_TO_PROFILE') {
         await store.bindResumeToProfile(message.profileId, message.hash);
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Резюме привязано к профилю');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1564,42 +1546,36 @@ function handleCoreMessage(
       // Analytics actions
       if (message.type === 'RECORD_ATTEMPT') {
         await store.recordAttempt(message.outcome, message.profileId, message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'RECORD_EVENT') {
         await store.recordEvent(message.eventType, message.payload, message.attemptId, message.profileId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_RUN_STARTED') {
         await store.markRunStarted();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_RUN_STOPPED') {
         await store.markRunStopped();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'CLEAR_RUN_STATS') {
         await store.clearRunStats();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'SEED_DEMO_ANALYTICS') {
         await store.seedDemoAnalytics();
-        broadcastState();
         store.getNotificationManager().addToast('success', 'Демо-аналитика добавлена');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1609,7 +1585,6 @@ function handleCoreMessage(
       // Vacancy scan actions
       if (message.type === 'RECORD_VACANCY_SCAN') {
         await store.recordVacancyScan(message.foundCount, message.newCount);
-        broadcastState();
         broadcastNotifications();
         sendResponse({ success: true });
         return;
@@ -1617,7 +1592,6 @@ function handleCoreMessage(
 
       if (message.type === 'MARK_NO_MORE_VACANCIES') {
         await store.markNoMoreVacancies(message.reason);
-        broadcastState();
         broadcastNotifications();
         sendResponse({ success: true });
         return;
@@ -1627,7 +1601,6 @@ function handleCoreMessage(
         await store.resetVacancyExhaustion();
         // Dismiss sticky notification
         store.getNotificationManager().dismissByDedupeKey('no_more_vacancies');
-        broadcastState();
         broadcastNotifications();
         sendResponse({ success: true });
         return;
@@ -1682,7 +1655,6 @@ function handleCoreMessage(
 
             await store.setControlledTabPurpose(purpose);
 
-            broadcastState();
             store.getNotificationManager().addToast('success', 'Live mode запущен на текущей вкладке');
             broadcastNotifications();
             sendResponse({ success: true, tabId: activeTab.id });
@@ -1702,7 +1674,6 @@ function handleCoreMessage(
 
       if (message.type === 'LIVE_MODE_STOP') {
         await store.deactivateLiveMode();
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Live mode остановлен');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1757,7 +1728,6 @@ function handleCoreMessage(
 
           await store.setControlledTabPurpose(purpose);
 
-          broadcastState();
           store.getNotificationManager().addToast('success', 'HH вкладка привязана');
           broadcastNotifications();
 
@@ -1800,7 +1770,6 @@ function handleCoreMessage(
           } catch {
             // Tab no longer exists
             await store.clearControlledTab();
-            broadcastState();
             sendResponse({ error: 'Controlled tab no longer exists' });
             return;
           }
@@ -1813,7 +1782,6 @@ function handleCoreMessage(
 
       if (message.type === 'CLEAR_VACANCY_QUEUE') {
         await store.clearVacancyQueue();
-        broadcastState();
         store.getNotificationManager().addToast('info', 'Очередь вакансий очищена');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1822,21 +1790,18 @@ function handleCoreMessage(
 
       if (message.type === 'MARK_VACANCY_QUEUED') {
         await store.markVacancyQueued(message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_VACANCY_PROCESSED') {
         await store.markVacancyProcessed(message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
 
       if (message.type === 'MARK_VACANCY_SKIPPED') {
         await store.markVacancySkipped(message.vacancyId);
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1857,7 +1822,6 @@ function handleCoreMessage(
 
       if (message.type === 'CLEAR_PREFLIGHT_STATE') {
         await store.clearPreflightState();
-        broadcastState();
         sendResponse({ success: true });
         return;
       }
@@ -1880,7 +1844,6 @@ function handleCoreMessage(
 
       if (message.type === 'CLEAR_APPLY_ATTEMPTS') {
         await store.clearApplyAttempts();
-        broadcastState();
         store.getNotificationManager().addToast('info', 'История apply attempts очищена');
         broadcastNotifications();
         sendResponse({ success: true });
@@ -1926,7 +1889,6 @@ function handleCoreMessage(
 async function clearRuntimeBlockerCommand(): Promise<BackgroundResult> {
   await store.clearRuntimeBlocker();
   await store.setSessionStatus('unknown');
-  await broadcastState();
   return { success: true };
 }
 
@@ -2011,7 +1973,6 @@ async function runSearchLoopCommand(): Promise<BackgroundResult> {
     stopSearchLoop: () => store.stopSearchLoop(),
     incrementSearchLoopIteration: () => store.incrementSearchLoopIteration(),
     markNoMoreVacancies: (reason) => store.markNoMoreVacancies(reason),
-    broadcastState,
     scanCurrentPage: scanCurrentSearchPageCommand,
     getHasNextPage: async (): Promise<SearchPaginationResult> => {
       const pagination = await inspectSearchPagination();
@@ -2286,7 +2247,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           }
         }
 
-          await broadcastState();
         });
       }
     }
@@ -2318,7 +2278,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         await store.stopSearchLoop();
       }
 
-        await broadcastState();
         await broadcastNotifications();
       });
     }

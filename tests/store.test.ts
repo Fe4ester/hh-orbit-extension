@@ -169,6 +169,31 @@ describe('StateStore', () => {
 });
 
 describe('StateStore write ordering', () => {
+  it('publishes a representative command mutation exactly once', async () => {
+    const store = new StateStore(new InMemoryStorageAdapter());
+    await store.init();
+    const publish = vi.fn();
+    store.setOnStateChange(publish);
+
+    await store.updateSettings({ delayMinSeconds: 7 });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(store.getState().settings.delayMinSeconds).toBe(7);
+  });
+
+  it('publishes once for each committed step in a multi-step lifecycle', async () => {
+    const store = new StateStore(new InMemoryStorageAdapter());
+    await store.init();
+    const publishedStates: RuntimeState[] = [];
+    store.setOnStateChange(() => publishedStates.push(store.getState().runtimeState));
+
+    await store.dispatch('START_REQUESTED');
+    await store.resetRuntimeCounters();
+    await store.dispatch('START_CONFIRMED');
+
+    expect(publishedStates).toEqual(['STARTING', 'STARTING', 'RUNNING']);
+  });
+
   it('persists independent parallel updates in call order from the last saved state', async () => {
     const storage = new ControlledStorage();
     const store = new StateStore(storage);

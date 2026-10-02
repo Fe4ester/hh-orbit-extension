@@ -60,7 +60,6 @@ interface RunSearchLoopDependencies {
   stopSearchLoop(): Promise<void>;
   incrementSearchLoopIteration(): Promise<void>;
   markNoMoreVacancies(reason: 'no_unseen_vacancies'): Promise<void>;
-  broadcastState(): void | Promise<void>;
   scanCurrentPage(): Promise<SearchPageScanResult>;
   getHasNextPage(): Promise<SearchPaginationResult>;
   nextSearchPage(): Promise<NextSearchPageResult>;
@@ -100,7 +99,6 @@ export async function runSearchLoop(
     await dependencies.incrementSearchLoopIteration();
     if (dependencies.getState().vacancyScan.exhausted) {
       await dependencies.stopSearchLoop();
-      await dependencies.broadcastState();
       return { ...scan, stopped: true, reason: 'exhausted' };
     }
 
@@ -115,7 +113,6 @@ export async function runSearchLoop(
         await dependencies.markNoMoreVacancies('no_unseen_vacancies');
       }
       await dependencies.stopSearchLoop();
-      await dependencies.broadcastState();
       return { ...scan, stopped: true, reason: 'last_page' };
     }
 
@@ -126,7 +123,6 @@ export async function runSearchLoop(
     }
 
     await dependencies.stopSearchLoop();
-    await dependencies.broadcastState();
     return { ...scan, stopped: false, nextUrl: nextPage.nextUrl };
   } catch (error) {
     await dependencies.stopSearchLoop();
