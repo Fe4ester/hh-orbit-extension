@@ -1,4 +1,5 @@
 export type MigratedBackgroundMessage =
+  | { type: 'AUTO_APPLY_START' }
   | { type: 'CHECK_RUNTIME_BLOCKERS' }
   | { type: 'CLEAR_RUNTIME_BLOCKER' }
   | { type: 'LIVE_MODE_NEXT_SEARCH_PAGE' }
@@ -9,6 +10,7 @@ export type BackgroundFailure = { success: false; error: string };
 export type BackgroundResult = BackgroundSuccess | BackgroundFailure;
 
 export interface MigratedMessageHandlers {
+  startAutoApply(): Promise<BackgroundResult>;
   checkRuntimeBlockers(): Promise<void>;
   clearRuntimeBlocker(): Promise<BackgroundResult>;
   nextSearchPage(): Promise<BackgroundResult>;
@@ -33,6 +35,7 @@ function getMigratedMessageType(message: unknown): MigratedBackgroundMessage['ty
   if (!message || typeof message !== 'object' || !('type' in message)) return null;
   const type = (message as { type?: unknown }).type;
   if (
+    type === 'AUTO_APPLY_START' ||
     type === 'CHECK_RUNTIME_BLOCKERS' ||
     type === 'CLEAR_RUNTIME_BLOCKER' ||
     type === 'LIVE_MODE_NEXT_SEARCH_PAGE' ||
@@ -69,6 +72,9 @@ export function createBackgroundMessageListener(
     }
 
     const operation = dependencies.ensureStoreReady().then(() => {
+      if (type === 'AUTO_APPLY_START') {
+        return dependencies.handlers.startAutoApply();
+      }
       if (type === 'CLEAR_RUNTIME_BLOCKER') {
         return dependencies.handlers.clearRuntimeBlocker();
       }

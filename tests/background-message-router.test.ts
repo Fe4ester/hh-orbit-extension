@@ -8,6 +8,7 @@ function createHarness() {
   );
   const coreHandler = vi.fn().mockReturnValue(false);
   const handlers = {
+    startAutoApply: vi.fn().mockResolvedValue({ success: true, runtimeState: 'RUNNING' }),
     checkRuntimeBlockers: vi.fn().mockResolvedValue(undefined),
     clearRuntimeBlocker: vi.fn().mockResolvedValue({ success: true }),
     nextSearchPage: vi.fn().mockResolvedValue({ success: true, nextUrl: 'https://hh.ru/search?page=2' }),
@@ -36,6 +37,7 @@ describe('background message router', () => {
   });
 
   it.each([
+    ['AUTO_APPLY_START', 'startAutoApply'],
     ['CLEAR_RUNTIME_BLOCKER', 'clearRuntimeBlocker'],
     ['LIVE_MODE_NEXT_SEARCH_PAGE', 'nextSearchPage'],
     ['LIVE_MODE_RUN_SEARCH_LOOP', 'runSearchLoop'],

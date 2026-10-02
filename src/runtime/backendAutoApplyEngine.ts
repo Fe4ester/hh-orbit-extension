@@ -32,6 +32,7 @@ type CycleOutcome = 'applied' | 'skipped' | 'manual' | 'blocked' | 'no_vacancies
 export class BackendAutoApplyEngine {
   private running = false;
   private stopRequested = false;
+  private pendingStart: { resolve: () => void; reject: (error: unknown) => void } | null = null;
 
   constructor(private deps: BackendEngineDeps) {}
 
@@ -48,6 +49,22 @@ export class BackendAutoApplyEngine {
     return this.running;
   }
 
+  requestStart(): Promise<void> {
+    if (this.running || this.pendingStart) {
+      return Promise.reject(new Error('Auto-apply is already running'));
+    }
+
+    const accepted = new Promise<void>((resolve, reject) => {
+      this.pendingStart = { resolve, reject };
+    });
+    void this.start().catch((error) => {
+      FileLogger.log('service_worker', 'error', 'BackendEngine lifecycle cleanup failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return accepted;
+  }
+
   async start(): Promise<void> {
     if (this.running) {
       FileLogger.log('service_worker', 'warn', 'BackendEngine already running, ignoring duplicate start');
@@ -58,10 +75,14 @@ export class BackendAutoApplyEngine {
 
     FileLogger.log('service_worker', 'info', 'BackendEngine start');
 
+    let startupAccepted = false;
+    let startupError: unknown;
     try {
       await this.deps.store.dispatch('START_REQUESTED');
-      await this.deps.store.dispatch('START_CONFIRMED');
       await this.deps.store.resetRuntimeCounters();
+      await this.deps.store.dispatch('START_CONFIRMED');
+      startupAccepted = true;
+      this.resolvePendingStart();
 
       while (!this.stopRequested) {
         const state = this.deps.store.getState();
@@ -103,9 +124,44 @@ export class BackendAutoApplyEngine {
         error: (error as Error).message,
         stack: (error as Error).stack
       });
-      await this.deps.store.dispatch('FAILURE');
+      if (!startupAccepted) {
+        startupError = error;
+      } else {
+        await this.deps.store.dispatch('FAILURE');
+      }
     } finally {
-      await this.stopInternal();
+      try {
+        if (startupAccepted) {
+          await this.stopInternal();
+        } else {
+          await this.cleanupRejectedStart();
+        }
+      } finally {
+        if (startupError !== undefined) this.rejectPendingStart(startupError);
+      }
+    }
+  }
+
+  private resolvePendingStart(): void {
+    const pendingStart = this.pendingStart;
+    this.pendingStart = null;
+    pendingStart?.resolve();
+  }
+
+  private rejectPendingStart(error: unknown): void {
+    const pendingStart = this.pendingStart;
+    this.pendingStart = null;
+    pendingStart?.reject(error);
+  }
+
+  private async cleanupRejectedStart(): Promise<void> {
+    try {
+      if (this.deps.store.getState().runtimeState === 'STARTING') {
+        await this.deps.store.dispatch('ENGINE_INTERRUPTED');
+      }
+    } finally {
+      this.running = false;
+      this.stopRequested = false;
     }
   }
 

@@ -17,6 +17,7 @@ import { AcquisitionService } from '../runtime/acquisitionService';
 import { BackendHTTPClient } from '../runtime/backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
 import { createStoreReadyGate } from './storeReadiness';
+import { startAutoApply } from './autoApplyStart';
 import {
   createBackgroundMessageListener,
   type BackgroundResult,
@@ -1279,7 +1280,6 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 const CORE_MESSAGE_TYPES = new Set([
   'GET_STATE',
-  'AUTO_APPLY_START',
   'AUTO_APPLY_STOP',
   'SET_MODE',
   'UPDATE_SETTINGS',
@@ -1342,29 +1342,6 @@ function handleCoreMessage(
       if (message.type === 'GET_STATE') {
         const state = store.getState();
         sendResponse({ state });
-        return;
-      }
-
-      if (message.type === 'AUTO_APPLY_START') {
-        const state = store.getState();
-        sendResponse({ success: true });
-
-        FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START', { mode: state.mode });
-
-        // Route to correct engine based on mode
-        if (state.mode === 'backend') {
-          FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: backend mode');
-          backendEngine.start().catch((error) => {
-            FileLogger.log('service_worker', 'error', 'Backend engine failed:', error);
-            FileLogger.log('service_worker', 'error', 'Backend engine failed', { error: error.message });
-          });
-        } else {
-          FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START: live mode');
-          liveEngine.start().catch((error) => {
-            FileLogger.log('service_worker', 'error', 'Live engine failed:', error);
-            FileLogger.log('service_worker', 'error', 'Live engine failed', { error: error.message });
-          });
-        }
         return;
       }
 
@@ -2051,6 +2028,21 @@ const backgroundMessageListener = createBackgroundMessageListener({
   isCoreMessage,
   coreHandler: handleCoreMessage,
   handlers: {
+    startAutoApply: async () => {
+      const mode = store.getState().mode;
+      FileLogger.log('service_worker', 'info', 'AUTO_APPLY_START', { mode });
+      const result = await startAutoApply(mode, {
+        backend: backendEngine,
+        live: liveEngine,
+      });
+      if (!result.success) {
+        FileLogger.log('service_worker', 'error', 'AUTO_APPLY_START rejected', {
+          mode,
+          error: result.error,
+        });
+      }
+      return result;
+    },
     checkRuntimeBlockers: async () => {
       FileLogger.log('service_worker', 'info', 'CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
       await doCheckRuntimeBlockers();

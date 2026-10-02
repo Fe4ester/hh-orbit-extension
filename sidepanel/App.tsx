@@ -15,6 +15,7 @@ import { SelectMenu } from '../src/components/SelectMenu';
 import { formatResumeLabel } from '../src/components/resumeLabel';
 import { LogsViewer } from './LogsViewer';
 import './styles.css';
+import type { AutoApplyStartResult } from '../src/background/autoApplyStart';
 
 const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
 const THEME_STORAGE_KEY = 'ui_theme';
@@ -159,7 +160,12 @@ export const App: React.FC = () => {
     ...resumeVm.candidates.map((resume) => ({ value: resume.hash, label: formatResumeLabel(resume) })),
   ];
 
-  const handleStart = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_START' });
+  const handleStart = () => {
+    chrome.runtime.sendMessage({ type: 'AUTO_APPLY_START' }, (response?: AutoApplyStartResult) => {
+      const error = chrome.runtime.lastError?.message || (response && !response.success ? response.error : null);
+      if (error) window.alert(`Не удалось запустить автоотклики: ${error}`);
+    });
+  };
   const handleStop = () => chrome.runtime.sendMessage({ type: 'AUTO_APPLY_STOP' });
   const handleModeChange = (mode: AutoApplyMode) => chrome.runtime.sendMessage({ type: 'SET_MODE', mode });
   const dismissResumeHint = () => {
