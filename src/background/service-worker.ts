@@ -17,6 +17,16 @@ import { AcquisitionService } from '../runtime/acquisitionService';
 import { BackendHTTPClient } from '../runtime/backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
 import { createStoreReadyGate } from './storeReadiness';
+import {
+  createBackgroundMessageListener,
+  type BackgroundResult,
+} from './messageRouter';
+import {
+  runSearchLoop as runSearchLoopOperation,
+  scanCurrentSearchPage as scanCurrentSearchPageOperation,
+  type NextSearchPageResult,
+  type SearchPaginationResult,
+} from './searchLoop';
 
 const store = new StateStore(new ExtensionStorageAdapter());
 
@@ -1267,8 +1277,64 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// Message handler
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+const CORE_MESSAGE_TYPES = new Set([
+  'GET_STATE',
+  'AUTO_APPLY_START',
+  'AUTO_APPLY_STOP',
+  'SET_MODE',
+  'UPDATE_SETTINGS',
+  'MANUAL_ACTION_DONE',
+  'MANUAL_ACTION_DISMISS',
+  'OPEN_SIDEPANEL_FOR_CURRENT_TAB',
+  'DEBUG_OPEN_SIDEPANEL',
+  'DISPATCH_EVENT',
+  'DISMISS_NOTIFICATION',
+  'CREATE_PROFILE',
+  'UPDATE_PROFILE',
+  'DELETE_PROFILE',
+  'DUPLICATE_PROFILE',
+  'SET_ACTIVE_PROFILE',
+  'SELECT_RESUME',
+  'ADD_DEMO_RESUMES',
+  'BIND_RESUME_TO_PROFILE',
+  'RECORD_ATTEMPT',
+  'RECORD_EVENT',
+  'MARK_RUN_STARTED',
+  'MARK_RUN_STOPPED',
+  'CLEAR_RUN_STATS',
+  'SEED_DEMO_ANALYTICS',
+  'RECORD_VACANCY_SCAN',
+  'MARK_NO_MORE_VACANCIES',
+  'RESET_VACANCY_EXHAUSTION',
+  'LIVE_MODE_START',
+  'LIVE_MODE_STOP',
+  'LIVE_MODE_BIND_CURRENT_TAB',
+  'LIVE_MODE_FOCUS_TAB',
+  'CLEAR_VACANCY_QUEUE',
+  'MARK_VACANCY_QUEUED',
+  'MARK_VACANCY_PROCESSED',
+  'MARK_VACANCY_SKIPPED',
+  'LIVE_MODE_OBSERVE_VACANCY_DETAIL',
+  'CLEAR_PREFLIGHT_STATE',
+  'LIVE_MODE_EXECUTE_APPLY_SKELETON',
+  'CLEAR_APPLY_ATTEMPTS',
+  'LIVE_MODE_DETECT_RESUMES',
+  'REFRESH_RESUMES_API',
+]);
+
+function isCoreMessage(message: unknown): message is { type: string; [key: string]: any } {
+  if (!message || typeof message !== 'object' || !('type' in message)) return false;
+  const type = (message as { type?: unknown }).type;
+  return typeof type === 'string' && CORE_MESSAGE_TYPES.has(type);
+}
+
+function handleCoreMessage(
+  message: unknown,
+  _sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void
+): boolean {
+  if (!isCoreMessage(message)) return false;
+
   (async () => {
     try {
       await ensureStoreReady();
@@ -1870,309 +1936,137 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-      sendResponse({ error: 'Unknown message type' });
+      sendResponse({ error: `Unhandled core message type: ${message.type}` });
     } catch (error) {
       FileLogger.log('service_worker', 'error', 'Message handler error', { error: (error as Error).message });
       sendResponse({ error: (error as Error).message });
     }
   })();
 
-  return true; // Keep channel open for async response
-});
-
-// Runtime blocker handlers
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'CHECK_RUNTIME_BLOCKERS') {
-    FileLogger.log('service_worker', 'info', 'CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
-
-    // Respond immediately
-    sendResponse({ success: true });
-
-    // Do async work
-    ensureStoreReady().then(() => doCheckRuntimeBlockers()).catch((error) => {
-      FileLogger.log('service_worker', 'error', 'CHECK_RUNTIME_BLOCKERS: Async work failed', error);
-    });
-
-    return true;
-  }
-
-  if (message.type === 'CLEAR_RUNTIME_BLOCKER') {
-    (async () => {
-      await ensureStoreReady();
-      await store.clearRuntimeBlocker();
-      await store.setSessionStatus('unknown');
-      broadcastState();
-      sendResponse({ success: true });
-    })();
-    return true;
-  }
-
-  return false;
-});
-
-// Search loop handlers
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  (async () => {
-    try {
-      await ensureStoreReady();
-
-      if (message.type === 'LIVE_MODE_NEXT_SEARCH_PAGE') {
-        const state = store.getState();
-        const controlledTabId = state.liveMode.controlledTabId;
-
-        if (!controlledTabId) {
-          sendResponse({ error: 'No controlled tab' });
-          return;
-        }
-
-        const tab = await chrome.tabs.get(controlledTabId);
-        if (!tab.url) {
-          sendResponse({ error: 'No tab URL' });
-          return;
-        }
-
-        const [htmlResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: () => document.documentElement.outerHTML,
-        });
-
-        const html = htmlResult.result as string;
-
-        // Check if next page exists inline
-        const [hasNextResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: (url: string, html: string) => {
-            // Inline hasNextPage
-            const urlObj = new URL(url);
-            const pageParam = urlObj.searchParams.get('page');
-            let currentPage = 0;
-            if (pageParam !== null) {
-              const parsed = parseInt(pageParam, 10);
-              if (!isNaN(parsed) && parsed >= 0) currentPage = parsed;
-            }
-
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const pagerItems = doc.querySelectorAll('[data-qa="pager-page"]');
-            let totalPages: number | null = null;
-
-            if (pagerItems.length > 0) {
-              let maxPage = 0;
-              pagerItems.forEach((item) => {
-                const pageAttr = item.getAttribute('data-page');
-                if (pageAttr) {
-                  const pageNum = parseInt(pageAttr, 10);
-                  if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            if (totalPages === null) {
-              const links = doc.querySelectorAll('a[href*="page="]');
-              let maxPage = 0;
-              links.forEach((link) => {
-                const href = link.getAttribute('href');
-                if (href) {
-                  const match = href.match(/page=(\d+)/);
-                  if (match) {
-                    const pageNum = parseInt(match[1], 10);
-                    if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                  }
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            const hasNext = totalPages === null || currentPage < totalPages;
-
-            return { hasNext, currentPage };
-          },
-          args: [tab.url, html],
-        });
-
-        const { hasNext, currentPage } = hasNextResult.result as {
-          hasNext: boolean;
-          currentPage: number;
-        };
-
-        if (!hasNext) {
-          sendResponse({ error: 'No next page available' });
-          return;
-        }
-
-        const nextUrl = new URL(tab.url);
-        nextUrl.searchParams.set('page', String(currentPage + 1));
-
-        // Navigate
-        await chrome.tabs.update(controlledTabId, { url: nextUrl.toString() });
-
-        sendResponse({ success: true, nextUrl: nextUrl.toString() });
-      }
-
-      if (message.type === 'LIVE_MODE_RUN_SEARCH_LOOP') {
-        const state = store.getState();
-        const controlledTabId = state.liveMode.controlledTabId;
-
-        if (!controlledTabId) {
-          sendResponse({ error: 'No controlled tab' });
-          return;
-        }
-
-        if (state.liveMode.pageType !== 'search') {
-          sendResponse({ error: 'Not on search page' });
-          return;
-        }
-
-        if (state.vacancyScan.exhausted) {
-          sendResponse({ error: 'Vacancy search exhausted' });
-          return;
-        }
-
-        if (state.runtimeBlocker) {
-          sendResponse({ error: `Runtime blocked: ${state.runtimeBlocker}` });
-          return;
-        }
-
-        await store.startSearchLoop();
-
-        // Scan current page
-        const scanResponse = await new Promise<any>((resolve) => {
-          chrome.runtime.sendMessage({ type: 'LIVE_MODE_SCAN_CURRENT_SEARCH_PAGE' }, resolve);
-        });
-
-        if (!scanResponse.success) {
-          await store.stopSearchLoop();
-          sendResponse({ error: scanResponse.error });
-          return;
-        }
-
-        await store.incrementSearchLoopIteration();
-
-        const updatedState = store.getState();
-
-        if (updatedState.vacancyScan.exhausted) {
-          await store.stopSearchLoop();
-          broadcastState();
-          sendResponse({
-            success: true,
-            stopped: true,
-            reason: 'exhausted',
-            ...scanResponse,
-          });
-          return;
-        }
-
-        // Check if next page exists
-        const tab = await chrome.tabs.get(controlledTabId);
-        if (!tab.url) {
-          await store.stopSearchLoop();
-          sendResponse({ error: 'No tab URL' });
-          return;
-        }
-
-        const [htmlResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: () => document.documentElement.outerHTML,
-        });
-
-        const html = htmlResult.result as string;
-
-        const [hasNextResult] = await chrome.scripting.executeScript({
-          target: { tabId: controlledTabId },
-          func: (url: string, html: string) => {
-            const urlObj = new URL(url);
-            const pageParam = urlObj.searchParams.get('page');
-            let currentPage = 0;
-            if (pageParam !== null) {
-              const parsed = parseInt(pageParam, 10);
-              if (!isNaN(parsed) && parsed >= 0) currentPage = parsed;
-            }
-
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const pagerItems = doc.querySelectorAll('[data-qa="pager-page"]');
-            let totalPages: number | null = null;
-
-            if (pagerItems.length > 0) {
-              let maxPage = 0;
-              pagerItems.forEach((item) => {
-                const pageAttr = item.getAttribute('data-page');
-                if (pageAttr) {
-                  const pageNum = parseInt(pageAttr, 10);
-                  if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            if (totalPages === null) {
-              const links = doc.querySelectorAll('a[href*="page="]');
-              let maxPage = 0;
-              links.forEach((link) => {
-                const href = link.getAttribute('href');
-                if (href) {
-                  const match = href.match(/page=(\d+)/);
-                  if (match) {
-                    const pageNum = parseInt(match[1], 10);
-                    if (!isNaN(pageNum) && pageNum > maxPage) maxPage = pageNum;
-                  }
-                }
-              });
-              if (maxPage > 0) totalPages = maxPage;
-            }
-
-            return totalPages === null || currentPage < totalPages;
-          },
-          args: [tab.url, html],
-        });
-
-        const hasNext = hasNextResult.result as boolean;
-
-        if (!hasNext) {
-          // Last page reached
-          if (scanResponse.newCount === 0) {
-            // No new vacancies on last page -> mark exhausted
-            await store.markNoMoreVacancies('no_unseen_vacancies');
-          }
-          await store.stopSearchLoop();
-          broadcastState();
-          sendResponse({
-            success: true,
-            stopped: true,
-            reason: 'last_page',
-            ...scanResponse,
-          });
-          return;
-        }
-
-        // Navigate to next page
-        const nextResponse = await new Promise<any>((resolve) => {
-          chrome.runtime.sendMessage({ type: 'LIVE_MODE_NEXT_SEARCH_PAGE' }, resolve);
-        });
-
-        if (!nextResponse.success) {
-          await store.stopSearchLoop();
-          sendResponse({ error: nextResponse.error });
-          return;
-        }
-
-        await store.stopSearchLoop();
-        broadcastState();
-
-        sendResponse({
-          success: true,
-          stopped: false,
-          ...scanResponse,
-          nextUrl: nextResponse.nextUrl,
-        });
-      }
-    } catch (error) {
-      FileLogger.log('service_worker', 'error', 'Search loop error', { error: (error as Error).message });
-      sendResponse({ error: (error as Error).message });
-    }
-  })();
-
   return true;
+}
+
+async function clearRuntimeBlockerCommand(): Promise<BackgroundResult> {
+  await store.clearRuntimeBlocker();
+  await store.setSessionStatus('unknown');
+  await broadcastState();
+  return { success: true };
+}
+
+async function inspectSearchPagination(): Promise<
+  | { success: true; hasNext: boolean; currentPage: number; currentUrl: string }
+  | { success: false; error: string }
+> {
+  const controlledTabId = store.getState().liveMode.controlledTabId;
+  if (!controlledTabId) return { success: false, error: 'No controlled tab' };
+
+  const tab = await chrome.tabs.get(controlledTabId);
+  if (!tab.url) return { success: false, error: 'No tab URL' };
+
+  const [htmlResult] = await chrome.scripting.executeScript({
+    target: { tabId: controlledTabId },
+    func: () => document.documentElement.outerHTML,
+  });
+  const html = htmlResult.result as string;
+
+  const [paginationResult] = await chrome.scripting.executeScript({
+    target: { tabId: controlledTabId },
+    func: (url: string, pageHtml: string) => {
+      const urlObject = new URL(url);
+      const pageParam = urlObject.searchParams.get('page');
+      const parsedPage = pageParam === null ? 0 : Number.parseInt(pageParam, 10);
+      const currentPage = Number.isNaN(parsedPage) || parsedPage < 0 ? 0 : parsedPage;
+      const documentNode = new DOMParser().parseFromString(pageHtml, 'text/html');
+      let totalPages: number | null = null;
+      let maxPage = 0;
+
+      documentNode.querySelectorAll('[data-qa="pager-page"]').forEach((item) => {
+        const page = Number.parseInt(item.getAttribute('data-page') || '', 10);
+        if (!Number.isNaN(page) && page > maxPage) maxPage = page;
+      });
+
+      if (maxPage === 0) {
+        documentNode.querySelectorAll('a[href*="page="]').forEach((link) => {
+          const match = link.getAttribute('href')?.match(/page=(\d+)/);
+          const page = match ? Number.parseInt(match[1], 10) : 0;
+          if (!Number.isNaN(page) && page > maxPage) maxPage = page;
+        });
+      }
+
+      if (maxPage > 0) totalPages = maxPage;
+      return { hasNext: totalPages === null || currentPage < totalPages, currentPage };
+    },
+    args: [tab.url, html],
+  });
+
+  const result = paginationResult.result as { hasNext: boolean; currentPage: number } | undefined;
+  if (!result) return { success: false, error: 'Search pagination inspection failed' };
+  return { success: true, ...result, currentUrl: tab.url };
+}
+
+async function nextSearchPageCommand(): Promise<NextSearchPageResult> {
+  const controlledTabId = store.getState().liveMode.controlledTabId;
+  if (!controlledTabId) return { success: false, error: 'No controlled tab' };
+
+  const pagination = await inspectSearchPagination();
+  if (!pagination.success) return pagination;
+  if (!pagination.hasNext) return { success: false, error: 'No next page available' };
+
+  const nextUrl = new URL(pagination.currentUrl);
+  nextUrl.searchParams.set('page', String(pagination.currentPage + 1));
+  await chrome.tabs.update(controlledTabId, { url: nextUrl.toString() });
+  return { success: true, nextUrl: nextUrl.toString() };
+}
+
+async function scanCurrentSearchPageCommand() {
+  return scanCurrentSearchPageOperation({
+    getState: () => store.getState(),
+    acquireForProfile: (profileId, skipNavigation) =>
+      acquisitionService.acquireForProfile(profileId, skipNavigation),
+    recordVacancyScan: (foundCount, newCount) => store.recordVacancyScan(foundCount, newCount),
+  });
+}
+
+async function runSearchLoopCommand(): Promise<BackgroundResult> {
+  return runSearchLoopOperation({
+    getState: () => store.getState(),
+    startSearchLoop: () => store.startSearchLoop(),
+    stopSearchLoop: () => store.stopSearchLoop(),
+    incrementSearchLoopIteration: () => store.incrementSearchLoopIteration(),
+    markNoMoreVacancies: (reason) => store.markNoMoreVacancies(reason),
+    broadcastState,
+    scanCurrentPage: scanCurrentSearchPageCommand,
+    getHasNextPage: async (): Promise<SearchPaginationResult> => {
+      const pagination = await inspectSearchPagination();
+      return pagination.success
+        ? { success: true, hasNext: pagination.hasNext }
+        : pagination;
+    },
+    nextSearchPage: nextSearchPageCommand,
+  });
+}
+
+const backgroundMessageListener = createBackgroundMessageListener({
+  ensureStoreReady,
+  isCoreMessage,
+  coreHandler: handleCoreMessage,
+  handlers: {
+    checkRuntimeBlockers: async () => {
+      FileLogger.log('service_worker', 'info', 'CHECK_RUNTIME_BLOCKERS: Delegating to doCheckRuntimeBlockers');
+      await doCheckRuntimeBlockers();
+    },
+    clearRuntimeBlocker: clearRuntimeBlockerCommand,
+    nextSearchPage: nextSearchPageCommand,
+    runSearchLoop: runSearchLoopCommand,
+  },
+  onDetachedError: (messageType, error) => {
+    FileLogger.log('service_worker', 'error', `${messageType}: Async work failed`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
 });
+
+chrome.runtime.onMessage.addListener(backgroundMessageListener);
 
 // Broadcast state to all sidepanels
 function broadcastStateSnapshot(state: ReturnType<StateStore['getState']>): void {
