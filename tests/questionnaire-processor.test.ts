@@ -121,6 +121,18 @@ describe('QuestionnaireProcessor', () => {
     expect(item.status).toBe('needs_review');
   });
 
+  it('does not approve an answer that still requires review', async () => {
+    await store.enqueueQuestionnaire(questionnaire);
+    provider.generateAnswers = vi.fn().mockResolvedValue(answerPlan({
+      text: 'Требуется уточнение перед отправкой',
+      requiresReview: true,
+    }));
+    await processor().processOne(questionnaire.id);
+
+    await expect(processor().approve(questionnaire.id)).rejects.toThrow('требует проверки');
+    expect(store.getState().questionnaires.queue[0].status).toBe('needs_review');
+  });
+
   it('fills only an approved plan and never submits it', async () => {
     await store.enqueueQuestionnaire(questionnaire);
     await processor().processOne(questionnaire.id);
