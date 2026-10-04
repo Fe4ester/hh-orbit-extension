@@ -98,6 +98,14 @@ export const LogsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   useEffect(() => { void loadLogs(); }, [loadLogs]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const filteredLogs = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return logs.filter((log) =>
