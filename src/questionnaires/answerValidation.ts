@@ -1,9 +1,16 @@
 import type {
+  AnswerPlan,
   CandidateContext,
   CandidateEvidence,
   Questionnaire,
   SuggestedAnswer,
 } from './types';
+
+export function assertAnswersReviewed(answerPlan: AnswerPlan): void {
+  if (answerPlan.answers.some(answer => answer.requiresReview)) {
+    throw new Error('Ответ анкеты требует проверки');
+  }
+}
 
 function scalarText(value: unknown): string | undefined {
   if (typeof value === 'string') return value.trim();

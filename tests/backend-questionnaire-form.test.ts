@@ -125,4 +125,37 @@ describe('backend questionnaire form contract', () => {
     expect(() => buildBackendQuestionnaireBody(contract, answerPlan, 'resume-hash'))
       .toThrow('другой версии');
   });
+
+  it('does not include an answer that still requires review in a submission', () => {
+    const contract = parseBackendQuestionnaireForm(
+      questionnaireHtml,
+      'https://hh.ru/applicant/vacancy_response?vacancyId=42',
+      '42'
+    );
+    const answerPlan: AnswerPlan = {
+      questionnaireId: contract.questionnaire.id,
+      providerId: 'local',
+      modelId: 'openrouter/free',
+      generatedAt: 1,
+      answers: [
+        {
+          questionId: 'task_101',
+          text: 'Требуется уточнение перед отправкой',
+          confidence: 0,
+          evidence: [],
+          requiresReview: true,
+        },
+        {
+          questionId: 'task_202',
+          selectedValues: ['yes'],
+          confidence: 1,
+          evidence: [{ source: 'user_instruction' }],
+          requiresReview: false,
+        },
+      ],
+    };
+
+    expect(() => buildBackendQuestionnaireBody(contract, answerPlan, 'resume-hash'))
+      .toThrow('требует проверки');
+  });
 });

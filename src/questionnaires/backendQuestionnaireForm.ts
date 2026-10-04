@@ -5,6 +5,7 @@ import type {
   QuestionnaireQuestion,
   QuestionType,
 } from './types';
+import { assertAnswersReviewed } from './answerValidation';
 
 interface BackendFormField {
   name: string;
@@ -246,6 +247,7 @@ export function buildBackendQuestionnaireBody(
   if (answerPlan.questionnaireId !== contract.questionnaire.id) {
     throw new Error('Черновик относится к другой версии анкеты');
   }
+  assertAnswersReviewed(answerPlan);
 
   const body = new FormData();
   for (const field of contract.hiddenFields) {
