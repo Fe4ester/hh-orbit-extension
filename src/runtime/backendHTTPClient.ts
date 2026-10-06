@@ -136,10 +136,13 @@ function hasApplySuccessInText(text: string): boolean {
 }
 
 function hasQuestionnaireBlockerInText(text: string): boolean {
+  const hasQuestionFields = /name=["']task_[^"']+["']/i.test(text);
+  const hasQuestionnaireForm = /(?:name=["']vacancy_response["']|id=["']RESPONSE_MODAL_FORM_ID["'])/i.test(text);
   return (
     text.includes('vacancy-response-questionnaire') ||
     text.includes('Работодатель просит ответить на вопросы') ||
-    text.includes('ответить на вопросы работодателя')
+    text.includes('ответить на вопросы работодателя') ||
+    (hasQuestionnaireForm && hasQuestionFields)
   );
 }
 
@@ -224,42 +227,65 @@ export class BackendHTTPClient {
       throw new Error(`HH не вернул анкету: HTTP ${response.status}`);
     }
 
+    const finalUrl = response.url || url;
+    if (!this.isTrustedHHURL(finalUrl)) {
+      throw new Error('HH вернул недоверенный адрес анкеты');
+    }
+
     const html = await response.text();
     this.log('[BackendHTTP] questionnaire HTML received', {
       vacancyId,
       htmlLength: html.length,
       hasTaskFields: /name=["']task_/i.test(html),
     });
-    return parseBackendQuestionnaireForm(html, response.url || url, vacancyId);
+    return parseBackendQuestionnaireForm(html, finalUrl, vacancyId);
   }
 
   async submitQuestionnaire(
     vacancyId: string,
     resumeHash: string,
     answerPlan: AnswerPlan,
-    candidateUrl?: string
+    candidateUrl?: string,
+    coverLetter?: string
   ): Promise<ApplyResponse> {
     const contract = await this.fetchQuestionnaireForm(vacancyId, candidateUrl);
     if (!this.isTrustedHHURL(contract.actionUrl)) {
       throw new Error('HH вернул недоверенный адрес отправки анкеты');
     }
     const body = buildBackendQuestionnaireBody(contract, answerPlan, resumeHash);
-    await this.ensureXsrfToken();
+    const xsrfToken = await getXsrfCookie();
+    if (!xsrfToken) throw new Error('Сессия HH истекла. Войдите в HH и повторите отправку');
+    body.set('_xsrf', xsrfToken);
+    body.set('vacancy_id', vacancyId);
+    body.set('lux', 'true');
+    body.set('withoutTest', 'no');
+    body.set('incomplete', 'false');
+    body.set('ignore_postponed', 'true');
+    if (!body.has('mark_applicant_visible_in_vacancy_country')) {
+      body.set('mark_applicant_visible_in_vacancy_country', 'false');
+    }
+    if (!body.has('country_ids')) body.set('country_ids', '[]');
+    if (coverLetter?.trim()) body.set('letter', coverLetter.trim());
+    else if (!body.has('letter')) body.set('letter', '');
     const headers: Record<string, string> = {
       'Accept': 'application/json,text/html;q=0.9',
       'Referer': contract.sourceUrl,
       'X-Requested-With': 'XMLHttpRequest',
+      'X-Hhtmfrom': 'vacancy',
+      'X-Hhtmsource': 'vacancy_response',
+      'X-Xsrftoken': xsrfToken,
     };
-    if (this.xsrfToken) headers['X-Xsrftoken'] = this.xsrfToken;
-
+    if (contract.enctype === 'application/x-www-form-urlencoded') {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+    }
     this.log('[BackendHTTP] submitQuestionnaire', {
       vacancyId,
-      url: contract.actionUrl,
-      hasXsrfToken: Boolean(this.xsrfToken),
+      url: this.popupURL,
+      hasXsrfToken: true,
       bodyKeys: Array.from(body.keys()),
       answerCount: answerPlan.answers.length,
     });
-    const response = await fetch(contract.actionUrl, {
+    const response = await fetch(this.popupURL, {
       method: 'POST',
       credentials: 'include',
       headers,

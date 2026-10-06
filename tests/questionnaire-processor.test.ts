@@ -121,7 +121,7 @@ describe('QuestionnaireProcessor', () => {
     expect(item.status).toBe('needs_review');
   });
 
-  it('does not approve an answer that still requires review', async () => {
+  it('does not approve an unresolved required answer', async () => {
     await store.enqueueQuestionnaire(questionnaire);
     provider.generateAnswers = vi.fn().mockResolvedValue(answerPlan({
       text: 'Требуется уточнение перед отправкой',
@@ -129,8 +129,37 @@ describe('QuestionnaireProcessor', () => {
     }));
     await processor().processOne(questionnaire.id);
 
-    await expect(processor().approve(questionnaire.id)).rejects.toThrow('требует проверки');
+    await expect(processor().approve(questionnaire.id)).rejects.toThrow('Нет проверенного ответа');
     expect(store.getState().questionnaires.queue[0].status).toBe('needs_review');
+  });
+
+  it('approves a complete reviewed draft without requiring every field to be edited', async () => {
+    await store.enqueueQuestionnaire(questionnaire);
+    provider.generateAnswers = vi.fn().mockResolvedValue(answerPlan({ requiresReview: true }));
+    await processor().processOne(questionnaire.id);
+
+    await processor().approve(questionnaire.id);
+
+    expect(store.getState().questionnaires.queue[0]).toMatchObject({
+      status: 'approved',
+      answerPlan: { answers: [{ text: 'Пять лет', requiresReview: false }] },
+    });
+  });
+
+  it('remembers approved answers according to memory settings', async () => {
+    await store.updateQuestionnaireSettings({
+      answerMemory: { rememberNewAnswers: true, updateRememberedAnswers: false },
+    });
+    await store.enqueueQuestionnaire(questionnaire);
+    provider.generateAnswers = vi.fn().mockResolvedValue(answerPlan({ requiresReview: true }));
+    await processor().processOne(questionnaire.id);
+
+    await processor().approve(questionnaire.id);
+
+    expect(store.getState().questionnaires.settings.context.savedAnswers).toEqual([{
+      prompt: 'Опишите опыт с TypeScript',
+      answer: 'Пять лет',
+    }]);
   });
 
   it('fills only an approved plan and never submits it', async () => {

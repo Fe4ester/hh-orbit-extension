@@ -1,7 +1,6 @@
 import type { StateStore } from '../state/store';
 import type { AIProvider } from './provider';
 import { attachAnswerPlan, failQuestionnaire } from './queue';
-import { assertAnswersReviewed } from './answerValidation';
 import type {
   AnswerPlan,
   CandidateContext,
@@ -26,6 +25,7 @@ type QuestionnaireStore = Pick<
   | 'enqueueQuestionnaire'
   | 'updateQuestionnaireItem'
   | 'reviseQuestionnaireAnswer'
+  | 'approveQuestionnaire'
   | 'transitionQuestionnaire'
   | 'setQuestionnaireProcessing'
 >;
@@ -178,8 +178,7 @@ export class QuestionnaireProcessor {
   async approve(questionnaireId: string): Promise<void> {
     const item = this.requireItem(questionnaireId);
     if (!item.answerPlan) throw new Error('Questionnaire has no answer plan');
-    assertAnswersReviewed(item.answerPlan);
-    await this.options.store.transitionQuestionnaire(questionnaireId, 'approved');
+    await this.options.store.approveQuestionnaire(questionnaireId);
   }
 
   async reviseAnswer(

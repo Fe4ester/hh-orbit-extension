@@ -1,6 +1,6 @@
 import type { CandidateContext, Questionnaire } from './types';
 
-const MAX_CONTEXT_CHARS = 14_000;
+export const MAX_CONTEXT_CHARS = 14_000;
 const MAX_CHUNK_CHARS = 700;
 const MIN_WORD_LENGTH = 3;
 const STOP_WORDS = new Set([

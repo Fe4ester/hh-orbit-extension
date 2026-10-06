@@ -2,12 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
 
-// Confirmed dialogs deliberately kept as native confirm() - not a
-// missed lint violation, just not worth building custom UI for yet.
-const ALLOWED_VIOLATIONS: Array<{ file: string; match: RegExp }> = [
-  { file: 'sidepanel/App.tsx', match: /confirm\('Удалить профиль/ },
-];
-
 describe('Code quality checks', () => {
   it('should not use alert/confirm/prompt in source code', () => {
     const repoRoot = join(__dirname, '..');
@@ -37,12 +31,7 @@ describe('Code quality checks', () => {
 
             // Check for alert/confirm/prompt
             if (/\b(alert|confirm|prompt)\s*\(/.test(line)) {
-              const isAllowed = ALLOWED_VIOLATIONS.some(
-                (allowed) => allowed.file === relativePath && allowed.match.test(line)
-              );
-              if (!isAllowed) {
-                violations.push(`${relativePath}:${index + 1}: ${line.trim()}`);
-              }
+              violations.push(`${relativePath}:${index + 1}: ${line.trim()}`);
             }
           });
         }

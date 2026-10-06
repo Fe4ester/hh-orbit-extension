@@ -4,6 +4,7 @@ export * from './providerCredentials';
 export * from './hostedAIProvider';
 export * from './contextCompactor';
 export * from './legendArtifact';
+export * from './answerMemory';
 export * from './manualQuestionnaireQueue';
 export * from './backendQuestionnaireForm';
 export * from './processor';

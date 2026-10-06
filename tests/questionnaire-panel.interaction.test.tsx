@@ -1,0 +1,81 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QuestionnairePanel } from '../src/components/QuestionnairePanel';
+import { INITIAL_QUESTIONNAIRE_STATE } from '../src/questionnaires';
+
+describe('QuestionnairePanel submission', () => {
+  let container: HTMLDivElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+
+  afterEach(() => {
+    if (root) act(() => root?.unmount());
+    container?.remove();
+    vi.mocked(chrome.runtime.sendMessage).mockReset();
+    root = null;
+    container = null;
+  });
+
+  it('saves the blurred answer before submitting from the first click', async () => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    let finishRevision!: () => void;
+    const revision = new Promise<void>(resolve => { finishRevision = resolve; });
+    vi.mocked(chrome.runtime.sendMessage).mockImplementation(async message => {
+      if ((message as { type?: string }).type === 'QUESTIONNAIRE_REVISE_ANSWER') {
+        await revision;
+      }
+      return { success: true };
+    });
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <QuestionnairePanel
+          view="workspace"
+          onPatch={vi.fn()}
+          selectedResume={null}
+          manualQuestionnaireCount={0}
+          state={{
+            ...INITIAL_QUESTIONNAIRE_STATE,
+            queue: [{
+              questionnaire: {
+                id: 'q-1', vacancyId: '42', source: 'hh_backend', detectedAt: 1,
+                questions: [{ id: 'answer', type: 'text', prompt: 'Опыт', required: true }],
+              },
+              status: 'needs_review',
+              sourceUrl: 'https://hh.ru/vacancy/42',
+              answerPlan: {
+                questionnaireId: 'q-1', providerId: 'openai', modelId: 'test', generatedAt: 1,
+                answers: [{ questionId: 'answer', text: 'Старый', confidence: 0.8, evidence: [], requiresReview: true }],
+              },
+              updatedAt: 1,
+            }],
+          }}
+        />
+      );
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    const submit = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent === 'Одобрить и отправить')!;
+    textarea.value = 'Новый';
+    await act(async () => {
+      textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+      submit.click();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(chrome.runtime.sendMessage)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishRevision();
+      await revision;
+      await Promise.resolve();
+    });
+    expect(vi.mocked(chrome.runtime.sendMessage).mock.calls.map(([message]) =>
+      (message as { type?: string }).type
+    )).toEqual(['QUESTIONNAIRE_REVISE_ANSWER', 'QUESTIONNAIRE_APPROVE_AND_SUBMIT']);
+    expect(container.textContent).not.toContain('Подтвердить отправку');
+  });
+});

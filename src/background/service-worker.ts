@@ -23,6 +23,7 @@ import {
   getProviderDefinition,
   isAIProviderId,
   QuestionnaireProcessor,
+  createManualAnswerPlan,
   selectPendingManualQuestionnaires,
   type CandidateContext,
   type QuestionnaireQueueItem,
@@ -1117,10 +1118,44 @@ const questionnaireProcessor = new QuestionnaireProcessor({
 async function prepareManualQuestionnaireCore(
   actionId: string
 ): Promise<QuestionnaireQueueItem> {
-  if (store.getState().mode !== 'backend') {
-    throw new Error('AI-черновики анкет доступны только в Backend-режиме');
+  const item = await captureManualQuestionnaire(actionId);
+  if (
+    item.status === 'needs_review'
+    && item.answerPlan
+    && item.answerPlan.providerId !== 'manual'
+  ) return item;
+  const generationStartedAt = Date.now();
+  void FileLogger.log('service_worker', 'info', 'Questionnaire AI generation started', {
+    questionnaireId: item.questionnaire.id,
+    vacancyId: item.questionnaire.vacancyId,
+    modelId: store.getState().questionnaires.settings.provider.modelId,
+    questions: item.questionnaire.questions.length,
+  });
+  const processed = await questionnaireProcessor.processOne(item.questionnaire.id);
+  if (processed.status === 'failed') {
+    void FileLogger.log('service_worker', 'error', 'Questionnaire AI generation failed', {
+      questionnaireId: item.questionnaire.id,
+      vacancyId: item.questionnaire.vacancyId,
+      durationMs: Date.now() - generationStartedAt,
+      error: processed.error,
+    });
+    throw new Error(processed.error || 'AI не подготовил ответы');
   }
-  await questionnaireCandidateContext();
+  void FileLogger.log('service_worker', 'info', 'Questionnaire AI draft ready', {
+    questionnaireId: item.questionnaire.id,
+    vacancyId: item.questionnaire.vacancyId,
+    durationMs: Date.now() - generationStartedAt,
+    answers: processed.answerPlan?.answers.length ?? 0,
+  });
+  return processed;
+}
+
+async function captureManualQuestionnaire(
+  actionId: string
+): Promise<QuestionnaireQueueItem> {
+  if (store.getState().mode !== 'backend') {
+    throw new Error('Анкеты внутри расширения доступны только в Backend-режиме');
+  }
 
   const state = store.getState();
   const action = state.manualActions.find(current => current.id === actionId);
@@ -1133,6 +1168,9 @@ async function prepareManualQuestionnaireCore(
   }
   if (!action.vacancyId) throw new Error('У анкеты отсутствует идентификатор вакансии');
 
+  const existing = state.questionnaires.queue.find(item => item.manualActionId === action.id);
+  if (existing && existing.status !== 'failed') return existing;
+
   const contract = await backendHTTPClient.fetchQuestionnaireForm(
     action.vacancyId,
     action.url
@@ -1144,31 +1182,24 @@ async function prepareManualQuestionnaireCore(
     company: action.company,
     source: 'hh_backend',
   });
-  const generationStartedAt = Date.now();
-  void FileLogger.log('service_worker', 'info', 'Questionnaire AI generation started', {
-    questionnaireId: item.questionnaire.id,
-    vacancyId: action.vacancyId,
-    modelId: store.getState().questionnaires.settings.provider.modelId,
-    questions: item.questionnaire.questions.length,
-  });
-  const processed = await questionnaireProcessor.processOne(item.questionnaire.id);
-  if (processed.status === 'failed') {
-    void FileLogger.log('service_worker', 'error', 'Questionnaire AI generation failed', {
-      questionnaireId: item.questionnaire.id,
-      vacancyId: action.vacancyId,
-      durationMs: Date.now() - generationStartedAt,
-      error: processed.error,
-    });
-    throw new Error(processed.error || 'AI не подготовил ответы');
-  }
-  void FileLogger.log('service_worker', 'info', 'Questionnaire AI draft ready', {
-    questionnaireId: item.questionnaire.id,
-    vacancyId: action.vacancyId,
-    durationMs: Date.now() - generationStartedAt,
-    answers: processed.answerPlan?.answers.length ?? 0,
-  });
-  await store.markManualActionDone(action.id);
-  return processed;
+  return item;
+}
+
+async function prepareManualQuestionnaireDraft(
+  actionId: string
+): Promise<QuestionnaireQueueItem> {
+  const item = await captureManualQuestionnaire(actionId);
+  if (item.status === 'needs_review' && item.answerPlan) return item;
+  const now = Date.now();
+  const draft: QuestionnaireQueueItem = {
+    ...item,
+    status: 'needs_review',
+    answerPlan: createManualAnswerPlan(item.questionnaire, now),
+    error: undefined,
+    updatedAt: now,
+  };
+  await store.updateQuestionnaireItem(draft);
+  return draft;
 }
 
 function prepareManualQuestionnaire(actionId: string): Promise<QuestionnaireQueueItem> {
@@ -1232,7 +1263,6 @@ async function approveAndSubmitBackendQuestionnaire(
   if (!item?.answerPlan || !item.sourceUrl) {
     throw new Error('У анкеты нет готового backend-черновика');
   }
-  const answerPlan = item.answerPlan;
   if (item.status === 'needs_review') {
     await questionnaireProcessor.approve(questionnaireId);
     item = store.getState().questionnaires.queue.find(
@@ -1242,38 +1272,49 @@ async function approveAndSubmitBackendQuestionnaire(
   if (item.status !== 'approved') {
     throw new Error('Анкета должна находиться на приёмке');
   }
+  const answerPlan = item.answerPlan;
+  if (!answerPlan) throw new Error('У анкеты нет готового backend-черновика');
 
-  const resumeHash = store.getState().selectedResumeHash;
+  const submissionState = store.getState();
+  const resumeHash = submissionState.selectedResumeHash;
   if (!resumeHash) throw new Error('Сначала выберите резюме');
+  const manualAction = submissionState.manualActions.find(action => action.id === item.manualActionId);
+  const profileId = manualAction?.profileId ?? submissionState.activeProfileId;
+  const coverLetter = profileId ? submissionState.profiles[profileId]?.coverLetterTemplate : undefined;
   const result = await backendHTTPClient.submitQuestionnaire(
     item.questionnaire.vacancyId,
     resumeHash,
     answerPlan,
-    item.sourceUrl
+    item.sourceUrl,
+    coverLetter
   );
   await store.recordLocalApplyAttempt({
     vacancyId: item.questionnaire.vacancyId,
-    profileId: store.getState().activeProfileId,
+    profileId,
     resumeHash,
     outcome: result.outcome,
     message: result.message || result.error || '',
     metadata: result.diagnostics ? { diagnostics: result.diagnostics } : undefined,
   });
   if (!result.success) {
+    const message = result.outcome === 'cover_letter_required'
+      ? 'HH требует сопроводительное письмо. Добавьте его в настройки профиля и повторите отправку.'
+      : result.message || result.error || 'HH отклонил отправку анкеты';
     await store.transitionQuestionnaire(questionnaireId, 'needs_review');
     const reviewItem = store.getState().questionnaires.queue.find(
       current => current.questionnaire.id === questionnaireId
     )!;
     await store.updateQuestionnaireItem({
       ...reviewItem,
-      error: result.message || result.error || 'HH отклонил отправку анкеты',
+      error: message,
       updatedAt: Date.now(),
     });
-    throw new Error(result.message || result.error || 'HH отклонил отправку анкеты');
+    throw new Error(message);
   }
 
   await store.transitionQuestionnaire(questionnaireId, 'filled');
   await store.transitionQuestionnaire(questionnaireId, 'submitted');
+  if (item.manualActionId) await store.markManualActionDone(item.manualActionId);
 }
 
 async function processQuestionnairesAfterCollection(): Promise<void> {
@@ -1611,6 +1652,7 @@ const CORE_MESSAGE_TYPES = new Set([
   'QUESTIONNAIRE_PROCESS_PENDING',
   'QUESTIONNAIRE_PROCESS_MANUAL_ACTIONS',
   'QUESTIONNAIRE_PREPARE_MANUAL',
+  'QUESTIONNAIRE_PREPARE_MANUAL_DRAFT',
   'QUESTIONNAIRE_PROCESS_ONE',
   'QUESTIONNAIRE_APPROVE',
   'QUESTIONNAIRE_REVISE_ANSWER',
@@ -1773,6 +1815,12 @@ function handleCoreMessage(
 
       if (message.type === 'QUESTIONNAIRE_PREPARE_MANUAL') {
         const item = await prepareManualQuestionnaire(message.actionId);
+        sendResponse({ success: true, item });
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_PREPARE_MANUAL_DRAFT') {
+        const item = await prepareManualQuestionnaireDraft(message.actionId);
         sendResponse({ success: true, item });
         return;
       }

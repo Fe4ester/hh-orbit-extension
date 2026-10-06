@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { selectPendingManualQuestionnaires } from '../src/questionnaires';
+import { createManualAnswerPlan, selectPendingManualQuestionnaires } from '../src/questionnaires';
 import type { QuestionnaireQueueItem } from '../src/questionnaires';
 import type { ManualAction } from '../src/state/types';
 
@@ -49,5 +49,33 @@ describe('selectPendingManualQuestionnaires', () => {
     ], [queued]);
 
     expect(result.map(item => item.id)).toEqual(['new']);
+  });
+});
+
+describe('createManualAnswerPlan', () => {
+  it('creates editable blank answers without AI placeholder text', () => {
+    const plan = createManualAnswerPlan({
+      id: 'questionnaire-42',
+      vacancyId: '42',
+      source: 'hh_backend',
+      detectedAt: 1,
+      questions: [
+        { id: 'text', type: 'text', prompt: 'Опыт', required: true },
+        {
+          id: 'choice',
+          type: 'single',
+          prompt: 'Формат',
+          required: true,
+          options: [{ value: 'remote', label: 'Удалённо' }],
+        },
+      ],
+    }, 100);
+
+    expect(plan.providerId).toBe('manual');
+    expect(plan.generatedAt).toBe(100);
+    expect(plan.answers).toEqual([
+      expect.objectContaining({ questionId: 'text', text: '', requiresReview: true }),
+      expect.objectContaining({ questionId: 'choice', selectedValues: [], requiresReview: true }),
+    ]);
   });
 });

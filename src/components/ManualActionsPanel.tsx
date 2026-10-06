@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { t } from '../i18n';
+import React, { useState } from 'react';
 
 interface ManualActionItem {
   id: string;
@@ -15,6 +16,8 @@ interface ManualActionsPanelProps {
   onOpen: (url: string) => void;
   onDone: (id: string) => void;
   onDismiss: (id: string) => void;
+  preparedActionIds?: string[];
+  onFillManual?: (id: string) => Promise<{ success?: boolean; error?: string }>;
   onPrepareAI?: (id: string) => Promise<{ success?: boolean; error?: string }>;
 }
 
@@ -44,11 +47,15 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   onOpen,
   onDone,
   onDismiss,
+  preparedActionIds = [],
+  onFillManual,
   onPrepareAI,
 }) => {
   const [currentPage, setCurrentPage] = useState(0);
   const [preparingId, setPreparingId] = useState<string | null>(null);
+  const [preparingMode, setPreparingMode] = useState<'manual' | 'ai' | null>(null);
   const [preparationErrors, setPreparationErrors] = useState<Record<string, string>>({});
+  const preparedActions = new Set(preparedActionIds);
 
   const totalPages = Math.ceil(actions.length / ITEMS_PER_PAGE);
 
@@ -58,102 +65,105 @@ export const ManualActionsPanel: React.FC<ManualActionsPanelProps> = ({
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const currentActions = actions.slice(startIndex, endIndex);
 
-  useEffect(() => {
-    if (actions.length > 0 && validCurrentPage !== currentPage) {
-      setCurrentPage(validCurrentPage);
-    }
-  }, [actions.length, validCurrentPage, currentPage]);
-
   const handlePrevPage = () => {
-    setCurrentPage((prev) => Math.max(0, prev - 1));
+    setCurrentPage(Math.max(0, validCurrentPage - 1));
   };
 
   const handleNextPage = () => {
-    setCurrentPage((prev) => Math.min(totalPages - 1, prev + 1));
+    setCurrentPage(Math.min(totalPages - 1, validCurrentPage + 1));
   };
 
-  const handlePrepareAI = async (id: string) => {
-    if (!onPrepareAI) return;
+  const handlePrepare = async (
+    id: string,
+    mode: 'manual' | 'ai',
+    action: ((id: string) => Promise<{ success?: boolean; error?: string }>) | undefined
+  ) => {
+    if (!action) return;
     setPreparingId(id);
+    setPreparingMode(mode);
     setPreparationErrors(current => ({ ...current, [id]: '' }));
     try {
-      const response = await onPrepareAI(id);
+      const response = await action(id);
       if (response?.error) throw new Error(response.error);
     } catch (error) {
       setPreparationErrors(current => ({
         ...current,
-        [id]: error instanceof Error ? error.message : 'Не удалось подготовить черновик',
+        [id]: error instanceof Error ? error.message : t("Не удалось подготовить черновик"),
       }));
     } finally {
       setPreparingId(null);
+      setPreparingMode(null);
     }
   };
 
   return (
     <div className="manual-actions-list">
       <div className="manual-actions-header">
-        <strong>Ожидают: {actions.length}</strong>
+        <strong>{t("Ожидают:") + " "}{actions.length}</strong>
       </div>
       {currentActions.map((action) => (
         <article key={action.id} className="manual-action-item">
           <div className="manual-action-leading"><span className="manual-type-mark"><ManualTypeIcon type={action.type} /></span>
             <div className="manual-action-copy">
-              <div className="manual-action-reason">{REASON_LABELS[action.reasonCode] || action.type}</div>
               <div className="manual-action-title" title={action.title}>{action.title}</div>
               <small title={action.company}>{action.company}{action.vacancyId ? ` · #${action.vacancyId}` : ''}</small>
+              <div className="manual-action-reason">{t(REASON_LABELS[action.reasonCode] || action.type)}</div>
             </div>
           </div>
           <div className="manual-actions-buttons">
-            {onPrepareAI && (action.type === 'test' || action.type === 'questionnaire') && (
+            {onFillManual && (action.type === 'test' || action.type === 'questionnaire') && (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
-                onClick={() => void handlePrepareAI(action.id)}
+                onClick={() => void handlePrepare(action.id, 'manual', onFillManual)}
                 disabled={preparingId === action.id}
               >
-                {preparingId === action.id ? 'AI готовит…' : 'Заполнить с AI'}
+                {preparingId === action.id && preparingMode === 'manual'
+                  ? t("Открываем…")
+                  : preparedActions.has(action.id) ? t("Продолжить") : t("Заполнить")}
               </button>
             )}
-            <button type="button" className="btn btn-primary btn-sm"
+            {onPrepareAI && (action.type === 'test' || action.type === 'questionnaire') && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => void handlePrepare(action.id, 'ai', onPrepareAI)}
+                disabled={preparingId === action.id}
+              >
+                {preparingId === action.id && preparingMode === 'ai'
+                  ? t("AI готовит…")
+                  : preparedActions.has(action.id) ? t("Обновить с AI") : t("Заполнить с AI")}
+              </button>
+            )}
+            <button type="button" className="text-action manual-open-link"
               onClick={() => onOpen(action.url)}
               disabled={!action.url}
-            >
-              Открыть
-            </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDone(action.id)}>
-              Готово
-            </button>
-            <button type="button" className="btn btn-quiet btn-sm" onClick={() => onDismiss(action.id)}>
-              Скрыть
-            </button>
+            >{t("Открыть") + " "}</button>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDone(action.id)}>{t("Готово") + " "}</button>
+            <button type="button" className="btn btn-quiet btn-sm" onClick={() => onDismiss(action.id)}>{t("Скрыть") + " "}</button>
           </div>
           {preparationErrors[action.id] && (
             <div className="manual-action-error">{preparationErrors[action.id]}</div>
           )}
         </article>
       ))}
-      {actions.length === 0 && <div className="empty-state-mini"><span className="empty-state-check">✓</span><span><strong>Всё спокойно</strong>Нет действий, требующих вашего внимания.</span></div>}
+      {actions.length === 0 && <div className="empty-state-mini"><span className="empty-state-check">✓</span><span><strong>{t("Всё спокойно")}</strong>{t("Нет действий, требующих вашего внимания.")}</span></div>}
       {totalPages > 1 && (
         <div className="pagination-controls">
           <button
             type="button"
             className="btn btn-secondary btn-sm"
             onClick={handlePrevPage}
-            disabled={currentPage === 0}
-          >
-            Назад
-          </button>
-          <span className="pagination-info">
-            Страница {currentPage + 1} из {totalPages}
+            disabled={validCurrentPage === 0}
+          >{t("Назад") + " "}</button>
+          <span className="pagination-info">{t("Страница") + " "}{validCurrentPage + 1}{" " + t("из") + " "}{totalPages}
           </span>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
             onClick={handleNextPage}
-            disabled={currentPage >= totalPages - 1}
-          >
-            Вперёд
-          </button>
+            disabled={validCurrentPage >= totalPages - 1}
+          >{t("Вперёд") + " "}</button>
         </div>
       )}
     </div>
