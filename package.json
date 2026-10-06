@@ -1,6 +1,6 @@
 {
   "name": "hh-orbit-extension",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "HH Orbit Extension - Browser-first architecture",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
