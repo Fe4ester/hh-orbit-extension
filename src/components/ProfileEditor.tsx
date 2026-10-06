@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import React, { useEffect, useState } from 'react';
 import type { Profile, ResumeCandidate } from '../state/types';
 import type { CreateProfilePayload, UpdateProfilePayload } from '../state/actions';
@@ -20,7 +21,7 @@ const HintDismissButton: React.FC<{ onDismiss: () => void; disabled: boolean }> 
   <button
     type="button"
     className="hint-dismiss-button"
-    aria-label="Снять выделение подсказки"
+    aria-label={t("Снять выделение подсказки")}
     onClick={onDismiss}
     disabled={disabled}
   >
@@ -51,7 +52,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   const [isCoverLetterHintDismissing, setIsCoverLetterHintDismissing] = useState(false);
   const [isDefaultResumeHintDismissing, setIsDefaultResumeHintDismissing] = useState(false);
   const resumeOptions = [
-    { value: '', label: 'Не привязано' },
+    { value: '', label: t("Не привязано") },
     ...resumeCandidates.map((resume) => ({ value: resume.hash, label: formatResumeLabel(resume) })),
   ];
 
@@ -117,63 +118,57 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
 
   return (
     <div className="profile-editor">
-      <h3>{profile ? 'Редактировать профиль' : 'Создать профиль'}</h3>
+      <h3>{profile ? t("Редактировать профиль") : t("Создать профиль")}</h3>
 
       <form onSubmit={handleSubmit}>
         <div className="form-group">
-          <label htmlFor="profile-name">Название профиля *</label>
+          <label htmlFor="profile-name">{t("Название профиля *")}</label>
           <input
             id="profile-name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
-            placeholder="Например: Frontend разработчик"
+            placeholder={t("Например: Frontend разработчик")}
           />
         </div>
 
         <div className="form-group">
-          <label htmlFor="profile-keywords-include">Ключевые слова (включить)</label>
+          <label htmlFor="profile-keywords-include">{t("Ключевые слова (включить)")}</label>
           <input
             id="profile-keywords-include"
             type="text"
             value={keywordsInclude}
             onChange={(e) => setKeywordsInclude(e.target.value)}
-            placeholder="React, TypeScript, Frontend (через запятую)"
+            placeholder={t("React, TypeScript, Frontend (через запятую)")}
           />
-          <small className="form-hint">
-            Вакансия должна содержать хотя бы одно из этих слов в названии или описании
-          </small>
+          <small className="form-hint">{t("Вакансия должна содержать хотя бы одно из этих слов в названии или описании") + " "}</small>
         </div>
 
         <div className="form-group">
-          <label htmlFor="profile-keywords-exclude">Ключевые слова (исключить)</label>
+          <label htmlFor="profile-keywords-exclude">{t("Ключевые слова (исключить)")}</label>
           <input
             id="profile-keywords-exclude"
             type="text"
             value={keywordsExclude}
             onChange={(e) => setKeywordsExclude(e.target.value)}
-            placeholder="PHP, Java (через запятую)"
+            placeholder={t("PHP, Java (через запятую)")}
           />
-          <small className="form-hint">
-            Вакансии с этими словами будут пропущены
-          </small>
+          <small className="form-hint">{t("Вакансии с этими словами будут пропущены") + " "}</small>
         </div>
 
         <div className="form-group">
-          <label htmlFor="profile-cover-letter">Сопроводительное письмо</label>
+          <label htmlFor="profile-cover-letter">{t("Сопроводительное письмо")}</label>
           <textarea
             id="profile-cover-letter"
             value={coverLetter}
             onChange={(e) => setCoverLetter(e.target.value)}
             rows={4}
-            placeholder="Шаблон сопроводительного письма..."
+            placeholder={t("Шаблон сопроводительного письма...")}
           />
           <small className={isCoverLetterHintHighlighted
             ? `form-hint highlight-hint dismissible-hint${isCoverLetterHintDismissing ? ' is-dismissing' : ''}`
-            : 'form-hint'}>
-            Отправляется только если вакансия сама запрашивает сопроводительное письмо.
-            {isCoverLetterHintHighlighted && (
+            : 'form-hint'}>{t("Отправляется только если вакансия сама запрашивает сопроводительное письмо.") + " "}{isCoverLetterHintHighlighted && (
               <HintDismissButton
                 onDismiss={() => dismissHint(
                   COVER_LETTER_HINT_DISMISSED_KEY,
@@ -187,19 +182,17 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
         </div>
 
         <div className="form-group">
-          <label htmlFor="profile-default-resume">Резюме по умолчанию для профиля</label>
+          <label htmlFor="profile-default-resume">{t("Резюме по умолчанию для профиля")}</label>
           <SelectMenu
             id="profile-default-resume"
             value={selectedResumeHash}
             options={resumeOptions}
-            placeholder="Не привязано"
+            placeholder={t("Не привязано")}
             onChange={setSelectedResumeHash}
           />
           <small className={isDefaultResumeHintHighlighted
             ? `form-hint highlight-hint dismissible-hint${isDefaultResumeHintDismissing ? ' is-dismissing' : ''}`
-            : 'form-hint'}>
-            При выборе этого профиля будет автоматически выбрано это резюме
-            {isDefaultResumeHintHighlighted && (
+            : 'form-hint'}>{t("При выборе этого профиля будет автоматически выбрано это резюме") + " "}{isDefaultResumeHintHighlighted && (
               <HintDismissButton
                 onDismiss={() => dismissHint(
                   DEFAULT_RESUME_HINT_DISMISSED_KEY,
@@ -214,11 +207,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
 
         <div className="form-actions">
           <button type="submit" className="btn btn-primary">
-            {profile ? 'Сохранить' : 'Создать'}
+            {profile ? t("Сохранить") : t("Создать")}
           </button>
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>
-            Отмена
-          </button>
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>{t("Отмена") + " "}</button>
         </div>
       </form>
     </div>

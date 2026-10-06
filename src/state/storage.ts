@@ -116,6 +116,10 @@ export class ExtensionStorageAdapter implements StorageAdapter {
           ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.confidence,
           ...state.questionnaires?.settings?.confidence,
         },
+        answerMemory: {
+          ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.answerMemory,
+          ...state.questionnaires?.settings?.answerMemory,
+        },
         context: {
           ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.context,
           ...state.questionnaires?.settings?.context,

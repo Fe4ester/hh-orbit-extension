@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import React from 'react';
 import type { AppState } from '../state/types';
 
@@ -41,45 +42,35 @@ export const RuntimeControls: React.FC<RuntimeControlsProps> = ({ state }) => {
         className="btn btn-primary"
         onClick={handleStart}
         disabled={!canStart}
-      >
-        Запустить
-      </button>
+      >{t("Запустить") + " "}</button>
 
       <button
         type="button"
         className="btn btn-secondary"
         onClick={handlePause}
         disabled={!canPause}
-      >
-        Пауза
-      </button>
+      >{t("Пауза") + " "}</button>
 
       <button
         type="button"
         className="btn btn-primary"
         onClick={handleResume}
         disabled={!canResume}
-      >
-        Продолжить
-      </button>
+      >{t("Продолжить") + " "}</button>
 
       <button
         type="button"
         className="btn btn-danger"
         onClick={handleStop}
         disabled={!canStop}
-      >
-        Остановить
-      </button>
+      >{t("Остановить") + " "}</button>
 
       <button
         type="button"
         className="btn btn-secondary"
         onClick={handleReset}
         disabled={!canReset}
-      >
-        Сброс
-      </button>
+      >{t("Сброс") + " "}</button>
     </div>
   );
 };

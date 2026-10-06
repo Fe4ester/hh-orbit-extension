@@ -121,8 +121,45 @@ describe('LaunchScreen', () => {
     expect(container.textContent).toContain('Нужно заполнить анкету');
     expect(container.textContent).toContain('Нужно выполнить тест');
     const openButton = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent === 'Открыть');
+      .find((button) => button.textContent?.trim() === 'Открыть');
     expect(openButton?.disabled).toBe(false);
+  });
+
+  it('позволяет начать новый поиск с ожидающими ручными действиями', () => {
+    const onStart = vi.fn();
+    const { container } = renderScreen({
+      ...baseProps,
+      screen: 'review',
+      runtime: { ...baseProps.runtime, runtimeState: 'STOPPED', canStart: true },
+      manualActions: [
+        { id: 'm1', type: 'test', title: 'Python-разработчик', company: 'МТС', vacancyId: '234', url: '', reasonCode: 'test_required', createdAt: 2 },
+      ],
+      onStart,
+    });
+    containers.push(container);
+
+    const restartButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Запустить новый поиск'));
+    expect(restartButton?.disabled).toBe(false);
+    act(() => restartButton?.click());
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Python-разработчик');
+  });
+
+  it('не предлагает повторный запуск, пока движок завершает ручной шаг', () => {
+    const { container } = renderScreen({
+      ...baseProps,
+      screen: 'review',
+      runtime: { ...baseProps.runtime, runtimeState: 'PAUSED_MANUAL_ACTION', canStart: false },
+      manualActions: [
+        { id: 'm1', type: 'test', title: 'Python-разработчик', company: 'МТС', vacancyId: '234', url: '', reasonCode: 'test_required', createdAt: 2 },
+      ],
+    });
+    containers.push(container);
+
+    const restartButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Запустить новый поиск'));
+    expect(restartButton?.disabled).toBe(true);
   });
 
   it('при остановке по исчерпанию вакансий объясняет причину и предлагает повтор', () => {

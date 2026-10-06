@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import React, { useState } from 'react';
 import type { ResumeCandidate } from '../state/types';
 import { formatResumeLabel } from './resumeLabel';
@@ -36,7 +37,7 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
       if (response.error) {
         setDetectError(response.error);
       } else if (!response.success) {
-        setDetectError(response.reason || 'Не удалось обновить резюме');
+        setDetectError(response.reason || t("Не удалось обновить резюме"));
       }
     } catch (error) {
       setDetectError((error as Error).message);
@@ -56,21 +57,19 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
   if (candidates.length === 0) {
     return (
       <div className="resume-selector empty">
-        <p className="empty-message">Резюме не обнаружены</p>
+        <p className="empty-message">{t("Резюме не обнаружены")}</p>
         {showDetectButton && (
           <button
             className="btn btn-primary"
             onClick={handleDetectResumes}
             disabled={detectButtonDisabled}
           >
-            {detecting ? 'Обновление...' : 'Обновить из HH'}
+            {detecting ? t("Обновление...") : t("Обновить из HH")}
           </button>
         )}
         {detectError && <p className="error-message">{detectError}</p>}
         {showAddDemo && onAddDemo && (
-          <button className="btn btn-secondary" onClick={onAddDemo}>
-            [DEBUG] Добавить демо-резюме
-          </button>
+          <button className="btn btn-secondary" onClick={onAddDemo}>{t("[DEBUG] Добавить демо-резюме") + " "}</button>
         )}
       </div>
     );
@@ -89,7 +88,7 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
         onChange={(e) => onSelect(e.target.value || null)}
         className="resume-select"
       >
-        <option value="">Резюме не выбрано</option>
+        <option value="">{t("Резюме не выбрано")}</option>
         {displayCandidates.map((resume) => (
           <option key={resume.hash} value={resume.hash}>
             {formatResumeLabel(resume)}
@@ -103,16 +102,14 @@ export const ResumeSelector: React.FC<ResumeSelectorProps> = ({
           onClick={handleDetectResumes}
           disabled={detecting}
         >
-          {detecting ? 'Обновление...' : 'Обновить из HH'}
+          {detecting ? t("Обновление...") : t("Обновить из HH")}
         </button>
       )}
 
       {detectError && <p className="error-message">{detectError}</p>}
 
       {showAddDemo && onAddDemo && (
-        <button className="btn btn-secondary btn-sm" onClick={onAddDemo}>
-          Добавить демо-резюме
-        </button>
+        <button className="btn btn-secondary btn-sm" onClick={onAddDemo}>{t("Добавить демо-резюме") + " "}</button>
       )}
     </div>
   );

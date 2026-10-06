@@ -20,6 +20,7 @@ export interface BackendQuestionnaireFormContract {
   questionnaire: Questionnaire;
   sourceUrl: string;
   actionUrl: string;
+  enctype: 'application/x-www-form-urlencoded' | 'multipart/form-data';
   hiddenFields: Array<{ name: string; value: string }>;
   submitFields: Array<{ name: string; value: string }>;
   fields: BackendFormField[];
@@ -222,6 +223,9 @@ export function parseBackendQuestionnaireForm(
   const fields = parseFields(formHtml);
   const questionnaire = questionnaireFromFields(formHtml, fields, vacancyId);
   const actionUrl = new URL(formAttrs.action || sourceUrl, sourceUrl).toString();
+  const enctype = formAttrs.enctype?.toLowerCase() === 'multipart/form-data'
+    ? 'multipart/form-data'
+    : 'application/x-www-form-urlencoded';
   const hiddenFields = fields
     .filter(field => field.type === 'hidden')
     .map(field => ({ name: field.name, value: field.value }));
@@ -233,6 +237,7 @@ export function parseBackendQuestionnaireForm(
     questionnaire,
     sourceUrl,
     actionUrl,
+    enctype,
     hiddenFields,
     submitFields,
     fields,
@@ -243,13 +248,15 @@ export function buildBackendQuestionnaireBody(
   contract: BackendQuestionnaireFormContract,
   answerPlan: AnswerPlan,
   resumeHash: string
-): FormData {
+): FormData | URLSearchParams {
   if (answerPlan.questionnaireId !== contract.questionnaire.id) {
     throw new Error('Черновик относится к другой версии анкеты');
   }
   assertAnswersReviewed(answerPlan);
 
-  const body = new FormData();
+  const body = contract.enctype === 'multipart/form-data'
+    ? new FormData()
+    : new URLSearchParams();
   for (const field of contract.hiddenFields) {
     if (!field.name.startsWith('task_') && field.name !== 'resume_hash') {
       body.append(field.name, field.value);
@@ -279,7 +286,9 @@ export function buildBackendQuestionnaireBody(
       field.name === question.id || field.name === `${question.id}_text`
     );
     const choiceField = fields.find(field => field.type === 'radio' || field.type === 'checkbox');
-    const textField = fields.find(field => field.type === 'textarea' || field.type === 'text');
+    const textField = fields.find(field =>
+      field.type === 'textarea' || field.type === 'text' || field.type === 'number'
+    );
 
     for (const selectedValue of selectedValues) {
       body.append(choiceField?.name ?? question.id, selectedValue);

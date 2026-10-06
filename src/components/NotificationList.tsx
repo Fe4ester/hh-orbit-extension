@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import React from 'react';
 import type { Notification } from '../state/types';
 
@@ -14,14 +15,14 @@ export const NotificationList: React.FC<NotificationListProps> = ({ notification
   const toasts = notifications.filter((n) => !n.sticky);
 
   if (notifications.length === 0) {
-    return <div className="empty-state">Нет уведомлений</div>;
+    return <div className="empty-state">{t("Нет уведомлений")}</div>;
   }
 
   return (
     <div className="notification-container">
       {sticky.length > 0 && (
         <div className="notification-section">
-          <h4 className="notification-section-title">Важные уведомления</h4>
+          <h4 className="notification-section-title">{t("Важные уведомления")}</h4>
           <div className="notification-list">
             {sticky.map((notification) => (
               <NotificationItem
@@ -36,7 +37,7 @@ export const NotificationList: React.FC<NotificationListProps> = ({ notification
 
       {toasts.length > 0 && (
         <div className="notification-section">
-          <h4 className="notification-section-title">Недавние</h4>
+          <h4 className="notification-section-title">{t("Недавние")}</h4>
           <div className="notification-list">
             {toasts.map((notification) => (
               <NotificationItem
@@ -67,7 +68,7 @@ const NotificationItem: React.FC<{
       <button
         className="notification-close"
         onClick={() => onDismiss(notification.id)}
-        aria-label="Закрыть"
+        aria-label={t("Закрыть")}
       >
         ×
       </button>
@@ -77,14 +78,14 @@ const NotificationItem: React.FC<{
 
 function getKindLabel(kind: string): string {
   const labels: Record<string, string> = {
-    runtime_started: 'Запуск',
-    runtime_stopped: 'Остановка',
-    profile_changed: 'Профиль',
-    resume_not_selected: 'Резюме',
-    manual_action_required: 'Требуется действие',
-    no_more_vacancies: 'Вакансии',
-    session_warning: 'Предупреждение',
-    backend_helper_unavailable: 'Бэкенд',
+    runtime_started: t("Запуск"),
+    runtime_stopped: t("Остановка"),
+    profile_changed: t("Профиль"),
+    resume_not_selected: t("Резюме"),
+    manual_action_required: t("Требуется действие"),
+    no_more_vacancies: t("Вакансии"),
+    session_warning: t("Предупреждение"),
+    backend_helper_unavailable: t("Бэкенд"),
   };
   return labels[kind] || '';
 }

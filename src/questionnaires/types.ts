@@ -128,6 +128,10 @@ export interface QuestionnaireAISettings {
     autoApprove: number;
     needsReview: number;
   };
+  answerMemory: {
+    rememberNewAnswers: boolean;
+    updateRememberedAnswers: boolean;
+  };
 }
 
 export type AIProviderId =
@@ -140,10 +144,11 @@ export type AIProviderId =
   | 'custom_openai';
 
 export type QuestionnaireAISettingsPatch =
-  Partial<Omit<QuestionnaireAISettings, 'provider' | 'confidence' | 'context'>> & {
+  Partial<Omit<QuestionnaireAISettings, 'provider' | 'confidence' | 'context' | 'answerMemory'>> & {
     provider?: Partial<QuestionnaireAISettings['provider']>;
     confidence?: Partial<QuestionnaireAISettings['confidence']>;
     context?: Partial<QuestionnaireAISettings['context']>;
+    answerMemory?: Partial<QuestionnaireAISettings['answerMemory']>;
   };
 
 export interface QuestionnaireState {
@@ -174,6 +179,10 @@ export const DEFAULT_QUESTIONNAIRE_AI_SETTINGS: QuestionnaireAISettings = {
   confidence: {
     autoApprove: 0.95,
     needsReview: 0.7,
+  },
+  answerMemory: {
+    rememberNewAnswers: false,
+    updateRememberedAnswers: false,
   },
 };
 

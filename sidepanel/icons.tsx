@@ -54,15 +54,18 @@ export const Icon: React.FC<{ name: IconName; className?: string }> = ({ name, c
   </svg>
 );
 
-export const AppMark: React.FC = () => (
-  <svg className="app-mark" viewBox="0 0 128 128" aria-hidden="true">
-    <rect width="128" height="128" rx="30" fill="currentColor" />
-    <ellipse className="app-mark-orbit app-mark-orbit-primary" cx="64" cy="64" rx="47" ry="27" transform="rotate(-24 64 64)" />
-    <ellipse className="app-mark-orbit app-mark-orbit-secondary" cx="64" cy="64" rx="27" ry="48" transform="rotate(31 64 64)" />
-    <path className="app-mark-arc" d="M23 74c13 24 48 34 75 16" />
-    <path className="app-mark-monogram" d="M36 42h12v17h12V42h12v44H60V70H48v16H36V42Zm43 0h12v17h9V42h12v44h-12V70h-9v16H79V42Z" />
-    <circle className="app-mark-satellite" cx="104" cy="38" r="7" />
-    <circle className="app-mark-node" cx="25" cy="73" r="3.5" />
-    <circle className="app-mark-star" cx="91" cy="23" r="2.5" />
+export const HeaderPrint: React.FC = () => (
+  <svg className="header-print" viewBox="0 0 1000 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true" fill="none">
+    <g stroke="currentColor" strokeWidth="1">
+      <ellipse cx="470" cy="120" rx="560" ry="105" transform="rotate(-12 470 120)" />
+      <ellipse cx="470" cy="120" rx="480" ry="80" transform="rotate(-12 470 120)" />
+      <ellipse cx="850" cy="50" rx="270" ry="150" transform="rotate(24 850 50)" />
+      <path d="M-40 155C250 18 600 210 1040 5" />
+    </g>
+    <g fill="currentColor">
+      <circle cx="215" cy="118" r="3" />
+      <circle cx="640" cy="48" r="4" />
+      <circle cx="894" cy="117" r="3" />
+    </g>
   </svg>
 );

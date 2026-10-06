@@ -87,7 +87,7 @@ describe('QuestionnairePanel', () => {
       />
     );
 
-    expect(html).toContain('Заполнение анкет с AI');
+    expect(html).toContain('Анкеты');
     expect(html).toContain('Beta');
     expect(html).toContain('legend.md');
     expect(html).toContain('AI-профиль готов');
@@ -96,9 +96,9 @@ describe('QuestionnairePanel', () => {
     expect(html).toContain('Senior TypeScript Developer');
     expect(html).toContain('AI &amp; Automation');
     expect(html).not.toContain('&amp;amp;');
-    expect(html).toContain('Backend-приёмка · ожидает: 2');
-    expect(html).toContain('Нажмите AI у анкеты');
-    expect(html).toContain('Вы проверяете и правите');
+    expect(html).toContain('Ожидают подготовки: 2');
+    expect(html).toContain('Заполните ответы');
+    expect(html).toContain('Проверьте черновик');
     expect(html).toContain('Нужно проверить');
     expect(html).toContain('Одобрить и отправить');
     expect(html).toContain('Сгенерировать заново');
@@ -146,7 +146,7 @@ describe('QuestionnairePanel', () => {
     expect(html).not.toContain('legacy-local-model');
   });
 
-  it('offers AI preparation on each backend questionnaire action', () => {
+  it('offers manual and AI preparation on each backend questionnaire action', () => {
     const html = renderToStaticMarkup(
       <ManualActionsPanel
         actions={[{
@@ -161,12 +161,47 @@ describe('QuestionnairePanel', () => {
         onOpen={vi.fn()}
         onDone={vi.fn()}
         onDismiss={vi.fn()}
+        onFillManual={vi.fn().mockResolvedValue({ success: true })}
         onPrepareAI={vi.fn().mockResolvedValue({ success: true })}
       />
     );
 
+    expect(html).toContain('Заполнить');
     expect(html).toContain('Заполнить с AI');
     expect(html).toContain('Backend Developer');
+  });
+
+  it('keeps provider configuration out of the questionnaire workspace', () => {
+    const html = renderToStaticMarkup(
+      <QuestionnairePanel
+        view="workspace"
+        state={INITIAL_QUESTIONNAIRE_STATE}
+        selectedResume={null}
+        manualQuestionnaireCount={0}
+        onPatch={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('Нет анкет в работе');
+    expect(html).not.toContain('OpenRouter');
+    expect(html).not.toContain('Контекст AI');
+  });
+
+  it('keeps the review queue out of AI settings', () => {
+    const html = renderToStaticMarkup(
+      <QuestionnairePanel
+        view="settings"
+        state={INITIAL_QUESTIONNAIRE_STATE}
+        selectedResume={null}
+        manualQuestionnaireCount={0}
+        onPatch={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('OpenRouter');
+    expect(html).toContain('Контекст AI');
+    expect(html).not.toContain('Нет анкет в работе');
+    expect(html).not.toContain('Одобрите отправку');
   });
 
   it('renders hosted providers, editable models, and free-tier guidance', () => {
@@ -203,7 +238,7 @@ describe('QuestionnairePanel', () => {
     expect(html).toContain('Для чего подходит');
     expect(html).toContain('Что происходит с данными');
     expect(html).toContain('Как подключить');
-    expect(html).toContain('Очень быстрая генерация большого количества черновиков');
+    expect(html).toContain('Подготовка нескольких черновиков');
     expect(html).toContain('Выбор AI-провайдера');
     expect(html).toContain('Выбор AI-модели');
     expect(html).toContain('GPT-OSS 120B');

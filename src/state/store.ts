@@ -54,9 +54,11 @@ import type {
   QuestionnaireStatus,
 } from '../questionnaires/types';
 import {
+  approveQuestionnaire as approveQuestionnaireItem,
   enqueueQuestionnaire,
   transitionQuestionnaire,
 } from '../questionnaires/queue';
+import { rememberAnswersInContext } from '../questionnaires/answerMemory';
 
 export class StateStore {
   private state: AppState | null = null;
@@ -749,6 +751,10 @@ export class StateStore {
               ...settings.confidence,
               ...patch.confidence,
             },
+            answerMemory: {
+              ...settings.answerMemory,
+              ...patch.answerMemory,
+            },
             context: {
               ...settings.context,
               ...patch.context,
@@ -840,6 +846,39 @@ export class StateStore {
           ...current.questionnaires,
           queue: current.questionnaires.queue.map(queued =>
             queued.questionnaire.id === questionnaireId ? revised : queued
+          ),
+        },
+      };
+    });
+  }
+
+  async approveQuestionnaire(questionnaireId: string): Promise<void> {
+    await this.changeState((current) => {
+      const item = current.questionnaires.queue.find(
+        queued => queued.questionnaire.id === questionnaireId
+      );
+      if (!item) throw new Error(`Questionnaire ${questionnaireId} not found`);
+      const approved = approveQuestionnaireItem(item);
+      const settings = current.questionnaires.settings;
+      const memoryPolicy = settings.answerMemory;
+      const nextSettings = memoryPolicy.rememberNewAnswers || memoryPolicy.updateRememberedAnswers
+        ? {
+            ...settings,
+            context: rememberAnswersInContext(
+              settings.context,
+              item.questionnaire,
+              approved.answerPlan!.answers,
+              memoryPolicy
+            ),
+          }
+        : settings;
+      return {
+        ...current,
+        questionnaires: {
+          ...current.questionnaires,
+          settings: nextSettings,
+          queue: current.questionnaires.queue.map(queued =>
+            queued.questionnaire.id === questionnaireId ? approved : queued
           ),
         },
       };

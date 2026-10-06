@@ -631,7 +631,7 @@ describe('BackendHTTPClient', () => {
     expect(JSON.stringify(result.diagnostics)).not.toContain('neg-1');
   });
 
-  it('fetches and submits a questionnaire through authenticated backend HTTP', async () => {
+  it('submits questionnaire answers and the profile cover letter through authenticated backend HTTP', async () => {
     const html = `
       <form name="vacancy_response" action="/applicant/vacancy_response">
         <input type="hidden" name="_xsrf" value="fresh-form-token">
@@ -667,16 +667,70 @@ describe('BackendHTTPClient', () => {
         evidence: [{ source: 'user_instruction', reference: 'Проверено' }],
         requiresReview: false,
       }],
-    });
+    }, undefined, '  Добрый день! Готов обсудить вакансию.  ');
 
     expect(result).toMatchObject({ success: true, outcome: 'success' });
     expect(fetchMock).toHaveBeenCalledTimes(3);
     const submitOptions = fetchMock.mock.calls[2][1];
+    expect(fetchMock.mock.calls[2][0]).toBe('https://hh.ru/applicant/vacancy_response/popup');
     expect(submitOptions.method).toBe('POST');
     expect(submitOptions.credentials).toBe('include');
-    expect(submitOptions.body).toBeInstanceOf(FormData);
+    expect(submitOptions.body).toBeInstanceOf(URLSearchParams);
+    expect(submitOptions.headers['Content-Type']).toBe('application/x-www-form-urlencoded;charset=UTF-8');
     expect(submitOptions.body.get('task_1_text')).toBe('Москва');
+    expect(submitOptions.body.get('letter')).toBe('Добрый день! Готов обсудить вакансию.');
     expect(submitOptions.body.get('resume_hash')).toBe('resume-1');
+    expect(submitOptions.body.get('vacancy_id')).toBe('123');
+    expect(submitOptions.body.get('lux')).toBe('true');
+    expect(submitOptions.body.get('withoutTest')).toBe('no');
+    expect(submitOptions.body.get('incomplete')).toBe('false');
+    expect(submitOptions.body.get('ignore_postponed')).toBe('true');
+    expect(submitOptions.body.get('_xsrf')).toBe('token123456');
+    expect(submitOptions.headers['X-Xsrftoken']).toBe('token123456');
+    expect(submitOptions.body.get('guid')).toBe('guid-1');
+    expect(submitOptions.headers['X-Hhtmsource']).toBe('vacancy_response');
+  });
+
+  it('classifies a 400 response that re-renders the questionnaire form', async () => {
+    const html = `
+      <form id="RESPONSE_MODAL_FORM_ID" name="vacancy_response" action="/applicant/vacancy_response">
+        <input type="hidden" name="_xsrf" value="fresh-form-token">
+        <section data-qa="task-body">
+          <div data-qa="task-question">Ваш город?</div>
+          <textarea name="task_1_text" required></textarea>
+        </section>
+      </form>
+    `;
+    fetchMock
+      .mockResolvedValueOnce(new Response(html, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }))
+      .mockResolvedValueOnce(new Response(html, {
+        status: 400,
+        headers: { 'Content-Type': 'text/html' },
+      }));
+
+    const result = await client.submitQuestionnaire('123', 'resume-1', {
+      questionnaireId: 'hh_123_task_1',
+      providerId: 'local',
+      modelId: 'openrouter/free',
+      generatedAt: 1,
+      answers: [{
+        questionId: 'task_1',
+        text: 'Москва',
+        confidence: 1,
+        evidence: [{ source: 'user_instruction', reference: 'Проверено' }],
+        requiresReview: false,
+      }],
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      outcome: 'questionnaire_required',
+      message: 'Questionnaire required',
+    });
+    expect(fetchMock.mock.calls[1][1].body.get('letter')).toBe('');
   });
 
   it('refuses a questionnaire form that redirects submission outside HH', async () => {
