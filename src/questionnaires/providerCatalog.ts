@@ -24,11 +24,11 @@ export const DEFAULT_AI_PROVIDER_ID: AIProviderId = 'openrouter';
 export const AI_PROVIDER_CATALOG: Record<AIProviderId, AIProviderDefinition> = {
   openai: {
     id: 'openai', name: 'OpenAI', description: 'GPT-модели OpenAI',
-    baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-5.6-terra',
+    baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4.1-mini',
     modelDetails: [
-      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', description: 'Максимальное качество для сложных профессиональных вопросов.', contextWindow: 1_050_000, maxOutputTokens: 128_000 },
-      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Баланс качества, скорости и стоимости; рекомендуемый вариант для анкет.', contextWindow: 1_050_000, maxOutputTokens: 128_000 },
-      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', description: 'Экономичная модель для большого количества коротких анкет.', contextWindow: 1_050_000, maxOutputTokens: 128_000 },
+      { id: 'gpt-4.1-mini', name: 'GPT-4.1 mini', description: 'Рекомендуемый баланс качества, скорости и стоимости для анкет.' },
+      { id: 'gpt-4o-mini', name: 'GPT-4o mini', description: 'Экономичная модель для большого количества коротких анкет.' },
+      { id: 'gpt-4.1', name: 'GPT-4.1', description: 'Повышенное качество для сложных профессиональных вопросов.' },
     ], credentialLabel: 'OpenAI API key',
     credentialUrl: 'https://platform.openai.com/api-keys', badge: 'Качество',
     pricingUrl: 'https://openai.com/api/pricing/',

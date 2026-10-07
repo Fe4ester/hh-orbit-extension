@@ -30,6 +30,7 @@ interface HostedAIProviderOptions {
   apiKey?: string | null;
   customBaseUrl?: string;
   fetchImpl?: typeof fetch;
+  sleepImpl?: (ms: number) => Promise<void>;
 }
 
 interface Message { role: 'system' | 'user' | 'assistant'; content: string }
@@ -72,7 +73,12 @@ const MAX_PROVIDER_TIMEOUT_MS = 90_000;
 const LEGEND_SOURCE_LIMITS = [8_000, 3_000] as const;
 
 class AIProviderRequestError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: string,
+    readonly retryAfterMs?: number,
+  ) {
     super(message);
     this.name = 'AIProviderRequestError';
   }
@@ -143,7 +149,16 @@ function extractGeminiText(payload: unknown): string | null {
   return null;
 }
 
-function safeApiError(status: number, payload: unknown): AIProviderRequestError {
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 5_000);
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return undefined;
+  return Math.min(Math.max(0, date - Date.now()), 5_000);
+}
+
+function safeApiError(status: number, payload: unknown, retryAfter: string | null = null): AIProviderRequestError {
   const body = payload as ApiErrorPayload;
   const raw = body.error?.message ?? body.message;
   const message = typeof raw === 'string' ? raw.slice(0, 300) : '';
@@ -156,9 +171,18 @@ function safeApiError(status: number, payload: unknown): AIProviderRequestError 
   if (status === 429) {
     const code = body.error?.code ?? body.error?.type;
     if (code === 'insufficient_quota') {
-      return new AIProviderRequestError(status, 'На счёте API нет доступной квоты. Проверьте баланс и лимиты проекта у провайдера');
+      return new AIProviderRequestError(
+        status,
+        'На счёте API нет доступной квоты. Проверьте баланс и лимиты проекта у провайдера',
+        code,
+      );
     }
-    return new AIProviderRequestError(status, 'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель');
+    return new AIProviderRequestError(
+      status,
+      'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель',
+      code,
+      parseRetryAfter(retryAfter),
+    );
   }
   return new AIProviderRequestError(
     status,
@@ -170,6 +194,7 @@ export class HostedAIProvider implements AIProvider {
   readonly id: AIProviderId;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly sleepImpl: (ms: number) => Promise<void>;
   private readonly timeoutMs: number;
 
   constructor(private readonly options: HostedAIProviderOptions) {
@@ -180,6 +205,7 @@ export class HostedAIProvider implements AIProvider {
       this.id === 'custom_openai' ? options.customBaseUrl ?? '' : definition.baseUrl,
     );
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.sleepImpl = options.sleepImpl ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.timeoutMs = Math.min(MAX_PROVIDER_TIMEOUT_MS, Math.max(1, options.timeoutMs));
     if (this.id !== 'custom_openai' && !options.apiKey) throw new Error('Добавьте API-ключ провайдера');
   }
@@ -284,12 +310,14 @@ export class HostedAIProvider implements AIProvider {
     let path: string;
     let body: unknown;
     if (this.id === 'openai') {
-      path = '/responses';
+      path = '/chat/completions';
       body = {
         model,
-        input: messages.map(message => ({ role: message.role, content: message.content })),
-        max_output_tokens: maxTokens,
-        text: { format: responseFormat },
+        temperature,
+        max_completion_tokens: maxTokens,
+        stream: false,
+        messages,
+        response_format: responseFormat,
       };
     } else if (protocol === 'anthropic') {
       path = '/messages';
@@ -318,8 +346,7 @@ export class HostedAIProvider implements AIProvider {
     } catch (error) {
       const supportsUnstructuredRetry = error instanceof AIProviderRequestError
         && error.status === 400
-        && protocol === 'openai_chat'
-        && this.id !== 'openai';
+        && protocol === 'openai_chat';
       if (!supportsUnstructuredRetry) throw error;
       const { response_format: _responseFormat, ...fallbackBody } = body as Record<string, unknown>;
       payload = await this.requestJson(path, {
@@ -357,10 +384,18 @@ export class HostedAIProvider implements AIProvider {
       headers.set('X-OpenRouter-Title', 'HH Orbit');
     }
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw safeApiError(response.status, payload);
-      return payload;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+        const payload = await response.json().catch(() => ({}));
+        if (response.ok) return payload;
+        const error = safeApiError(response.status, payload, response.headers.get('Retry-After'));
+        const canRetry = error.status === 429
+          && error.code !== 'insufficient_quota'
+          && attempt < 2;
+        if (!canRetry) throw error;
+        await this.sleepImpl(error.retryAfterMs ?? (attempt + 1) * 1_000);
+      }
+      throw new Error('AI API не ответил');
     } catch (error) {
       if (controller.signal.aborted) throw new Error(`AI API не ответил за ${Math.round(this.timeoutMs / 1000)} с`);
       throw error;

@@ -93,10 +93,10 @@ describe('HostedAIProvider', () => {
     );
   });
 
-  it('uses OpenAI Responses API and bearer authentication', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(json({ output_text: answer }));
+  it('uses OpenAI Chat Completions API and bearer authentication', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ choices: [{ message: { content: answer } }] }));
     const provider = new HostedAIProvider({
-      providerId: 'openai', modelId: 'gpt-5.4-mini', apiKey: 'secret',
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
       timeoutMs: 1_000, temperature: 0.1, fetchImpl,
     });
 
@@ -104,10 +104,14 @@ describe('HostedAIProvider', () => {
 
     expect(plan.providerId).toBe('openai');
     expect(plan.answers[0].text).toBe('Пять лет Python');
-    expect(fetchImpl).toHaveBeenCalledWith('https://api.openai.com/v1/responses', expect.objectContaining({ method: 'POST' }));
+    expect(fetchImpl).toHaveBeenCalledWith('https://api.openai.com/v1/chat/completions', expect.objectContaining({ method: 'POST' }));
     const request = fetchImpl.mock.calls[0][1] as RequestInit;
     expect(new Headers(request.headers).get('Authorization')).toBe('Bearer secret');
-    expect(JSON.parse(String(request.body))).toMatchObject({ model: 'gpt-5.4-mini', max_output_tokens: expect.any(Number) });
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      model: 'gpt-4.1-mini',
+      max_completion_tokens: expect.any(Number),
+      messages: expect.any(Array),
+    });
   });
 
   it('uses Anthropic Messages API headers and response blocks', async () => {
@@ -196,6 +200,7 @@ describe('HostedAIProvider', () => {
     const provider = new HostedAIProvider({
       providerId: 'openrouter', modelId: 'openrouter/free', apiKey: 'secret',
       timeoutMs: 1_000, temperature: 0, fetchImpl,
+      sleepImpl: vi.fn().mockResolvedValue(undefined),
     });
 
     const artifact = await provider.prepareLegend({
@@ -204,7 +209,7 @@ describe('HostedAIProvider', () => {
 
     expect(artifact.preparationMode).toBe('source_fallback');
     expect(artifact.confirmedFacts).toContain('Python и FastAPI.');
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it('rejects insecure remote custom gateways', () => {
@@ -324,26 +329,33 @@ describe('HostedAIProvider', () => {
   });
 
   it('maps rate limiting to a user-facing message', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ error: { message: 'quota' } }, 429));
+    const sleepImpl = vi.fn().mockResolvedValue(undefined);
     const provider = new HostedAIProvider({
       providerId: 'groq', modelId: 'model', apiKey: 'secret', timeoutMs: 1_000, temperature: 0,
-      fetchImpl: vi.fn().mockResolvedValue(json({ error: { message: 'quota' } }, 429)),
+      fetchImpl, sleepImpl,
     });
 
     await expect(provider.testConnection()).resolves.toEqual({
       available: false,
       message: 'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель',
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(sleepImpl).toHaveBeenNthCalledWith(1, 1_000);
+    expect(sleepImpl).toHaveBeenNthCalledWith(2, 2_000);
   });
 
   it('distinguishes exhausted OpenAI quota from temporary rate limiting', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ error: { code: 'insufficient_quota' } }, 429));
     const provider = new HostedAIProvider({
-      providerId: 'openai', modelId: 'gpt-5.6-terra', apiKey: 'secret',
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
       timeoutMs: 1_000, temperature: 0,
-      fetchImpl: vi.fn().mockResolvedValue(json({ error: { code: 'insufficient_quota' } }, 429)),
+      fetchImpl, sleepImpl: vi.fn().mockResolvedValue(undefined),
     });
 
     await expect(provider.generateAnswers({ questionnaire, context, modelId: '' }))
       .rejects.toThrow('На счёте API нет доступной квоты');
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it('aborts a hanging request after the configured timeout', async () => {

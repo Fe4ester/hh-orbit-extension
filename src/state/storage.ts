@@ -12,6 +12,7 @@ import {
 
 const MIN_PROVIDER_TIMEOUT_MS = 5_000;
 const MAX_PROVIDER_TIMEOUT_MS = 90_000;
+const REMOVED_OPENAI_MODELS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 
 function normalizedTimeout(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -97,6 +98,9 @@ export class ExtensionStorageAdapter implements StorageAdapter {
     const persistedModelId = typeof persistedProvider?.modelId === 'string'
       ? persistedProvider.modelId.trim()
       : '';
+    const supportedModelId = providerType === 'openai' && REMOVED_OPENAI_MODELS.has(persistedModelId)
+      ? providerDefinition.defaultModel
+      : persistedModelId;
     state.questionnaires = {
       ...INITIAL_QUESTIONNAIRE_STATE,
       ...state.questionnaires,
@@ -107,8 +111,8 @@ export class ExtensionStorageAdapter implements StorageAdapter {
           ...DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider,
           ...persistedProvider,
           type: providerType,
-          modelId: isAIProviderId(persistedProvider?.type) && persistedModelId
-            ? persistedModelId
+          modelId: isAIProviderId(persistedProvider?.type) && supportedModelId
+            ? supportedModelId
             : providerDefinition.defaultModel,
           timeoutMs: normalizedTimeout(persistedProvider?.timeoutMs),
         },

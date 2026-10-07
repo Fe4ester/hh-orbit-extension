@@ -133,6 +133,26 @@ describe('ExtensionStorageAdapter', () => {
     expect(state.questionnaires.settings.context.resumeFacts).toEqual([]);
   });
 
+  it('migrates removed OpenAI catalog models to the supported default', async () => {
+    vi.mocked(chrome.storage.local.get).mockResolvedValue({
+      app_state: {
+        ...INITIAL_STATE,
+        questionnaires: {
+          settings: {
+            provider: { type: 'openai', modelId: 'gpt-5.6-terra', timeoutMs: 60_000 },
+          },
+          queue: [],
+        },
+      },
+    } as any);
+
+    const state = await adapter.get();
+    expect(state.questionnaires.settings.provider).toMatchObject({
+      type: 'openai',
+      modelId: 'gpt-4.1-mini',
+    });
+  });
+
   it('migrates unsupported legacy providers to the default hosted provider', async () => {
     vi.mocked(chrome.storage.local.get).mockResolvedValue({
       app_state: {
