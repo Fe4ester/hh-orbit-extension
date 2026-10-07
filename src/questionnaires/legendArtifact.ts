@@ -221,7 +221,7 @@ function sourceProfileTitle(name: string, facts: string[]): string {
   return filename || 'Профиль кандидата';
 }
 
-function fallbackLegendArtifact(input: {
+export function fallbackLegendArtifact(input: {
   name: string;
   sourceContent: string;
   modelId: string;

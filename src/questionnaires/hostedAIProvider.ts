@@ -7,6 +7,7 @@ import {
 import { unansweredReviewPlan, validateAnswers } from './answerValidation';
 import {
   buildLegendArtifactPrompt,
+  fallbackLegendArtifact,
   legendArtifactResponseFormat,
   parseLegendArtifact,
 } from './legendArtifact';
@@ -258,6 +259,13 @@ export class HostedAIProvider implements AIProvider {
         ], 512, 0, legendArtifactResponseFormat());
         return parseLegendArtifact({ name: input.name, sourceContent: input.content, modelId, responseContent: content });
       } catch (error) {
+        if (error instanceof AIProviderRequestError && error.status === 429) {
+          return fallbackLegendArtifact({
+            name: input.name,
+            sourceContent: input.content,
+            modelId,
+          });
+        }
         const canRetrySmaller = error instanceof AIProviderRequestError
           && error.status === 413
           && index < LEGEND_SOURCE_LIMITS.length - 1;

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HH Orbit",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Browser-first HH.ru auto-apply extension",
   "permissions": [
     "alarms",

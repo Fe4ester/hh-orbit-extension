@@ -191,6 +191,22 @@ describe('HostedAIProvider', () => {
       .toBeLessThan(String(fetchImpl.mock.calls[0][1].body).length);
   });
 
+  it('keeps a reviewable legend from the file when the provider returns 429', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ error: { message: 'quota' } }, 429));
+    const provider = new HostedAIProvider({
+      providerId: 'openrouter', modelId: 'openrouter/free', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0, fetchImpl,
+    });
+
+    const artifact = await provider.prepareLegend({
+      name: 'legend.md', content: '# Senior Python-разработчик\n\nМосква\n\nPython и FastAPI.', modelId: '',
+    });
+
+    expect(artifact.preparationMode).toBe('source_fallback');
+    expect(artifact.confirmedFacts).toContain('Python и FastAPI.');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects insecure remote custom gateways', () => {
     expect(() => new HostedAIProvider({
       providerId: 'custom_openai', customBaseUrl: 'http://example.com/v1', modelId: 'model',

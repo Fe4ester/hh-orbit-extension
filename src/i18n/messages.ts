@@ -26,6 +26,8 @@ export const english: Record<string, string> = {
   '{0} млн токенов': '{0}M tokens', '{0} тыс. токенов': '{0}K tokens',
   'Доступно моделей: {0}': 'Available models: {0}', 'Сохранён: {0}': 'Saved: {0}',
   'AI-профиль легенды готов: {0}': 'AI context ready: {0}',
+  'Легенда загружена из файла без AI. Проверьте профиль перед использованием.': 'Context loaded from the file without AI. Review the profile before using it.',
+  'Профиль собран из файла без AI - проверьте факты': 'Profile built from the file without AI - review the facts',
   'Ожидают подготовки: {0}': 'Awaiting preparation: {0}',
   '{0} · {1} фактов · {2} предположений': '{0} · facts: {1} · assumptions: {2}',
   '{0} символов · требуется AI-анализ': '{0} characters · AI analysis needed',

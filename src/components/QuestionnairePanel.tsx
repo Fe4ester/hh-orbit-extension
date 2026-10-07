@@ -59,13 +59,17 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
   const showSettings = view !== 'workspace';
   const showWorkspace = view !== 'settings';
 
-  const run = async (key: string, action: () => Promise<unknown>, successText: string) => {
+  const run = async (
+    key: string,
+    action: () => Promise<unknown>,
+    successText: string | ((response: { legendFile?: { artifact?: { preparationMode?: string } } }) => string),
+  ) => {
     setBusyAction(key);
     setNotice(null);
     try {
-      const response = await action() as { success?: boolean; error?: string };
+      const response = await action() as { success?: boolean; error?: string; legendFile?: { artifact?: { preparationMode?: string } } };
       if (response?.error) throw new Error(response.error);
-      setNotice({ kind: 'success', text: successText });
+      setNotice({ kind: 'success', text: typeof successText === 'function' ? successText(response) : successText });
     } catch (error) {
       setNotice({
         kind: 'error',
@@ -86,13 +90,15 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
       if (!text.trim()) throw new Error(t("Файл пуст"));
       setBusyAction('prepare-legend');
       setNotice({ kind: 'info', text: t("AI собирает компактный профиль легенды…") });
-      const response = await send<{ success?: boolean; error?: string }>({
+      const response = await send<{ success?: boolean; error?: string; legendFile?: { artifact?: { preparationMode?: string } } }>({
         type: 'QUESTIONNAIRE_PREPARE_LEGEND',
         name: file.name,
         content: text,
       });
       if (response.error) throw new Error(response.error);
-      setNotice({ kind: 'success', text: t("AI-профиль легенды готов: {0}", file.name) });
+      setNotice({ kind: 'success', text: response.legendFile?.artifact?.preparationMode === 'source_fallback'
+        ? t('Легенда загружена из файла без AI. Проверьте профиль перед использованием.')
+        : t('AI-профиль легенды готов: {0}', file.name) });
     } catch (error) {
       setNotice({
         kind: 'error',
@@ -180,7 +186,7 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
                   <small>{settings.context.legendFile
                     ? settings.context.legendFile.artifact
                       ? t("{0} · {1} фактов · {2} предположений", settings.context.legendFile.artifact.preparationMode === 'source_fallback'
-                        ? 'Профиль собран из файла - AI-ответ был повреждён'
+                        ? t('Профиль собран из файла без AI - проверьте факты')
                         : 'AI-профиль готов', settings.context.legendFile.artifact.confirmedFacts.length, settings.context.legendFile.artifact.inferredDefaults.length)
                       : t("{0} символов · требуется AI-анализ", settings.context.legendFile.content.length.toLocaleString('ru-RU'))
                     : t("Поддерживаются .md, .txt и .json до 2 МБ")}</small>
@@ -235,7 +241,9 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
                     name: legend.name,
                     content: legend.content,
                   }),
-                  t("AI-профиль легенды пересобран")
+                  response => response.legendFile?.artifact?.preparationMode === 'source_fallback'
+                    ? t('Легенда загружена из файла без AI. Проверьте профиль перед использованием.')
+                    : t('AI-профиль легенды пересобран')
                 );
               }}
             >{t("Пересобрать AI-профиль") + " "}</button>
