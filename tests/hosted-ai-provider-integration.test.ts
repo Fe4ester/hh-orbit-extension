@@ -5,9 +5,8 @@ import type { AIProviderId } from '../src/questionnaires';
 /**
  * Интеграционные тесты HostedAIProvider с реальными API.
  *
- * Покрывают только слой подключения (testConnection / listModelDetails) —
- * генерация ответов и легенд (generateAnswers / prepareLegend) сюда
- * намеренно не входит.
+ * Проверяют каталог и минимальный запрос генерации. Полные ответы и легенды
+ * здесь не создаются.
  *
  * Тесты каждого провайдера запускаются, только когда задан его ключ:
  *   OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY (или GOOGLE_API_KEY),
@@ -56,6 +55,11 @@ describe('HostedAIProvider integration', () => {
           expect(model.id).toBeTruthy();
           expect(model.name).toBeTruthy();
         }
+      });
+
+      it('generates text with the selected model', { timeout: TIMEOUT_MS + 5_000 }, async () => {
+        const health = await createProvider().testGeneration(definition.defaultModel);
+        expect(health.available, health.message).toBe(true);
       });
     });
   }

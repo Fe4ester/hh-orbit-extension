@@ -95,6 +95,10 @@ export class QuestionnaireProcessor {
     return (await this.options.createProvider()).testConnection();
   }
 
+  async testGeneration(modelId: string) {
+    return (await this.options.createProvider()).testGeneration(modelId);
+  }
+
   async processPending(): Promise<{ processed: number; failed: number }> {
     const candidates = this.options.store.getState().questionnaires.queue
       .filter(item => ['detected', 'ready_for_ai', 'failed'].includes(item.status))

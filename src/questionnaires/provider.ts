@@ -3,6 +3,8 @@ import type { AnswerPlan, CandidateContext, LegendArtifact, Questionnaire } from
 export interface AIProviderHealth {
   available: boolean;
   message?: string;
+  check?: 'catalog' | 'generation';
+  reason?: 'credentials' | 'quota' | 'rate_limit' | 'model' | 'network' | 'unknown';
 }
 
 export interface AIModelPricing {
@@ -35,6 +37,7 @@ export interface AIProvider {
     modelId: string;
   }): Promise<LegendArtifact>;
   testConnection(): Promise<AIProviderHealth>;
+  testGeneration(modelId: string): Promise<AIProviderHealth>;
   listModels(): Promise<string[]>;
   listModelDetails(): Promise<AIModelInfo[]>;
 }
@@ -52,6 +55,10 @@ export class DisabledAIProvider implements AIProvider {
 
   async testConnection(): Promise<AIProviderHealth> {
     return { available: false, message: 'Select and configure an AI provider first' };
+  }
+
+  async testGeneration(): Promise<AIProviderHealth> {
+    return { available: false, check: 'generation', message: 'Select and configure an AI provider first' };
   }
 
   async listModels(): Promise<string[]> {

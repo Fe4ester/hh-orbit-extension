@@ -54,7 +54,9 @@ describe('QuestionnaireProcessor', () => {
     provider = {
       id: 'local',
       listModels: vi.fn().mockResolvedValue(['openrouter/free']),
+      listModelDetails: vi.fn().mockResolvedValue([{ id: 'openrouter/free', name: 'OpenRouter Free' }]),
       testConnection: vi.fn().mockResolvedValue({ available: true }),
+      testGeneration: vi.fn().mockResolvedValue({ available: true, check: 'generation' }),
       generateAnswers: vi.fn().mockResolvedValue(answerPlan()),
       prepareLegend: vi.fn(),
     };
@@ -66,6 +68,14 @@ describe('QuestionnaireProcessor', () => {
         errors: [],
       }),
     };
+  });
+
+  it('checks generation through the selected provider and model', async () => {
+    await expect(processor().testGeneration('openrouter/free')).resolves.toMatchObject({
+      available: true,
+      check: 'generation',
+    });
+    expect(provider.testGeneration).toHaveBeenCalledWith('openrouter/free');
   });
 
   function processor() {

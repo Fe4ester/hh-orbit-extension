@@ -1645,6 +1645,7 @@ const CORE_MESSAGE_TYPES = new Set([
   'UPDATE_QUESTIONNAIRE_SETTINGS',
   'QUESTIONNAIRE_PREPARE_LEGEND',
   'QUESTIONNAIRE_TEST_PROVIDER',
+  'QUESTIONNAIRE_TEST_GENERATION',
   'AI_PROVIDER_CREDENTIAL_STATUS',
   'AI_PROVIDER_SAVE_CREDENTIAL',
   'AI_PROVIDER_DELETE_CREDENTIAL',
@@ -1766,6 +1767,11 @@ function handleCoreMessage(
 
       if (message.type === 'QUESTIONNAIRE_TEST_PROVIDER') {
         sendResponse(await questionnaireProcessor.testConnection());
+        return;
+      }
+
+      if (message.type === 'QUESTIONNAIRE_TEST_GENERATION') {
+        sendResponse(await questionnaireProcessor.testGeneration(String(message.modelId ?? '')));
         return;
       }
 

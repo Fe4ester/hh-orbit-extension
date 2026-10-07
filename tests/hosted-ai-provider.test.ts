@@ -114,6 +114,82 @@ describe('HostedAIProvider', () => {
     });
   });
 
+  it('keeps the selected model when generation is rate limited', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      error: { code: 'rate_limit_exceeded' },
+    }, 429));
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+      sleepImpl: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(provider.generateAnswers({ questionnaire, context, modelId: '' }))
+      .rejects.toThrow('временно ограничил частоту');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body)).model).toBe('gpt-4.1-mini');
+  });
+
+  it('classifies an OpenAI 429 without a code from its safe rate-limit message', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      error: { message: 'Rate limit reached for gpt-4.1-mini on requests per min (RPM).' },
+    }, 429));
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+      sleepImpl: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(provider.generateAnswers({ questionnaire, context, modelId: '' }))
+      .rejects.toThrow('временно ограничил частоту');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('retries a confirmed TPM overflow once with less context', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(json({
+        error: {
+          type: 'tokens',
+          message: 'Request too large for gpt-4.1-mini on tokens per min (TPM): Limit 1000, Requested 1200.',
+        },
+      }, 429))
+      .mockResolvedValueOnce(json({ choices: [{ message: { content: answer } }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+      sleepImpl: vi.fn().mockResolvedValue(undefined),
+    });
+    const largeContext: CandidateContext = {
+      resumeFacts: Array.from({ length: 20 }, (_, index) => `Python проект ${index}: ${'подробный опыт '.repeat(40)}`),
+      profileFacts: [], savedAnswers: [],
+    };
+
+    await expect(provider.generateAnswers({ questionnaire, context: largeContext, modelId: '' }))
+      .resolves.toMatchObject({ answers: [{ text: 'Пять лет Python' }] });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(String(fetchImpl.mock.calls[0][1].body));
+    const second = JSON.parse(String(fetchImpl.mock.calls[1][1].body));
+    expect(second.messages[1].content.length).toBeLessThan(first.messages[1].content.length);
+  });
+
+  it('limits generated answer context independently from stored answer memory', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ choices: [{ message: { content: answer } }] }));
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4o-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0.1, fetchImpl,
+    });
+    const largeContext: CandidateContext = {
+      resumeFacts: Array.from({ length: 80 }, (_, index) => `Python проект ${index}: ${'подробный опыт '.repeat(20)}`),
+      profileFacts: [], savedAnswers: [],
+    };
+
+    await provider.generateAnswers({ questionnaire, context: largeContext, modelId: '' });
+
+    const request = JSON.parse(String(fetchImpl.mock.calls[0][1].body));
+    expect(request.messages[1].content.length).toBeLessThan(9_000);
+  });
+
   it('uses Anthropic Messages API headers and response blocks', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(json({ content: [{ type: 'text', text: answer }] }));
     const provider = new HostedAIProvider({
@@ -209,7 +285,7 @@ describe('HostedAIProvider', () => {
 
     expect(artifact.preparationMode).toBe('source_fallback');
     expect(artifact.confirmedFacts).toContain('Python и FastAPI.');
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it('rejects insecure remote custom gateways', () => {
@@ -303,16 +379,14 @@ describe('HostedAIProvider', () => {
     ]);
   });
 
-  it('falls back to the catalog models when the live list is empty', async () => {
+  it('does not present static catalog models as available when the live list is empty', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(json({ models: [] }));
     const provider = new HostedAIProvider({
       providerId: 'gemini', modelId: 'gemini-3.6-flash', apiKey: 'secret',
       timeoutMs: 1_000, temperature: 0.1, fetchImpl,
     });
 
-    const ids = await provider.listModels();
-    expect(ids).toContain('gemini-3.6-flash');
-    expect(ids.length).toBeGreaterThan(0);
+    await expect(provider.listModels()).resolves.toEqual([]);
   });
 
   it('reports a healthy connection with the live model count', async () => {
@@ -328,8 +402,51 @@ describe('HostedAIProvider', () => {
     });
   });
 
+  it('checks real text generation separately from catalog access', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      choices: [{ message: { content: 'OK' } }],
+    }));
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0, fetchImpl,
+    });
+
+    await expect(provider.testGeneration('gpt-4.1-mini')).resolves.toEqual({
+      available: true,
+      check: 'generation',
+      message: 'Генерация работает',
+    });
+    const request = JSON.parse(String(fetchImpl.mock.calls[0][1].body));
+    expect(request).toMatchObject({
+      model: 'gpt-4.1-mini',
+      max_completion_tokens: 32,
+      stream: false,
+    });
+    expect(request).not.toHaveProperty('response_format');
+  });
+
+  it('reports generation quota without retrying a terminal response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      error: { code: 'insufficient_quota' },
+    }, 429));
+    const sleepImpl = vi.fn().mockResolvedValue(undefined);
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0, fetchImpl, sleepImpl,
+    });
+
+    await expect(provider.testGeneration('gpt-4.1-mini')).resolves.toEqual({
+      available: false,
+      check: 'generation',
+      reason: 'quota',
+      message: 'На счёте API нет доступной квоты. Проверьте баланс и лимиты проекта у провайдера',
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
   it('maps rate limiting to a user-facing message', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(json({ error: { message: 'quota' } }, 429));
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(json({ error: { code: 'rate_limit_exceeded' } }, 429)));
     const sleepImpl = vi.fn().mockResolvedValue(undefined);
     const provider = new HostedAIProvider({
       providerId: 'groq', modelId: 'model', apiKey: 'secret', timeoutMs: 1_000, temperature: 0,
@@ -338,11 +455,43 @@ describe('HostedAIProvider', () => {
 
     await expect(provider.testConnection()).resolves.toEqual({
       available: false,
-      message: 'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель',
+      message: 'Провайдер временно ограничил частоту запросов. Подождите и повторите попытку',
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(sleepImpl).toHaveBeenNthCalledWith(1, 1_000);
-    expect(sleepImpl).toHaveBeenNthCalledWith(2, 2_000);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
+  it('uses provider reset headers for rate-limit backoff', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'rate_limit_exceeded' } }), {
+        status: 429,
+        headers: { 'x-ratelimit-reset-tokens': '250ms', 'x-ratelimit-reset-requests': '2s' },
+      }))
+      .mockResolvedValueOnce(json({ data: [{ id: 'model' }] }));
+    const sleepImpl = vi.fn().mockResolvedValue(undefined);
+    const provider = new HostedAIProvider({
+      providerId: 'groq', modelId: 'model', apiKey: 'secret', timeoutMs: 1_000, temperature: 0,
+      fetchImpl, sleepImpl,
+    });
+
+    await expect(provider.listModels()).resolves.toEqual(['model']);
+    expect(sleepImpl).toHaveBeenCalledWith(250);
+  });
+
+  it('hides OpenAI models that cannot generate questionnaire text', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(json({ data: [
+      { id: 'gpt-4.1-mini' },
+      { id: 'text-embedding-3-small' },
+      { id: 'whisper-1' },
+      { id: 'gpt-image-1' },
+      { id: 'gpt-4o-realtime-preview' },
+    ] }));
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-4.1-mini', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0, fetchImpl,
+    });
+
+    await expect(provider.listModels()).resolves.toEqual(['gpt-4.1-mini']);
   });
 
   it('distinguishes exhausted OpenAI quota from temporary rate limiting', async () => {

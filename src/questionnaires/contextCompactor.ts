@@ -1,6 +1,7 @@
 import type { CandidateContext, Questionnaire } from './types';
 
 export const MAX_CONTEXT_CHARS = 14_000;
+export const MAX_GENERATION_CONTEXT_CHARS = 6_000;
 const MAX_CHUNK_CHARS = 700;
 const MIN_WORD_LENGTH = 3;
 const STOP_WORDS = new Set([
@@ -94,7 +95,7 @@ function scoreChunks(chunks: ContextChunk[], questionnaire: Questionnaire): Cont
   });
 }
 
-function selectChunks(chunks: ContextChunk[]): ContextChunk[] {
+function selectChunks(chunks: ContextChunk[], maxContextChars: number): ContextChunk[] {
   const selected: ContextChunk[] = [];
   const selectedOrders = new Set<number>();
   let usedChars = 0;
@@ -102,7 +103,7 @@ function selectChunks(chunks: ContextChunk[]): ContextChunk[] {
   const add = (chunk: ContextChunk) => {
     if (selectedOrders.has(chunk.order)) return;
     const cost = chunk.text.length + 2;
-    if (selected.length > 0 && usedChars + cost > MAX_CONTEXT_CHARS) return;
+    if (selected.length > 0 && usedChars + cost > maxContextChars) return;
     selected.push(chunk);
     selectedOrders.add(chunk.order);
     usedChars += cost;
@@ -124,10 +125,11 @@ function textFor(selected: ContextChunk[], source: ContextChunk['source']): stri
 
 export function compactCandidateContext(
   context: CandidateContext,
-  questionnaire: Questionnaire
+  questionnaire: Questionnaire,
+  maxContextChars = MAX_CONTEXT_CHARS,
 ): CompactedCandidateContext {
   const chunks = sourceChunks(context);
-  const selected = selectChunks(scoreChunks(chunks, questionnaire));
+  const selected = selectChunks(scoreChunks(chunks, questionnaire), maxContextChars);
   const legendContent = textFor(selected, 'user_instruction').join('\n\n');
   const compacted: CandidateContext = {
     resumeFacts: textFor(selected, 'resume'),

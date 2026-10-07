@@ -1,4 +1,4 @@
-import { compactCandidateContext } from './contextCompactor';
+import { compactCandidateContext, MAX_GENERATION_CONTEXT_CHARS } from './contextCompactor';
 import {
   answerResponseFormat,
   buildAnswerPrompt,
@@ -71,6 +71,7 @@ interface ApiErrorPayload { error?: { message?: string; code?: string; type?: st
 
 const MAX_PROVIDER_TIMEOUT_MS = 90_000;
 const LEGEND_SOURCE_LIMITS = [8_000, 3_000] as const;
+const RATE_LIMIT_RETRY_CONTEXT_CHARS = 2_000;
 
 class AIProviderRequestError extends Error {
   constructor(
@@ -103,9 +104,47 @@ function readableModelName(id: string): string {
 }
 
 function mergeModelDetails(live: AIModelInfo[], fallback: AIModelInfo[]): AIModelInfo[] {
-  if (live.length === 0) return fallback;
-  const fallbackById = new Map(fallback.map(model => [model.id, model]));
-  return live.map(model => ({ ...fallbackById.get(model.id), ...model }));
+  if (live.length === 0) return [];
+  const liveById = new Map(live.map(model => [model.id, model]));
+  const preferred = fallback.flatMap(model => {
+    const liveModel = liveById.get(model.id);
+    if (!liveModel) return [];
+    liveById.delete(model.id);
+    return [{ ...model, ...liveModel }];
+  });
+  return [...preferred, ...liveById.values()];
+}
+
+function supportsQuestionnaireText(providerId: AIProviderId, id: string): boolean {
+  const normalized = id.toLowerCase();
+  if (/(embedding|moderation|whisper|transcri|tts|speech|audio|realtime|image|dall-e|imagen|veo)/.test(normalized)) {
+    return false;
+  }
+  if (providerId === 'openai') return /^(gpt-|chatgpt-|o\d)/.test(normalized);
+  if (providerId === 'anthropic') return normalized.startsWith('claude-');
+  if (providerId === 'gemini') return normalized.includes('gemini');
+  return true;
+}
+
+function providerHealthFromError(error: unknown): AIProviderHealth {
+  if (!(error instanceof AIProviderRequestError)) {
+    return {
+      available: false,
+      check: 'generation',
+      reason: 'unknown',
+      message: error instanceof Error ? error.message : 'Проверка генерации не удалась',
+    };
+  }
+  const reason = error.status === 401 || error.status === 403
+    ? 'credentials'
+    : error.code === 'insufficient_quota' || error.code === 'billing_hard_limit_reached'
+      ? 'quota'
+      : error.status === 429
+        ? 'rate_limit'
+        : error.status === 404 || error.status === 400
+          ? 'model'
+          : 'network';
+  return { available: false, check: 'generation', reason, message: error.message };
 }
 
 function normalizeRemoteBaseUrl(providerId: AIProviderId, raw: string): string {
@@ -151,14 +190,29 @@ function extractGeminiText(payload: unknown): string | null {
 
 function parseRetryAfter(value: string | null): number | undefined {
   if (!value) return undefined;
+  const duration = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m)$/i);
+  if (duration) {
+    const amount = Number(duration[1]);
+    const multiplier = duration[2].toLowerCase() === 'm'
+      ? 60_000
+      : duration[2].toLowerCase() === 's' ? 1_000 : 1;
+    return Number.isFinite(amount) && amount >= 0
+      ? Math.min(amount * multiplier, 60_000)
+      : undefined;
+  }
   const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 5_000);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 60_000);
   const date = Date.parse(value);
   if (!Number.isFinite(date)) return undefined;
-  return Math.min(Math.max(0, date - Date.now()), 5_000);
+  return Math.min(Math.max(0, date - Date.now()), 60_000);
 }
 
-function safeApiError(status: number, payload: unknown, retryAfter: string | null = null): AIProviderRequestError {
+function safeApiError(
+  status: number,
+  payload: unknown,
+  retryAfter: string | null = null,
+  rateLimitReset: string | null = null,
+): AIProviderRequestError {
   const body = payload as ApiErrorPayload;
   const raw = body.error?.message ?? body.message;
   const message = typeof raw === 'string' ? raw.slice(0, 300) : '';
@@ -170,18 +224,33 @@ function safeApiError(status: number, payload: unknown, retryAfter: string | nul
   }
   if (status === 429) {
     const code = body.error?.code ?? body.error?.type;
-    if (code === 'insufficient_quota') {
+    if (
+      code === 'insufficient_quota'
+      || code === 'billing_hard_limit_reached'
+      || /\b(quota|billing|credit|balance)\b/i.test(message)
+    ) {
       return new AIProviderRequestError(
         status,
         'На счёте API нет доступной квоты. Проверьте баланс и лимиты проекта у провайдера',
-        code,
+        code ?? 'insufficient_quota',
       );
     }
+    if (/request too large.*(?:tokens per min|tpm)/i.test(message) || code === 'tokens') {
+      return new AIProviderRequestError(
+        status,
+        'Контекст превышает минутный лимит токенов модели',
+        'rate_limit_request_too_large',
+      );
+    }
+    const isTemporaryRateLimit = code === 'rate_limit_exceeded'
+      || /rate limit|requests per min|\brpm\b/i.test(message);
     return new AIProviderRequestError(
       status,
-      'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель',
-      code,
-      parseRetryAfter(retryAfter),
+      isTemporaryRateLimit
+        ? 'Провайдер временно ограничил частоту запросов. Подождите и повторите попытку'
+        : 'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель',
+      isTemporaryRateLimit ? 'rate_limit_exceeded' : code,
+      parseRetryAfter(retryAfter) ?? parseRetryAfter(rateLimitReset),
     );
   }
   return new AIProviderRequestError(
@@ -246,36 +315,83 @@ export class HostedAIProvider implements AIProvider {
               && pricing.outputPerMillion === 0,
           }];
         });
-    return mergeModelDetails(liveModels, definition.modelDetails);
+    return mergeModelDetails(
+      liveModels.filter(model => supportsQuestionnaireText(this.id, model.id)),
+      definition.modelDetails,
+    );
   }
 
   async testConnection(): Promise<AIProviderHealth> {
     try {
       const models = await this.listModels();
-      return { available: true, message: models.length > 0 ? `Подключение работает · моделей: ${models.length}` : 'Подключение работает' };
+      return models.length > 0
+        ? { available: true, message: `Подключение работает · моделей: ${models.length}` }
+        : { available: false, message: 'Совместимые текстовые модели не найдены' };
     } catch (error) {
       return { available: false, message: error instanceof Error ? error.message : 'Проверка не удалась' };
+    }
+  }
+
+  async testGeneration(modelId: string): Promise<AIProviderHealth> {
+    const selectedModel = modelId || this.options.modelId;
+    if (!selectedModel) {
+      return { available: false, check: 'generation', reason: 'model', message: 'Выберите модель' };
+    }
+    try {
+      await this.complete(
+        selectedModel,
+        [{ role: 'user', content: 'Reply with OK.' }],
+        32,
+        0,
+      );
+      return { available: true, check: 'generation', message: 'Генерация работает' };
+    } catch (error) {
+      return providerHealthFromError(error);
     }
   }
 
   async generateAnswers(input: { questionnaire: Questionnaire; context: CandidateContext; modelId: string }): Promise<AnswerPlan> {
     const modelId = input.modelId || this.options.modelId;
     if (!modelId) throw new Error('Выберите модель');
-    const compacted = compactCandidateContext(input.context, input.questionnaire);
+    let compacted = compactCandidateContext(
+      input.context,
+      input.questionnaire,
+      MAX_GENERATION_CONTEXT_CHARS,
+    );
     const maxTokens = Math.min(1_024, Math.max(128, input.questionnaire.questions.reduce(
       (total, question) => total + (question.type === 'text' ? 120 : 40), 32,
     )));
-    const content = await this.complete(modelId, [
+    const generate = (context: CandidateContext, outputTokens: number) => this.complete(modelId, [
       { role: 'system', content: 'Draft truthful job-application answers from supplied evidence. Return only JSON.' },
-      { role: 'user', content: buildAnswerPrompt(input.questionnaire, compacted.context) },
-    ], maxTokens, this.options.temperature, answerResponseFormat());
+      { role: 'user', content: buildAnswerPrompt(input.questionnaire, context) },
+    ], outputTokens, this.options.temperature, answerResponseFormat());
+    let content: string;
+    try {
+      content = await generate(compacted.context, maxTokens);
+    } catch (error) {
+      if (!(error instanceof AIProviderRequestError) || error.code !== 'rate_limit_request_too_large') {
+        throw error;
+      }
+      compacted = compactCandidateContext(
+        input.context,
+        input.questionnaire,
+        RATE_LIMIT_RETRY_CONTEXT_CHARS,
+      );
+      content = await generate(compacted.context, Math.min(maxTokens, 512));
+    }
     let answers: SuggestedAnswer[];
     try {
       answers = validateAnswers(parseAnswerContent(content), input.questionnaire, compacted.context);
     } catch {
       answers = unansweredReviewPlan(input.questionnaire);
     }
-    return { questionnaireId: input.questionnaire.id, providerId: this.id, modelId, answers, generatedAt: Date.now() };
+    return {
+      questionnaireId: input.questionnaire.id,
+      providerId: this.id,
+      modelId,
+      answers,
+      generatedAt: Date.now(),
+    };
   }
 
   async prepareLegend(input: { name: string; content: string; modelId: string }): Promise<LegendArtifact> {
@@ -305,7 +421,7 @@ export class HostedAIProvider implements AIProvider {
     throw new Error('Не удалось подготовить профиль легенды');
   }
 
-  private async complete(model: string, messages: Message[], maxTokens: number, temperature: number, responseFormat: Record<string, unknown>): Promise<string> {
+  private async complete(model: string, messages: Message[], maxTokens: number, temperature: number, responseFormat?: Record<string, unknown>): Promise<string> {
     const protocol = getProviderDefinition(this.id).protocol;
     let path: string;
     let body: unknown;
@@ -317,7 +433,7 @@ export class HostedAIProvider implements AIProvider {
         max_completion_tokens: maxTokens,
         stream: false,
         messages,
-        response_format: responseFormat,
+        ...(responseFormat ? { response_format: responseFormat } : {}),
       };
     } else if (protocol === 'anthropic') {
       path = '/messages';
@@ -336,7 +452,14 @@ export class HostedAIProvider implements AIProvider {
       };
     } else {
       path = '/chat/completions';
-      body = { model, temperature, max_tokens: maxTokens, stream: false, messages, response_format: responseFormat };
+      body = {
+        model,
+        temperature,
+        max_tokens: maxTokens,
+        stream: false,
+        messages,
+        ...(responseFormat ? { response_format: responseFormat } : {}),
+      };
     }
     let payload: unknown;
     try {
@@ -388,9 +511,18 @@ export class HostedAIProvider implements AIProvider {
         const response = await this.fetchImpl(`${this.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
         const payload = await response.json().catch(() => ({}));
         if (response.ok) return payload;
-        const error = safeApiError(response.status, payload, response.headers.get('Retry-After'));
+        const error = safeApiError(
+          response.status,
+          payload,
+          response.headers.get('Retry-After'),
+          response.headers.get('x-ratelimit-reset-tokens')
+            ?? response.headers.get('x-ratelimit-reset-requests'),
+        );
         const canRetry = error.status === 429
           && error.code !== 'insufficient_quota'
+          && error.code !== 'billing_hard_limit_reached'
+          && error.code !== 'rate_limit_request_too_large'
+          && error.retryAfterMs !== undefined
           && attempt < 2;
         if (!canRetry) throw error;
         await this.sleepImpl(error.retryAfterMs ?? (attempt + 1) * 1_000);
