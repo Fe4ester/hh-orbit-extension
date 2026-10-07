@@ -2,7 +2,7 @@
 
 HH Orbit — Chromium MV3 расширение для автоматизации откликов на HH.ru.
 
-Текущая версия: `1.1.1`.
+Текущая версия: `1.1.2`.
 
 ## Поддержка браузеров
 
@@ -18,7 +18,7 @@ HH Orbit — Chromium MV3 расширение для автоматизации
 - Arc;
 - Opera.
 
-Не поддерживаются в `1.1.1`:
+Не поддерживаются в `1.1.2`:
 
 - Firefox;
 - Safari.
@@ -59,6 +59,10 @@ HH Orbit — Chromium MV3 расширение для автоматизации
 - показывает счетчики запуска: обработано, успех, сегодня, вручную;
 - показывает диагностические логи в side panel;
 - поддерживает dark/light theme.
+
+## Что изменилось в 1.1.2
+
+Ошибка генерации анкеты теперь показывается как ошибка, а не как готовый черновик. HTTP 429 различает временный лимит запросов и исчерпанную квоту API.
 
 ## Что изменилось в 1.1.1
 
@@ -373,14 +377,14 @@ npm run build
 3. Собрать zip из `dist/`:
 
 ```bash
-(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.1.1-chromium.zip .)
+(cd dist && zip -qr ../artifacts/releases/hh-orbit-v1.1.2-chromium.zip .)
 ```
 
 4. Проверить zip:
 
 ```bash
-unzip -l artifacts/releases/hh-orbit-v1.1.1-chromium.zip
-shasum -a 256 artifacts/releases/hh-orbit-v1.1.1-chromium.zip
+unzip -l artifacts/releases/hh-orbit-v1.1.2-chromium.zip
+shasum -a 256 artifacts/releases/hh-orbit-v1.1.2-chromium.zip
 ```
 
 5. Загрузить `dist/` unpacked в Chrome и пройти smoke checklist.
@@ -391,7 +395,7 @@ shasum -a 256 artifacts/releases/hh-orbit-v1.1.1-chromium.zip
 
 - `dist/` загружается как unpacked extension;
 - название расширения: `HH Orbit`;
-- версия в UI: `v1.1.1`;
+- версия в UI: `v1.1.2`;
 - dark/light theme переключается;
 - при overscroll в dark mode не просвечивает белый фон;
 - Backend mode стартует и останавливается;

@@ -16,6 +16,44 @@ describe('QuestionnairePanel submission', () => {
     container = null;
   });
 
+  it('shows a failed AI generation instead of claiming a draft is ready', async () => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.mocked(chrome.runtime.sendMessage).mockResolvedValue({
+      success: true,
+      item: { status: 'failed', error: 'Лимит провайдера исчерпан' },
+    });
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <QuestionnairePanel
+          view="workspace"
+          onPatch={vi.fn()}
+          selectedResume={null}
+          manualQuestionnaireCount={0}
+          state={{
+            ...INITIAL_QUESTIONNAIRE_STATE,
+            queue: [{
+              questionnaire: {
+                id: 'q-429', vacancyId: '42', source: 'hh_backend', detectedAt: 1,
+                questions: [{ id: 'answer', type: 'text', prompt: 'Опыт', required: true }],
+              },
+              status: 'ready_for_ai', updatedAt: 1,
+            }],
+          }}
+        />
+      );
+    });
+    const generate = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === 'Сгенерировать');
+    expect(generate).toBeDefined();
+    await act(async () => { generate?.click(); });
+    expect(container.textContent).toContain('Лимит провайдера исчерпан');
+    expect(container.textContent).not.toContain('Черновик подготовлен');
+  });
+
   it('saves the blurred answer before submitting from the first click', async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     let finishRevision!: () => void;

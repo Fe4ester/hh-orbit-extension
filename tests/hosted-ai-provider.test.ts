@@ -331,8 +331,19 @@ describe('HostedAIProvider', () => {
 
     await expect(provider.testConnection()).resolves.toEqual({
       available: false,
-      message: 'Лимит провайдера исчерпан. Повторите позже или выберите другую модель',
+      message: 'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель',
     });
+  });
+
+  it('distinguishes exhausted OpenAI quota from temporary rate limiting', async () => {
+    const provider = new HostedAIProvider({
+      providerId: 'openai', modelId: 'gpt-5.6-terra', apiKey: 'secret',
+      timeoutMs: 1_000, temperature: 0,
+      fetchImpl: vi.fn().mockResolvedValue(json({ error: { code: 'insufficient_quota' } }, 429)),
+    });
+
+    await expect(provider.generateAnswers({ questionnaire, context, modelId: '' }))
+      .rejects.toThrow('На счёте API нет доступной квоты');
   });
 
   it('aborts a hanging request after the configured timeout', async () => {

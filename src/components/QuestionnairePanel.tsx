@@ -67,8 +67,16 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
     setBusyAction(key);
     setNotice(null);
     try {
-      const response = await action() as { success?: boolean; error?: string; legendFile?: { artifact?: { preparationMode?: string } } };
+      const response = await action() as {
+        success?: boolean;
+        error?: string;
+        item?: { status?: string; error?: string };
+        legendFile?: { artifact?: { preparationMode?: string } };
+      };
       if (response?.error) throw new Error(response.error);
+      if (response?.item?.status === 'failed') {
+        throw new Error(response.item.error || t('Не удалось подготовить черновик'));
+      }
       setNotice({ kind: 'success', text: typeof successText === 'function' ? successText(response) : successText });
     } catch (error) {
       setNotice({

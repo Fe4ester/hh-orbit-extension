@@ -66,7 +66,7 @@ interface ModelListPayload {
     outputTokenLimit?: number;
   }>;
 }
-interface ApiErrorPayload { error?: { message?: string }; message?: string }
+interface ApiErrorPayload { error?: { message?: string; code?: string; type?: string }; message?: string }
 
 const MAX_PROVIDER_TIMEOUT_MS = 90_000;
 const LEGEND_SOURCE_LIMITS = [8_000, 3_000] as const;
@@ -154,7 +154,11 @@ function safeApiError(status: number, payload: unknown): AIProviderRequestError 
     return new AIProviderRequestError(status, 'Контекст не помещается в запрос к выбранной модели');
   }
   if (status === 429) {
-    return new AIProviderRequestError(status, 'Лимит провайдера исчерпан. Повторите позже или выберите другую модель');
+    const code = body.error?.code ?? body.error?.type;
+    if (code === 'insufficient_quota') {
+      return new AIProviderRequestError(status, 'На счёте API нет доступной квоты. Проверьте баланс и лимиты проекта у провайдера');
+    }
+    return new AIProviderRequestError(status, 'Достигнут лимит запросов к модели. Повторите позже или выберите другую модель');
   }
   return new AIProviderRequestError(
     status,
