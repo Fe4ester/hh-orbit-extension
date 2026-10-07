@@ -116,4 +116,60 @@ describe('QuestionnairePanel submission', () => {
     )).toEqual(['QUESTIONNAIRE_REVISE_ANSWER', 'QUESTIONNAIRE_APPROVE_AND_SUBMIT']);
     expect(container.textContent).not.toContain('Подтвердить отправку');
   });
+
+  it('separates key validation from a real generation check', async () => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.mocked(chrome.runtime.sendMessage).mockImplementation(async message => {
+      const type = (message as { type?: string }).type;
+      if (type === 'AI_PROVIDER_CREDENTIAL_STATUS') return { configured: true, hint: '••••test' };
+      if (type === 'QUESTIONNAIRE_LIST_MODELS') {
+        return {
+          success: true,
+          modelDetails: [{ id: 'gpt-4.1-mini', name: 'GPT-4.1 mini' }],
+        };
+      }
+      if (type === 'QUESTIONNAIRE_TEST_GENERATION') {
+        return { available: false, message: 'На счёте API нет доступной квоты' };
+      }
+      return { success: true };
+    });
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <QuestionnairePanel
+          view="settings"
+          onPatch={vi.fn()}
+          selectedResume={null}
+          manualQuestionnaireCount={0}
+          state={{
+            ...INITIAL_QUESTIONNAIRE_STATE,
+            settings: {
+              ...INITIAL_QUESTIONNAIRE_STATE.settings,
+              provider: {
+                ...INITIAL_QUESTIONNAIRE_STATE.settings.provider,
+                type: 'openai',
+                modelId: 'gpt-4.1-mini',
+              },
+            },
+          }}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    const button = (label: string) => Array.from(container!.querySelectorAll('button'))
+      .find(item => item.textContent?.trim() === label);
+    await act(async () => { button('Проверить ключ')?.click(); });
+    expect(container.textContent).toContain('Доступно моделей: 1');
+
+    await act(async () => { button('Проверить генерацию')?.click(); });
+    expect(container.textContent).toContain('На счёте API нет доступной квоты');
+    expect(vi.mocked(chrome.runtime.sendMessage)).toHaveBeenCalledWith({
+      type: 'QUESTIONNAIRE_TEST_GENERATION',
+      modelId: 'gpt-4.1-mini',
+    });
+  });
 });

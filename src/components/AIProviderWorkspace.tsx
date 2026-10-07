@@ -1,5 +1,5 @@
 import { t, getLanguage } from '../i18n';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AI_PROVIDER_CATALOG,
   DEFAULT_AI_PROVIDER_ID,
@@ -9,6 +9,7 @@ import {
   type AIProviderId,
   type QuestionnaireAISettingsPatch,
 } from '../questionnaires';
+import { SelectMenu } from './SelectMenu';
 
 interface Props {
   provider: NonNullable<QuestionnaireAISettingsPatch['provider']> & {
@@ -22,6 +23,7 @@ interface Props {
 
 type CredentialStatus = { configured: boolean; hint?: string };
 type Notice = { kind: 'success' | 'error' | 'info'; text: string };
+type CheckStatus = { state: 'idle' | 'busy' | 'ready' | 'error'; message: string };
 
 async function send<T>(message: unknown): Promise<T> {
   const response = await chrome.runtime.sendMessage(message) as T | { error?: unknown };
@@ -59,9 +61,12 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
   const [modelDetails, setModelDetails] = useState<AIModelInfo[]>(definition.modelDetails);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
+  const [catalogStatus, setCatalogStatus] = useState<CheckStatus>({ state: 'idle', message: t('Не проверен') });
+  const [generationStatus, setGenerationStatus] = useState<CheckStatus>({ state: 'idle', message: t('Не проверена') });
+  const modelPickerRef = useRef<HTMLDivElement>(null);
+  const modelSearchRef = useRef<HTMLInputElement>(null);
   const selectedModel = useMemo<AIModelInfo>(() => (
     modelDetails.find(model => model.id === modelId)
     ?? definition.modelDetails.find(model => model.id === modelId)
@@ -92,14 +97,27 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
     };
   }, [providerType]);
 
+  useEffect(() => {
+    const closeMenus = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!modelPickerRef.current?.contains(target)) setModelMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeMenus);
+    return () => document.removeEventListener('pointerdown', closeMenus);
+  }, []);
+
+  useEffect(() => {
+    if (modelMenuOpen) modelSearchRef.current?.focus();
+  }, [modelMenuOpen]);
+
   const selectProvider = (type: AIProviderId) => {
     const next = AI_PROVIDER_CATALOG[type];
     onPatch({ provider: { type, modelId: next.defaultModel, customBaseUrl: type === 'custom_openai' ? provider.customBaseUrl ?? '' : undefined } });
-    setProviderMenuOpen(false);
   };
 
   const selectModel = (modelId: string) => {
     onPatch({ provider: { modelId } });
+    setGenerationStatus({ state: 'idle', message: t('Не проверена') });
     setModelMenuOpen(false);
     setModelSearch('');
   };
@@ -113,6 +131,8 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
       });
       setCredentialStatus(result);
       setCredential('');
+      setCatalogStatus({ state: 'idle', message: t('Не проверен') });
+      setGenerationStatus({ state: 'idle', message: t('Не проверена') });
       setNotice({ kind: 'success', text: t("Ключ сохранён на этом устройстве") });
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : t("Не удалось сохранить ключ") });
@@ -127,6 +147,8 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
     try {
       await send({ type: 'AI_PROVIDER_DELETE_CREDENTIAL', providerId: providerType });
       setCredentialStatus({ configured: false });
+      setCatalogStatus({ state: 'idle', message: t('Не проверен') });
+      setGenerationStatus({ state: 'idle', message: t('Не проверена') });
       setNotice({ kind: 'info', text: t("Ключ удалён") });
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : t("Не удалось удалить ключ") });
@@ -144,24 +166,10 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
     }
   };
 
-  const test = async () => {
-    setBusy('test');
-    setNotice(null);
-    try {
-      await ensureCustomPermission();
-      const result = await send<{ available: boolean; message?: string }>({ type: 'QUESTIONNAIRE_TEST_PROVIDER' });
-      if (!result.available) throw new Error(result.message || t("Проверка не удалась"));
-      setNotice({ kind: 'success', text: result.message || t("Подключение работает") });
-    } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : t("Проверка не удалась") });
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const refreshModels = async () => {
     setBusy('models');
     setNotice(null);
+    setCatalogStatus({ state: 'busy', message: t('Проверяем ключ…') });
     try {
       await ensureCustomPermission();
       const result = await send<{ models?: string[]; modelDetails?: AIModelInfo[]; error?: string }>({ type: 'QUESTIONNAIRE_LIST_MODELS' });
@@ -169,10 +177,50 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
       const next = result.modelDetails?.length
         ? result.modelDetails
         : (result.models ?? []).map(id => ({ id, name: id }));
-      setModelDetails(next.length > 0 ? next : definition.modelDetails);
-      setNotice({ kind: 'success', text: t("Доступно моделей: {0}", next.length || definition.modelDetails.length) });
+      setModelDetails(next);
+      if (next.length === 0) {
+        setCatalogStatus({ state: 'error', message: t('Совместимые текстовые модели не найдены') });
+        return;
+      }
+      let message = t('Доступно моделей: {0}', next.length);
+      if (providerType !== 'custom_openai' && !next.some(model => model.id === modelId)) {
+        onPatch({ provider: { modelId: next[0].id } });
+        setGenerationStatus({ state: 'idle', message: t('Не проверена') });
+        message = t('Выбрана доступная модель: {0}', next[0].name);
+      }
+      setCatalogStatus({
+        state: 'ready',
+        message,
+      });
     } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : t("Не удалось получить модели") });
+      setCatalogStatus({
+        state: 'error',
+        message: error instanceof Error ? error.message : t("Не удалось получить модели"),
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const testGeneration = async () => {
+    setBusy('generation');
+    setNotice(null);
+    setGenerationStatus({ state: 'busy', message: t('Проверяем модель…') });
+    try {
+      await ensureCustomPermission();
+      const result = await send<{ available: boolean; message?: string }>({
+        type: 'QUESTIONNAIRE_TEST_GENERATION',
+        modelId,
+      });
+      setGenerationStatus({
+        state: result.available ? 'ready' : 'error',
+        message: result.message || (result.available ? t('Генерация работает') : t('Проверка генерации не удалась')),
+      });
+    } catch (error) {
+      setGenerationStatus({
+        state: 'error',
+        message: error instanceof Error ? error.message : t('Проверка генерации не удалась'),
+      });
     } finally {
       setBusy(null);
     }
@@ -181,51 +229,45 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
   return (
     <section className="ai-provider-workspace" aria-labelledby="ai-provider-title">
       <div className="ai-provider-heading">
-        <div><strong id="ai-provider-title">{t("AI для анкет")}</strong><small>{t("Выберите, где генерировать черновики")}</small></div>
+        <div><strong id="ai-provider-title">{t("AI для анкет")}</strong><small>{t("Подключите провайдера и проверьте выбранную модель")}</small></div>
         <span data-ready={credentialStatus.configured}>
-          {credentialStatus.configured ? t("Ключ добавлен") : t("Нужен ключ")}
+          {credentialStatus.configured ? t("Ключ сохранён") : t("Нужен ключ")}
         </span>
       </div>
 
-      <div className="ai-provider-picker">
-        <span className="ai-provider-picker-label">{t("Провайдер")}</span>
-        <button
-          type="button"
-          className="ai-provider-picker-trigger"
-          aria-haspopup="listbox"
-          aria-expanded={providerMenuOpen}
-          onClick={() => setProviderMenuOpen(open => !open)}
-          onKeyDown={event => {
-            if (event.key === 'Escape') setProviderMenuOpen(false);
-          }}
-        >
-          <span className="ai-provider-logo" aria-hidden="true">{definition.name.slice(0, 1)}</span>
-          <span><strong>{definition.name}</strong><small>{t(definition.description)}</small></span>
-          <span className="ai-provider-chevron" aria-hidden="true">⌄</span>
-        </button>
-          <ul className="ai-provider-menu" aria-label={t("Выбор AI-провайдера")} hidden={!providerMenuOpen}>
-            {Object.values(AI_PROVIDER_CATALOG).map(item => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  aria-current={item.id === providerType ? 'true' : undefined}
-                  data-selected={item.id === providerType}
-                  onClick={() => selectProvider(item.id)}
-                >
-                  <span className="ai-provider-logo" aria-hidden="true">{item.name.slice(0, 1)}</span>
-                  <span><strong>{item.name}</strong><small>{t(item.bestFor)}</small></span>
-                  <em>{t(item.badge)}</em>
-                </button>
-              </li>
-            ))}
-          </ul>
+      <div className="ai-readiness" aria-live="polite">
+        <div data-state={credentialStatus.configured ? 'ready' : 'idle'}>
+          <span aria-hidden="true">1</span><strong>{t('Ключ')}</strong><small>{credentialStatus.configured ? t('Сохранён') : t('Не добавлен')}</small>
+        </div>
+        <div data-state={catalogStatus.state}>
+          <span aria-hidden="true">2</span><strong>{t('Модели')}</strong><small>{catalogStatus.message}</small>
+        </div>
+        <div data-state={generationStatus.state}>
+          <span aria-hidden="true">3</span><strong>{t('Генерация')}</strong><small>{generationStatus.message}</small>
+        </div>
       </div>
 
-      <div className="ai-provider-explanation">
+      <div className="ai-provider-picker">
+        <label className="ai-provider-picker-label" htmlFor="ai-provider-select">{t("Провайдер")}</label>
+        <SelectMenu
+          id="ai-provider-select"
+          value={providerType}
+          placeholder={t('Выберите провайдера')}
+          options={Object.values(AI_PROVIDER_CATALOG).map(item => ({
+            value: item.id,
+            label: `${item.name} · ${t(item.badge)}`,
+            description: t(item.bestFor),
+          }))}
+          onChange={value => selectProvider(value as AIProviderId)}
+        />
+      </div>
+
+      <details className="ai-provider-explanation">
+        <summary>{t('О провайдере и передаче данных')}</summary>
         <div><strong>{t("Для чего подходит")}</strong><span>{t(definition.bestFor)}</span></div>
         <div><strong>{t("Что происходит с данными")}</strong><span>{t(definition.dataPolicy)}</span></div>
         <div><strong>{t("Как подключить")}</strong><span>{t(definition.setupHint)}</span></div>
-      </div>
+      </details>
 
       <div className="hosted-ai-settings">
           {definition.freeTier && <div className="ai-free-tier"><strong>{t("Бесплатный старт")}</strong><span>{t(definition.freeTier)}</span></div>}
@@ -247,13 +289,15 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
             </div>
           </div>
 
-          <div className="ai-model-picker">
-            <span className="ai-provider-picker-label">{t("Модель")}</span>
+          <div className="ai-model-picker" ref={modelPickerRef}>
+            <label className="ai-provider-picker-label" htmlFor="ai-model-select">{t("Модель")}</label>
             <button
+              id="ai-model-select"
               type="button"
               className="ai-model-picker-trigger"
-              aria-haspopup="menu"
+              aria-haspopup="dialog"
               aria-expanded={modelMenuOpen}
+              aria-controls="ai-model-list"
               onClick={() => setModelMenuOpen(open => !open)}
               onKeyDown={event => {
                 if (event.key === 'Escape') setModelMenuOpen(false);
@@ -262,15 +306,22 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
               <span><strong>{selectedModel.name}</strong><small>{selectedModel.id}</small></span>
               <span className="ai-provider-chevron" aria-hidden="true">⌄</span>
             </button>
-            <div className="ai-model-menu" hidden={!modelMenuOpen}>
+            <dialog className="ai-model-menu" aria-label={t('Выбор AI-модели')} open={modelMenuOpen}>
               <input
+                ref={modelSearchRef}
                 type="search"
                 value={modelSearch}
                 placeholder={t("Найти модель")}
                 aria-label={t("Поиск модели")}
                 onChange={event => setModelSearch(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Escape') {
+                    setModelMenuOpen(false);
+                    setModelSearch('');
+                  }
+                }}
               />
-              <ul aria-label={t("Выбор AI-модели")}>
+              <ul id="ai-model-list">
                 {filteredModels.map(model => (
                   <li key={model.id}>
                     <button
@@ -290,7 +341,7 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
                 ))}
               </ul>
               {filteredModels.length === 0 && <div className="ai-model-empty">{t("Ничего не найдено")}</div>}
-            </div>
+            </dialog>
           </div>
 
           <div className="ai-model-details">
@@ -313,8 +364,8 @@ export const AIProviderWorkspace: React.FC<Props> = ({ provider, onPatch }) => {
           </div>
 
           <div className="ai-provider-actions">
-            <button type="button" className="btn btn-primary" disabled={busy !== null || (!credentialStatus.configured && providerType !== 'custom_openai')} onClick={() => void test()}>{busy === 'test' ? t("Проверяем…") : t("Проверить подключение")}</button>
-            <button type="button" className="btn btn-secondary" disabled={busy !== null || (!credentialStatus.configured && providerType !== 'custom_openai')} onClick={() => void refreshModels()}>{busy === 'models' ? t("Загружаем…") : t("Обновить модели")}</button>
+            <button type="button" className="btn btn-secondary" disabled={busy !== null || (!credentialStatus.configured && providerType !== 'custom_openai')} onClick={() => void refreshModels()}>{busy === 'models' ? t("Проверяем…") : catalogStatus.state === 'ready' ? t('Обновить модели') : t('Проверить ключ')}</button>
+            <button type="button" className="btn btn-primary" disabled={busy !== null || !modelId || (!credentialStatus.configured && providerType !== 'custom_openai')} onClick={() => void testGeneration()}>{busy === 'generation' ? t('Проверяем модель…') : t('Проверить генерацию')}</button>
           </div>
       </div>
       {notice && <div className="questionnaire-notice" data-kind={notice.kind}>{t(notice.text)}</div>}

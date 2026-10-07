@@ -44,7 +44,7 @@ describe('AIProviderWorkspace', () => {
     });
 
     expect(container.textContent).toContain('storage unavailable');
-    expect(container.textContent).toContain('Ключ добавлен');
+    expect(container.textContent).toContain('Ключ сохранён');
     expect(container.textContent).toContain('••••1234');
     expect(deleteButton?.disabled).toBe(false);
   });
@@ -68,5 +68,39 @@ describe('AIProviderWorkspace', () => {
 
     expect(container.textContent).toContain('status unavailable');
     expect(container.textContent).toContain('Нужен ключ');
+  });
+
+  it('opens the provider menu and persists the selected provider defaults', async () => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.mocked(chrome.runtime.sendMessage).mockResolvedValue({ configured: false });
+    const onPatch = vi.fn();
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <AIProviderWorkspace
+          provider={DEFAULT_QUESTIONNAIRE_AI_SETTINGS.provider}
+          onPatch={onPatch}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    const trigger = container.querySelector<HTMLButtonElement>('#ai-provider-select');
+    await act(async () => { trigger?.click(); });
+    expect(container.textContent).toContain('OpenAI · Качество');
+
+    const openAI = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('OpenAI · Качество'));
+    await act(async () => { openAI?.click(); });
+    expect(onPatch).toHaveBeenCalledWith({
+      provider: { type: 'openai', modelId: 'gpt-4.1-mini', customBaseUrl: undefined },
+    });
   });
 });

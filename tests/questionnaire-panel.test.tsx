@@ -224,22 +224,17 @@ describe('QuestionnairePanel', () => {
       />
     );
 
-    expect(html).toContain('OpenAI');
-    expect(html).toContain('Claude');
-    expect(html).toContain('Google Gemini');
-    expect(html).toContain('OpenRouter');
     expect(html).toContain('Groq');
-    expect(html).toContain('DeepSeek');
-    expect(html).toContain('OpenCode / свой gateway');
     expect(html).toContain('Бесплатный старт');
     expect(html).toContain('Вставьте API-ключ');
     expect(html).toContain('openai/gpt-oss-120b');
-    expect(html).toContain('Проверить подключение');
+    expect(html).toContain('Проверить ключ');
+    expect(html).toContain('Проверить генерацию');
+    expect(html).toContain('О провайдере и передаче данных');
     expect(html).toContain('Для чего подходит');
     expect(html).toContain('Что происходит с данными');
     expect(html).toContain('Как подключить');
     expect(html).toContain('Подготовка нескольких черновиков');
-    expect(html).toContain('Выбор AI-провайдера');
     expect(html).toContain('Выбор AI-модели');
     expect(html).toContain('GPT-OSS 120B');
     expect(html).toContain('API списка моделей не публикует цену');
