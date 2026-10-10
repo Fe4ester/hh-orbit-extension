@@ -274,7 +274,10 @@ details[open] > :not(summary) { animation: content-arrival 150ms var(--ease); }
   font-size: var(--fs-xs);
   font-weight: 600;
   color: color-mix(in srgb, var(--header-fg) 62%, transparent);
+  text-decoration: none;
 }
+
+.version:hover { color: var(--header-fg); }
 
 .brand-copy small {
   font-size: var(--fs-xs);
@@ -2105,6 +2108,24 @@ select.logs-level-filter {
 }
 
 .questionnaire-context-heading small { color: var(--muted); font-weight: 400; }
+
+.questionnaire-required-context {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.questionnaire-required-context label {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.questionnaire-required-context textarea {
+  min-height: 112px;
+  background: var(--field);
+}
+
+.questionnaire-required-context small { color: var(--muted); }
+.questionnaire-required-context .btn { justify-self: start; }
 
 .questionnaire-memory {
   display: grid;

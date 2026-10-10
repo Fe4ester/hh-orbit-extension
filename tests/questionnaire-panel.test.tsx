@@ -22,6 +22,7 @@ describe('QuestionnairePanel', () => {
             ...INITIAL_QUESTIONNAIRE_STATE.settings,
             context: {
               ...INITIAL_QUESTIONNAIRE_STATE.settings.context,
+              instructions: 'Отвечать кратко и по делу',
               legendFile: {
                 name: 'legend.md',
                 content: '# Candidate legend',
@@ -93,6 +94,8 @@ describe('QuestionnairePanel', () => {
     expect(html).toContain('AI-профиль готов');
     expect(html).toContain('от 300 000 ₽ gross в месяц');
     expect(html).toContain('Пересобрать AI-профиль');
+    expect(html).toContain('Обязательный контекст для ответов');
+    expect(html).toContain('Отвечать кратко и по делу');
     expect(html).toContain('Senior TypeScript Developer');
     expect(html).toContain('AI &amp; Automation');
     expect(html).not.toContain('&amp;amp;');

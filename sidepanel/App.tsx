@@ -25,7 +25,7 @@ import { HeaderPrint, Icon } from './icons';
 import './styles.css';
 import type { AutoApplyStartResult } from '../src/background/autoApplyStart';
 import { subscribeToAppState } from './stateSync';
-import { HH_APPLICANT_TOOL_URL, PROJECT_REPOSITORY_URL } from '../src/config/externalLinks';
+import { PROJECT_RELEASES_URL, PROJECT_REPOSITORY_URL } from '../src/config/externalLinks';
 
 const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
 const THEME_STORAGE_KEY = 'ui_theme';
@@ -205,7 +205,7 @@ export const App: React.FC = () => {
         <div className="brand">
           <AppMark accessibleLabel={t("Показать скрытую анимацию HH Orbit")} />
           <span className="brand-copy">
-            <span className="brand-title-row"><h1>HH Orbit</h1><span className="version">v{EXTENSION_VERSION}</span></span>
+            <span className="brand-title-row"><h1>HH Orbit</h1><a className="version" href={PROJECT_RELEASES_URL} target="_blank" rel="noreferrer" title={t("Открыть актуальную версию на GitHub")}>v{EXTENSION_VERSION}</a></span>
             <small>{t("Навигация по вакансиям")}</small>
           </span>
         </div>
@@ -488,7 +488,6 @@ export const App: React.FC = () => {
             </div>
             <div className="settings-links" aria-label={t("Ссылки проекта")}>
               <a href={PROJECT_REPOSITORY_URL} target="_blank" rel="noreferrer">{t("HH Orbit на GitHub")}</a>
-              <a href={HH_APPLICANT_TOOL_URL} target="_blank" rel="noreferrer">{t("Справочный проект hh-applicant-tool")}</a>
             </div>
           </section>
         )}

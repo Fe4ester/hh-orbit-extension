@@ -38,6 +38,31 @@ function answerFor(item: QuestionnaireQueueItem, questionId: string): SuggestedA
   return item.answerPlan?.answers.find(answer => answer.questionId === questionId);
 }
 
+const RequiredContextEditor: React.FC<{
+  value: string;
+  onSave: (value: string) => void;
+}> = ({ value, onSave }) => {
+  const [draft, setDraft] = useState(value);
+  return (
+    <div className="questionnaire-required-context">
+      <label htmlFor="questionnaire-required-context">{t("Обязательный контекст для ответов")}</label>
+      <small>{t("Опишите факты и правила, которые AI должен учитывать в каждом ответе.")}</small>
+      <textarea
+        id="questionnaire-required-context"
+        value={draft}
+        placeholder={t("Например: отвечать от первого лица, писать кратко, не указывать готовность к переезду.")}
+        onChange={event => setDraft(event.target.value)}
+      />
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={draft.trim() === value.trim()}
+        onClick={() => onSave(draft.trim())}
+      >{t("Сохранить контекст")}</button>
+    </div>
+  );
+};
+
 export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
   state,
   onPatch,
@@ -186,6 +211,14 @@ export const QuestionnairePanel: React.FC<QuestionnairePanelProps> = ({
               <strong>{t("Контекст AI")}</strong>
               <small>{t("Один файл-легенда + выбранное резюме HH")}</small>
             </div>
+            <RequiredContextEditor
+              key={settings.context.instructions ?? ''}
+              value={settings.context.instructions ?? ''}
+              onSave={value => {
+                onPatch({ context: { instructions: value } });
+                setNotice({ kind: 'success', text: t("Контекст сохранён") });
+              }}
+            />
             <div className="questionnaire-context-sources">
               <div data-ready={Boolean(settings.context.legendFile)}>
                 <span>{settings.context.legendFile ? '✓' : '1'}</span>
