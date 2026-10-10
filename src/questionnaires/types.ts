@@ -35,7 +35,7 @@ export interface Questionnaire {
 }
 
 export interface CandidateEvidence {
-  source: 'resume' | 'profile' | 'saved_answer' | 'user_instruction';
+  source: 'vacancy' | 'resume' | 'profile' | 'saved_answer' | 'user_instruction';
   reference: string;
 }
 
@@ -70,6 +70,7 @@ export interface QuestionnaireQueueItem {
 }
 
 export interface CandidateContext {
+  vacancyFacts?: string[];
   resumeFacts: string[];
   profileFacts: string[];
   savedAnswers: Array<{ prompt: string; answer: string }>;

@@ -18,6 +18,7 @@ import { BackendHTTPClient } from '../runtime/backendHTTPClient';
 import { FileLogger } from '../utils/fileLogger';
 import {
   HostedAIProvider,
+  buildCandidateContext,
   ProviderCredentialStore,
   DEFAULT_AI_PROVIDER_ID,
   getProviderDefinition,
@@ -1040,13 +1041,7 @@ async function prepareLegendFile(input: {
       artifact,
     };
     await store.updateQuestionnaireSettings({
-      context: {
-        legendFile,
-        resumeFacts: [],
-        profileFacts: [],
-        savedAnswers: [],
-        instructions: '',
-      },
+      context: { legendFile },
     });
     FileLogger.log('service_worker', 'info', 'Legend AI artifact ready', {
       name: input.name,
@@ -1098,15 +1093,25 @@ async function selectedResumeFacts(): Promise<string[]> {
   return facts;
 }
 
-async function questionnaireCandidateContext(): Promise<CandidateContext> {
+async function questionnaireCandidateContext(item: QuestionnaireQueueItem): Promise<CandidateContext> {
   const legendFile = await preparedStoredLegend();
-  return {
+  const state = store.getState();
+  const manualAction = item.manualActionId
+    ? state.manualActions.find(action => action.id === item.manualActionId)
+    : undefined;
+  const profileId = manualAction?.profileId ?? state.activeProfileId;
+  const profile = profileId ? state.profiles[profileId] : undefined;
+  return buildCandidateContext({
+    stored: state.questionnaires.settings.context,
     resumeFacts: await selectedResumeFacts(),
-    profileFacts: [],
-    savedAnswers: [],
-    instructions: '',
+    profile,
+    vacancy: {
+      vacancyId: item.questionnaire.vacancyId,
+      vacancyTitle: item.vacancyTitle,
+      company: item.company,
+    },
     legendFile,
-  };
+  });
 }
 
 const questionnaireProcessor = new QuestionnaireProcessor({
@@ -1219,7 +1224,7 @@ async function processManualQuestionnaires(): Promise<{
   if (store.getState().mode !== 'backend') {
     throw new Error('Приёмка анкет доступна только в Backend-режиме');
   }
-  await questionnaireCandidateContext();
+  await Promise.all([preparedStoredLegend(), selectedResumeFacts()]);
 
   const currentState = store.getState();
   const actions = selectPendingManualQuestionnaires(

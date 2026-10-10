@@ -261,17 +261,21 @@ describe('QuestionnaireProcessor', () => {
         loadedAt: 1,
       },
     };
+    const getCandidateContext = vi.fn().mockResolvedValue(dynamicContext);
     const service = new QuestionnaireProcessor({
       store,
       createProvider: () => provider,
       tabMessenger: messenger,
-      getCandidateContext: vi.fn().mockResolvedValue(dynamicContext),
+      getCandidateContext,
     });
 
     await service.processOne(questionnaire.id);
 
     expect(provider.generateAnswers).toHaveBeenCalledWith(expect.objectContaining({
       context: dynamicContext,
+    }));
+    expect(getCandidateContext).toHaveBeenCalledWith(expect.objectContaining({
+      questionnaire: expect.objectContaining({ id: questionnaire.id }),
     }));
   });
 

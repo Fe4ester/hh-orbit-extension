@@ -233,6 +233,7 @@ export const english: Record<string, string> = {
   'Лимит за запуск': 'Run limit', '0 = без лимита': '0 = no limit', 'Лимит за день': 'Daily limit', 'Остановить при ручном действии': 'Pause for manual steps',
   'Пауза запуска, пока вы разбираете ручной шаг.': 'Pause until you complete the manual step.', 'Итоговая задержка выбирается случайно между мин. и макс.': 'Delay is chosen randomly between the minimum and maximum.',
   'Язык интерфейса': 'Interface language', 'Диагностика': 'Diagnostics', 'Для поиска ошибок и передачи журнала разработчику.': 'Check errors or copy the log for the developer.',
+  'Ссылки проекта': 'Project links', 'HH Orbit на GitHub': 'HH Orbit on GitHub', 'Справочный проект hh-applicant-tool': 'Reference project hh-applicant-tool',
   'Execution error': 'Execution error', 'Warning': 'Warning', 'Manual case': 'Manual step', 'Execution errors': 'Errors', 'Manual cases': 'Manual steps',
   'Warnings': 'Warnings', 'Parsed': 'Readable view', 'Raw stream': 'Raw log', '(неактивно)': '(inactive)',
   'Already applied to this vacancy': 'Already applied to this job', 'Application sent successfully': 'Application sent',

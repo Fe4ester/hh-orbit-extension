@@ -3,6 +3,7 @@ export * from './providerCatalog';
 export * from './providerCredentials';
 export * from './hostedAIProvider';
 export * from './contextCompactor';
+export * from './candidateContext';
 export * from './legendArtifact';
 export * from './answerMemory';
 export * from './manualQuestionnaireQueue';

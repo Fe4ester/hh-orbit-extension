@@ -11,10 +11,11 @@ const STOP_WORDS = new Set([
 ]);
 
 interface ContextChunk {
-  source: 'resume' | 'profile' | 'saved_answer' | 'user_instruction';
+  source: 'vacancy' | 'resume' | 'profile' | 'saved_answer' | 'instruction' | 'legend';
   text: string;
   order: number;
   score: number;
+  savedAnswer?: CandidateContext['savedAnswers'][number];
 }
 
 export interface CompactedCandidateContext {
@@ -61,16 +62,22 @@ function sourceChunks(context: CandidateContext): ContextChunk[] {
     }
   };
 
+  append('vacancy', context.vacancyFacts ?? []);
   append('resume', context.resumeFacts);
   append('profile', context.profileFacts);
-  append(
-    'saved_answer',
-    context.savedAnswers.map(item => `${item.prompt}\n${item.answer}`)
-  );
-  if (context.instructions?.trim()) append('user_instruction', [context.instructions]);
+  for (const savedAnswer of context.savedAnswers) {
+    chunks.push({
+      source: 'saved_answer',
+      text: `${savedAnswer.prompt}\n${savedAnswer.answer}`,
+      order: order++,
+      score: 0,
+      savedAnswer,
+    });
+  }
+  if (context.instructions?.trim()) append('instruction', [context.instructions]);
   const legendContent = context.legendFile?.artifact?.content ?? context.legendFile?.content;
   if (legendContent?.trim()) {
-    append('user_instruction', [legendContent]);
+    append('legend', [legendContent]);
   }
   return chunks;
 }
@@ -87,7 +94,11 @@ function scoreChunks(chunks: ContextChunk[], questionnaire: Questionnaire): Cont
     for (const word of query) {
       if (chunkWords.has(word)) overlap += 1;
     }
-    const sourcePriority = chunk.source === 'resume' ? 3 : chunk.source === 'user_instruction' ? 2 : 1;
+    const sourcePriority = chunk.source === 'resume'
+      ? 4
+      : chunk.source === 'vacancy'
+        ? 3
+        : chunk.source === 'legend' || chunk.source === 'instruction' ? 2 : 1;
     return {
       ...chunk,
       score: overlap * 100 + sourcePriority - chunk.order / 10_000,
@@ -109,7 +120,7 @@ function selectChunks(chunks: ContextChunk[], maxContextChars: number): ContextC
     usedChars += cost;
   };
 
-  for (const source of ['resume', 'user_instruction', 'profile', 'saved_answer'] as const) {
+  for (const source of ['vacancy', 'resume', 'legend', 'instruction', 'profile', 'saved_answer'] as const) {
     const first = chunks.find(chunk => chunk.source === source);
     if (first) add(first);
   }
@@ -130,15 +141,13 @@ export function compactCandidateContext(
 ): CompactedCandidateContext {
   const chunks = sourceChunks(context);
   const selected = selectChunks(scoreChunks(chunks, questionnaire), maxContextChars);
-  const legendContent = textFor(selected, 'user_instruction').join('\n\n');
+  const legendContent = textFor(selected, 'legend').join('\n\n');
   const compacted: CandidateContext = {
+    vacancyFacts: textFor(selected, 'vacancy'),
     resumeFacts: textFor(selected, 'resume'),
     profileFacts: textFor(selected, 'profile'),
-    savedAnswers: textFor(selected, 'saved_answer').map((answer, index) => ({
-      prompt: `Сохранённый ответ ${index + 1}`,
-      answer,
-    })),
-    instructions: '',
+    savedAnswers: selected.flatMap(chunk => chunk.savedAnswer ? [{ ...chunk.savedAnswer }] : []),
+    instructions: textFor(selected, 'instruction').join('\n\n'),
     legendFile: context.legendFile
       ? { ...context.legendFile, content: legendContent }
       : null,

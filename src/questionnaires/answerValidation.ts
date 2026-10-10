@@ -52,7 +52,7 @@ function evidenceSupportsChoice(
 }
 
 function evidenceSource(value: unknown): CandidateEvidence['source'] | null {
-  if (value === 'resume' || value === 'profile' || value === 'saved_answer') return value;
+  if (value === 'vacancy' || value === 'resume' || value === 'profile' || value === 'saved_answer') return value;
   if (
     value === 'user_instruction'
     || value === 'legend'

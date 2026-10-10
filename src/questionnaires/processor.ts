@@ -34,7 +34,7 @@ interface QuestionnaireProcessorOptions {
   store: QuestionnaireStore;
   createProvider: () => AIProvider | Promise<AIProvider>;
   tabMessenger?: QuestionnaireTabMessenger;
-  getCandidateContext?: () => Promise<CandidateContext>;
+  getCandidateContext?: (item: QuestionnaireQueueItem) => Promise<CandidateContext>;
 }
 
 export interface QuestionnaireCaptureMetadata {
@@ -158,7 +158,7 @@ export class QuestionnaireProcessor {
 
     try {
       const context = this.options.getCandidateContext
-        ? await this.options.getCandidateContext()
+        ? await this.options.getCandidateContext(item)
         : settings.context;
       const provider = await this.options.createProvider();
       const answerPlan = await provider.generateAnswers({

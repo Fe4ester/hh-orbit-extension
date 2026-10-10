@@ -25,6 +25,7 @@ import { HeaderPrint, Icon } from './icons';
 import './styles.css';
 import type { AutoApplyStartResult } from '../src/background/autoApplyStart';
 import { subscribeToAppState } from './stateSync';
+import { HH_APPLICANT_TOOL_URL, PROJECT_REPOSITORY_URL } from '../src/config/externalLinks';
 
 const RESUME_HINT_DISMISSED_KEY = 'dismissed_resume_search_filter_hint';
 const THEME_STORAGE_KEY = 'ui_theme';
@@ -484,6 +485,10 @@ export const App: React.FC = () => {
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLogsViewerOpen(true)}>
                 <Icon name="terminal" />{t("Открыть журнал")}
               </button>
+            </div>
+            <div className="settings-links" aria-label={t("Ссылки проекта")}>
+              <a href={PROJECT_REPOSITORY_URL} target="_blank" rel="noreferrer">{t("HH Orbit на GitHub")}</a>
+              <a href={HH_APPLICANT_TOOL_URL} target="_blank" rel="noreferrer">{t("Справочный проект hh-applicant-tool")}</a>
             </div>
           </section>
         )}

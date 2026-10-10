@@ -12,6 +12,7 @@ export function buildAnswerPrompt(
     options: question.options,
   }));
   const candidateContext = {
+    vacancy: context.vacancyFacts ?? [],
     resume: context.resumeFacts,
     profile: context.profileFacts,
     saved_answer: context.savedAnswers.map(item => `${item.prompt}\n${item.answer}`),
@@ -37,7 +38,7 @@ export function buildAnswerPrompt(
     'Copy each questionId exactly.',
     'Set confidence from 0 to 1. Use 0 when clarification is required.',
     'Evidence may contain at most two short exact quotes from candidateContext.',
-    'Each evidence item must use source: resume, profile, saved_answer, or user_instruction.',
+    'Each evidence item must use source: vacancy, resume, profile, saved_answer, or user_instruction.',
     'Do not repeat question IDs and do not output reasoning.',
     'Keep free-text answers direct and normally under 600 characters.',
     'If one text field contains several numbered subquestions, answer every subquestion in one numbered text.',

@@ -928,6 +928,21 @@ details[open] > :not(summary) { animation: content-arrival 150ms var(--ease); }
 .settings-diagnostics p { color: var(--muted); font-size: var(--fs-xs); }
 .settings-diagnostics .btn { flex: none; }
 
+.settings-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  padding-top: var(--sp-3);
+  font-size: var(--fs-xs);
+}
+
+.settings-links a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.settings-links a:hover { color: var(--accent); }
+
 .field-row {
   display: grid;
   gap: var(--sp-1);
